@@ -1,0 +1,194 @@
+{
+  "type": "object",
+  "title": "Claim Section Output",
+  "description": "Structured output schema for the claim section section extraction. Typed unit arrays: claims. Valid unit types: Claim.",
+  "required": [
+    "section"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "section": {
+      "type": "object",
+      "required": [
+        "section_type",
+        "anchor_id",
+        "covers_entries",
+        "claims",
+        "links"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "section_type": {
+          "type": "string",
+          "enum": [
+            "claim"
+          ]
+        },
+        "anchor_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+          "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
+        },
+        "covers_entries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Plan item IDs covered by this section"
+        },
+        "claims": {
+          "type": "array",
+          "description": "Claim units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "statement",
+              "claim_kind",
+              "target_ids"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Claim"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Source references for this unit",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source_kind",
+                    "source"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_kind": {
+                      "type": "string",
+                      "enum": [
+                        "sentence",
+                        "table",
+                        "figure",
+                        "appendix",
+                        "caption",
+                        "equation",
+                        "supplementary_material"
+                      ],
+                      "description": "Source marker kind"
+                    },
+                    "source": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                    }
+                  }
+                }
+              },
+              "statement": {
+                "type": "string",
+                "description": "The claim as a single declarative sentence"
+              },
+              "claim_kind": {
+                "type": "string",
+                "enum": [
+                  "descriptive",
+                  "mechanistic",
+                  "causal",
+                  "correlational",
+                  "comparative",
+                  "modeling",
+                  "ablation_finding",
+                  "failure_mode"
+                ],
+                "description": "Classification of the claim"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IDs of entities or methods the claim is about"
+              },
+              "polarity": {
+                "type": "string",
+                "enum": [
+                  "positive",
+                  "negative",
+                  "neutral",
+                  "mixed"
+                ],
+                "description": "Directional assertion of the claim; omit when unspecified"
+              },
+              "novelty": {
+                "type": "string",
+                "enum": [
+                  "original",
+                  "replication",
+                  "citation",
+                  "synthesis"
+                ],
+                "description": "Whether the claim is original to this paper; omit when unspecified"
+              },
+              "epistemic_status": {
+                "type": "string",
+                "enum": [
+                  "hypothesis",
+                  "conclusion",
+                  "established_fact"
+                ],
+                "description": "Confidence level of the claim; omit when unspecified"
+              }
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "description": "Section-local links between units",
+          "items": {
+            "type": "object",
+            "required": [
+              "source_id",
+              "relation",
+              "target_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Source unit ID"
+              },
+              "relation": {
+                "type": "string",
+                "enum": [
+                  "supports",
+                  "part_of",
+                  "compares_to"
+                ],
+                "description": "Section-local relation. Recommended for claim: supports."
+              },
+              "target_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Target unit ID"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

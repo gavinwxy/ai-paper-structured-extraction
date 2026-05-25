@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "title": "Paper Metadata Output",
+  "required": ["title", "authors", "resources"],
+  "additionalProperties": false,
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Full paper title"
+    },
+    "authors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "affiliations"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Author full name"
+          },
+          "affiliations": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Institutional affiliations"
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["code", "project", "dataset", "demo"]
+          },
+          "url": {
+            "type": "string",
+            "description": "Resource URL"
+          }
+        }
+      }
+    }
+  }
+}

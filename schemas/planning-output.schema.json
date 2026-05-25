@@ -1,0 +1,243 @@
+{
+  "type": "object",
+  "title": "Section Planning Output",
+  "description": "Structured output schema for the planning pass.",
+  "required": [
+    "spine_summary",
+    "section_plans"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "spine_summary": {
+      "type": "object",
+      "required": [
+        "central_contribution",
+        "argument_flow"
+      ],
+      "additionalProperties": false,
+      "description": "Summary of the paper's contribution and argument structure",
+      "properties": {
+        "central_contribution": {
+          "type": "string",
+          "description": "One sentence naming the main contribution of the paper."
+        },
+        "argument_flow": {
+          "type": "string",
+          "description": "One sentence describing how context, claim, method, experiment, and analysis fit together."
+        }
+      }
+    },
+    "section_plans": {
+      "type": "array",
+      "description": "Extraction targets organized by section type",
+      "items": {
+        "type": "object",
+        "required": [
+          "section_type",
+          "segment_count",
+          "anchor_hint",
+          "items",
+          "segments"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "section_type": {
+            "type": "string",
+            "enum": [
+              "method",
+              "experiment"
+            ],
+            "description": "Which planned section role this plan covers. Only method and experiment are planned explicitly."
+          },
+          "segment_count": {
+            "type": "integer",
+            "description": "Number of independent segments for this section (default 1)"
+          },
+          "anchor_hint": {
+            "type": "string",
+            "description": "Concrete object that anchors the single section. Required when segment_count == 1; use an empty string when segment_count > 1."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "item_id",
+                "priority",
+                "source_scope",
+                "description",
+                "reason",
+                "relations"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "item_id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                  "description": "Globally unique prefixed identifier reused as the final unit ID. Method items must use mth:. Experiment items must use met:, cnd:, or ent:."
+                },
+                "is_root": {
+                  "type": "boolean",
+                  "description": "True only for the single root method item in each method plan."
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "must",
+                    "should"
+                  ],
+                  "description": "must = missing makes contribution incomprehensible; should = reduces quality"
+                },
+                "source_scope": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Section markers where this item's source text is found (e.g., ['§1', '§2'])"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "One sentence describing the extractable item"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Why this item is must-priority (use an empty string when not needed)"
+                },
+                "relations": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "target_id"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "part_of",
+                          "feeds",
+                          "alternative_to",
+                          "evaluates"
+                        ]
+                      },
+                      "target_id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                        "description": "item_id of the related plan item"
+                      }
+                    }
+                  },
+                  "description": "Structural relationships to other plan items. Use an empty array when none apply."
+                }
+              }
+            },
+            "description": "Extraction plan items for single-segment sections (segment_count == 1). Use an empty array when segment_count > 1."
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "segment_label",
+                "anchor_hint",
+                "items"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "segment_label": {
+                  "type": "string",
+                  "description": "Short label for this segment"
+                },
+                "anchor_hint": {
+                  "type": "string",
+                  "description": "Concrete anchor object for this segment"
+                },
+                "items": {
+                  "type": "array",
+                  "description": "Plan items for this segment",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "item_id",
+                      "priority",
+                      "source_scope",
+                      "description",
+                      "reason",
+                      "relations"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "item_id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                        "description": "Globally unique prefixed identifier reused as the final unit ID. Method items must use mth:. Experiment items must use met:, cnd:, or ent:."
+                      },
+                      "is_root": {
+                        "type": "boolean",
+                        "description": "True only for the single root method item in each method plan."
+                      },
+                      "priority": {
+                        "type": "string",
+                        "enum": [
+                          "must",
+                          "should"
+                        ],
+                        "description": "must = missing makes contribution incomprehensible; should = reduces quality"
+                      },
+                      "source_scope": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Section markers where this item's source text is found (e.g., ['§1', '§2'])"
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "One sentence describing the extractable item"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "description": "Why this item is must-priority (use an empty string when not needed)"
+                      },
+                      "relations": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "type",
+                            "target_id"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "part_of",
+                                "feeds",
+                                "alternative_to",
+                                "evaluates"
+                              ]
+                            },
+                            "target_id": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                              "description": "item_id of the related plan item"
+                            }
+                          }
+                        },
+                        "description": "Structural relationships to other plan items. Use an empty array when none apply."
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "description": "Multi-segment expansion when segment_count > 1. Use an empty array when segment_count == 1."
+          }
+        }
+      }
+    }
+  }
+}

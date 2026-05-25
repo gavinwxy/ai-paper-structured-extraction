@@ -1,0 +1,370 @@
+{
+  "type": "object",
+  "title": "Experiment Section Output",
+  "description": "Structured output schema for the experiment section section extraction. Typed unit arrays: metrics, conditions, entities. Valid unit types: Metric, Condition, Entity.",
+  "required": [
+    "section"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "section": {
+      "type": "object",
+      "required": [
+        "section_type",
+        "anchor_id",
+        "covers_entries",
+        "metrics",
+        "conditions",
+        "entities",
+        "links"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "section_type": {
+          "type": "string",
+          "enum": [
+            "experiment"
+          ]
+        },
+        "anchor_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+          "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
+        },
+        "covers_entries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Plan item IDs covered by this section"
+        },
+        "metrics": {
+          "type": "array",
+          "description": "Metric units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "name",
+              "unit",
+              "subject_id",
+              "context_ids",
+              "scores"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Metric"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Source references for this unit",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source_kind",
+                    "source"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_kind": {
+                      "type": "string",
+                      "enum": [
+                        "sentence",
+                        "table",
+                        "figure",
+                        "appendix",
+                        "caption",
+                        "equation",
+                        "supplementary_material"
+                      ],
+                      "description": "Source marker kind"
+                    },
+                    "source": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                    }
+                  }
+                }
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the metric"
+              },
+              "unit": {
+                "type": "string",
+                "description": "Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"
+              },
+              "subject_id": {
+                "type": "string",
+                "description": "ID of the unit being measured"
+              },
+              "context_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "description": "IDs of local Condition units scoping this metric; experiment metrics require at least one local Condition."
+              },
+              "evaluated_on": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IDs of local dataset/benchmark Entity units this metric was measured on; omit entirely when no such local Entity exists"
+              },
+              "comparison_direction": {
+                "type": "string",
+                "enum": [
+                  "higher_is_better",
+                  "lower_is_better",
+                  "target",
+                  "unspecified"
+                ],
+                "description": "Whether higher or lower values are preferred; omit when unspecified"
+              },
+              "value_type": {
+                "type": "string",
+                "enum": [
+                  "scalar",
+                  "range",
+                  "ratio",
+                  "categorical"
+                ],
+                "description": "Shape of the metric value; omit when unspecified"
+              },
+              "scores": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "variant",
+                    "value",
+                    "variance"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "variant": {
+                      "type": "string",
+                      "description": "Method variant or configuration name"
+                    },
+                    "value": {
+                      "type": "string",
+                      "description": "Reported score encoded as a string, including numeric values"
+                    },
+                    "variance": {
+                      "type": "string",
+                      "description": "Uncertainty (e.g. '\u00b1 0.3'); empty string when unreported"
+                    }
+                  }
+                },
+                "description": "Flat array of reported scores for method-family variants under this metric"
+              }
+            }
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "description": "Condition units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "condition_kind",
+              "description"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Condition"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Source references for this unit",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source_kind",
+                    "source"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_kind": {
+                      "type": "string",
+                      "enum": [
+                        "sentence",
+                        "table",
+                        "figure",
+                        "appendix",
+                        "caption",
+                        "equation",
+                        "supplementary_material"
+                      ],
+                      "description": "Source marker kind"
+                    },
+                    "source": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                    }
+                  }
+                }
+              },
+              "condition_kind": {
+                "type": "string",
+                "enum": [
+                  "experimental",
+                  "boundary",
+                  "evaluation_setup",
+                  "hyperparameter"
+                ],
+                "description": "Operational role of the constraint"
+              },
+              "description": {
+                "type": "string",
+                "description": "Single-sentence prose statement of the constraint"
+              }
+            }
+          }
+        },
+        "entities": {
+          "type": "array",
+          "description": "Entity units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "name",
+              "entity_class"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Entity"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Source references for this unit",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source_kind",
+                    "source"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_kind": {
+                      "type": "string",
+                      "enum": [
+                        "sentence",
+                        "table",
+                        "figure",
+                        "appendix",
+                        "caption",
+                        "equation",
+                        "supplementary_material"
+                      ],
+                      "description": "Source marker kind"
+                    },
+                    "source": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                    }
+                  }
+                }
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the entity"
+              },
+              "entity_class": {
+                "type": "string",
+                "enum": [
+                  "dataset",
+                  "benchmark"
+                ],
+                "description": "Classification of the entity"
+              }
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "description": "Section-local links between units",
+          "items": {
+            "type": "object",
+            "required": [
+              "source_id",
+              "relation",
+              "target_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Source unit ID"
+              },
+              "relation": {
+                "type": "string",
+                "enum": [
+                  "supports",
+                  "part_of",
+                  "compares_to"
+                ],
+                "description": "Section-local relation. Recommended for experiment: compares_to."
+              },
+              "target_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Target unit ID"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

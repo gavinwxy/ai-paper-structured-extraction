@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "title": "Paper References Output",
+  "required": ["references"],
+  "additionalProperties": false,
+  "properties": {
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "authors", "title", "venue", "year", "doi", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Citation marker as it appears in the paper (e.g. '1', '12', 'Smith2020')"
+          },
+          "authors": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Author names in 'Last, First' format"
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the referenced work"
+          },
+          "venue": {
+            "type": "string",
+            "description": "Publication venue (journal, conference, arXiv, etc.)"
+          },
+          "year": {
+            "type": ["integer", "null"],
+            "description": "Publication year, null if unknown"
+          },
+          "doi": {
+            "type": ["string", "null"],
+            "description": "DOI if available"
+          },
+          "url": {
+            "type": ["string", "null"],
+            "description": "URL if available"
+          }
+        }
+      }
+    }
+  }
+}
