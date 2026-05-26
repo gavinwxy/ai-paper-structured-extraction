@@ -98,13 +98,15 @@
                   "required": [
                     "variant",
                     "value",
-                    "variance"
+                    "variance",
+                    "system_id",
+                    "setting_id"
                   ],
                   "additionalProperties": false,
                   "properties": {
                     "variant": {
                       "type": "string",
-                      "description": "System name for this score row \u2014 a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"
+                      "description": "System name for this score row as the paper labels it \u2014 a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"
                     },
                     "value": {
                       "type": "string",
@@ -113,6 +115,14 @@
                     "variance": {
                       "type": "string",
                       "description": "Uncertainty (e.g. '\u00b1 0.3'); empty string when unreported"
+                    },
+                    "system_id": {
+                      "type": "string",
+                      "description": "ID of the Method unit this row reports \u2014 the contribution variant or the compared-against baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture)."
+                    },
+                    "setting_id": {
+                      "type": "string",
+                      "description": "ID of the local Setting unit this row was measured under (the dataset split / language pair / protocol), when one Metric spans several. Empty string when the metric's own setting_ids already scope every row."
                     }
                   }
                 },
@@ -130,6 +140,7 @@
               "id",
               "type",
               "provenance",
+              "setting_kind",
               "description"
             ],
             "additionalProperties": false,
@@ -152,6 +163,17 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "setting_kind": {
+                "type": "string",
+                "enum": [
+                  "data_split",
+                  "inference_protocol",
+                  "training_config",
+                  "ensembling",
+                  "population"
+                ],
+                "description": "Which axis of the evaluation this setup constrains: data_split, inference_protocol, training_config, ensembling, or population"
               },
               "description": {
                 "type": "string",

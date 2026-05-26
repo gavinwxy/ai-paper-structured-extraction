@@ -461,33 +461,61 @@ def render_chips(label: str, items: list | None) -> str:
     )
 
 
-def render_scores(scores: list | None, baseline_keys: set[str]) -> str:
-    """Render a Metric's scores[] as a comparison table, tagging baseline rows."""
+def render_scores(
+    scores: list | None,
+    baseline_keys: set[str],
+    *,
+    unit_index: dict | None = None,
+    baseline_ids: set[str] | None = None,
+) -> str:
+    """Render a Metric's scores[] as a comparison table. Baseline rows are tagged from each row's
+    `system_id` when present (a robust join), falling back to a fuzzy variant-name match; a per-row
+    `setting_id` is surfaced as its own column when any row carries one."""
+    unit_index = unit_index or {}
+    baseline_ids = baseline_ids or set()
+    show_setting = any(isinstance(s, dict) and s.get("setting_id") for s in (scores or []))
     rows = ""
     for s in (scores or []):
         if not isinstance(s, dict):
             continue
         variant = str(s.get("variant", ""))
-        nv = _norm(variant)
-        is_base = bool(nv) and any(nv in b or b in nv for b in baseline_keys)
+        sys_id = str(s.get("system_id", "") or "")
+        if sys_id:
+            is_base = sys_id in baseline_ids
+        else:
+            nv = _norm(variant)
+            is_base = bool(nv) and any(nv in b or b in nv for b in baseline_keys)
         tag = " <span class='base-tag'>baseline</span>" if is_base else ""
+        sys_html = f" <span class='score-sys'>{escape(sys_id)}</span>" if sys_id else ""
         var = str(s.get("variance", "") or "")
+        set_cell = ""
+        if show_setting:
+            set_id = str(s.get("setting_id", "") or "")
+            set_label = ""
+            if set_id:
+                su = unit_index.get(set_id, {})
+                set_label = su.get("description") or su.get("name") or set_id
+                set_label = set_label[:40] + ("…" if len(set_label) > 40 else "")
+            set_cell = f"<td class='score-set'>{escape(set_label) if set_label else '&mdash;'}</td>"
         rows += (
             f"<tr class='score-row{' baseline-row' if is_base else ''}'>"
-            f"<td>{escape(variant)}{tag}</td>"
+            f"<td>{escape(variant)}{tag}{sys_html}</td>"
             f"<td class='score-val'>{escape(str(s.get('value', '')))}</td>"
-            f"<td class='score-var'>{escape(var) if var else '&mdash;'}</td></tr>"
+            f"<td class='score-var'>{escape(var) if var else '&mdash;'}</td>"
+            f"{set_cell}</tr>"
         )
     if not rows:
         return ""
+    set_head = "<th>Setting</th>" if show_setting else ""
     return (
-        "<table class='score-table'><thead><tr><th>System</th><th>Value</th><th>&plusmn;</th></tr></thead>"
+        "<table class='score-table'><thead><tr><th>System</th><th>Value</th><th>&plusmn;</th>"
+        f"{set_head}</tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
 
 
 META_FIELDS = {"id", "type", "provenance"}
-TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "context_kind", "comparison_direction", "unit")
+TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "context_kind", "setting_kind", "comparison_direction", "unit")
 PROSE_FIELDS = ("description", "implementation_notes")
 # Fields rendered by dedicated logic (or consumed as the card label); never echoed as leftover.
 RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setting_ids", "statement", "name"}
@@ -501,9 +529,11 @@ def render_unit_card(
     section_type: str = "context",
     method_roles: dict[str, str] | None = None,
     baseline_keys: set[str] | None = None,
+    baseline_ids: set[str] | None = None,
 ) -> str:
     method_roles = method_roles or {}
     baseline_keys = baseline_keys or set()
+    baseline_ids = baseline_ids or set()
     uid = unit.get("id", "?")
     utype = unit.get("type", "?")
     color = SECTION_COLORS.get(section_type, "#999")
@@ -546,7 +576,7 @@ def render_unit_card(
         rich += render_formulas(unit.get("formulas"))
         rich += render_objective(unit.get("objective_function"))
     elif utype == "Metric":
-        scores_html = render_scores(unit.get("scores"), baseline_keys)
+        scores_html = render_scores(unit.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
         if scores_html:
             rich += f"<div class='field-group'><div class='field-label'>Scores</div>{scores_html}</div>"
         if unit.get("setting_ids"):
@@ -585,9 +615,11 @@ def render_metric_table(
     dataset_by_metric: dict[str, list[str]],
     method_roles: dict[str, str],
     baseline_keys: set[str],
+    baseline_ids: set[str] | None = None,
 ) -> str:
     """Render each Metric as a block: name + unit/direction + evaluated method + dataset, then a
     full scores comparison table (baseline rows tagged)."""
+    baseline_ids = baseline_ids or set()
     metrics: list[dict] = []
     seen: set[str] = set()
     for section in sections:
@@ -613,7 +645,7 @@ def render_metric_table(
         ds_names = [name_of(d) for d in dataset_by_metric.get(mid, [])]
         direction = m.get("comparison_direction", "")
         dir_icon = {"higher_is_better": "&#9650;", "lower_is_better": "&#9660;"}.get(direction, "")
-        scores_html = render_scores(m.get("scores"), baseline_keys)
+        scores_html = render_scores(m.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
 
         meta_bits = ""
         if head:
@@ -723,7 +755,9 @@ def render_section_card(
     dataset_by_metric: dict[str, list[str]],
     method_roles: dict[str, str],
     baseline_keys: set[str],
+    baseline_ids: set[str] | None = None,
 ) -> str:
+    baseline_ids = baseline_ids or set()
     color = SECTION_COLORS[section_type]
     label = SECTION_LABELS[section_type]
 
@@ -754,13 +788,13 @@ def render_section_card(
     units_html = "".join(
         render_unit_card(
             u, unit_index, is_anchor=a, section_type=section_type,
-            method_roles=method_roles, baseline_keys=baseline_keys,
+            method_roles=method_roles, baseline_keys=baseline_keys, baseline_ids=baseline_ids,
         )
         for (u, a) in card_items
     )
 
     metric_html = (
-        render_metric_table(sections, unit_index, subject_by_metric, dataset_by_metric, method_roles, baseline_keys)
+        render_metric_table(sections, unit_index, subject_by_metric, dataset_by_metric, method_roles, baseline_keys, baseline_ids)
         if section_type == "evidence" else ""
     )
 
@@ -817,6 +851,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
         for uid, role in method_roles.items() if role == "baseline"
     }
     baseline_keys.discard("")
+    baseline_ids = {uid for uid, role in method_roles.items() if role == "baseline"}
     grouped = group_sections_by_type(data)
 
     doc = data.get("document", {})
@@ -853,7 +888,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
         if sections_for_type:
             section_cards += render_section_card(
                 st, sections_for_type, unit_index, unit_section, graph_id, all_links,
-                subject_by_metric, dataset_by_metric, method_roles, baseline_keys,
+                subject_by_metric, dataset_by_metric, method_roles, baseline_keys, baseline_ids,
             )
             graph_data = build_section_graph(st, sections_for_type, unit_index, all_links)
             if graph_data:
@@ -977,6 +1012,8 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .score-row.baseline-row td {{ color: #94a3b8; }}
 .score-row.baseline-row .score-val {{ color: #64748b; font-weight: 600; }}
 .base-tag {{ font-size: 0.56rem; background: #334155; color: #94a3b8; padding: 1px 5px; border-radius: 3px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.04em; }}
+.score-sys {{ font-size: 0.62rem; color: #64748b; font-family: ui-monospace, monospace; margin-left: 4px; }}
+.score-set {{ color: #94a3b8; font-size: 0.72rem; }}
 
 /* Field groups (formulas, chips, prose) */
 .field-group {{ margin-top: 8px; }}

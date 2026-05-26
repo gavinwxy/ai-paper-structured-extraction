@@ -16,12 +16,24 @@ Fields: `name`, `unit`, `setting_ids`, optional `comparison_direction`, and `sco
 - `unit`: non-empty measurement unit such as `BLEU`, `%`, `ms`, `F1`, `perplexity`, or `unitless`. Never blank.
 - `comparison_direction` (optional): `higher_is_better | lower_is_better | target | unspecified`.
 - `setting_ids`: IDs of **local** Setting units that scope this metric, defined in this same response. A deployable benchmark metric is normally scoped by at least one Setting; a diagnostic ablation metric may carry none (`[]`). There is no `subject_id` or `evaluated_on` field — the method a metric evaluates and the dataset it ran on are global edges (`evaluates`, `measured_on`), already established.
-- `scores`: a flat array of `{variant, value, variance}` — one entry per **system reported under this metric**, covering both the method family's own variants **and every baseline / prior-SOTA system the paper compares against**. `variant` names the system as the paper labels it (`"Transformer (big)"`, `"GNMT"`, `"ConvS2S"`). `value` is always a string ("28.4", "28.4-29.1", or a short categorical string); `variance` is "" when no uncertainty is reported. One entry per system — do not pack multiple scores into one entry. Capturing the baseline rows here is how the quantitative comparison is preserved; the matching baseline systems are `compared_against` Method units and carry `compares_to` edges from the relation pass.
+- `scores`: a flat array of `{variant, value, variance, system_id, setting_id}` — one entry per **system reported under this metric**, covering both the method family's own variants **and every baseline / prior-SOTA system the paper compares against**. One entry per system per split — do not pack multiple numbers into one entry.
+  - `variant`: names the system as the paper labels it (`"Transformer (big)"`, `"GNMT"`, `"ConvS2S"`).
+  - `value`: always a string ("28.4", "28.4-29.1", or a short categorical string); `variance` is "" when no uncertainty is reported.
+  - `system_id`: the id of the **Method unit this row reports** — the contribution variant (`mth:transformer`) or the compared-against baseline (`mth:gnmt`). This is what turns the row into a structured comparison instead of a free-text label, so **set it whenever a Method node for the system exists in `node_registry`**. Use `""` only when no node represents the row (e.g. an ensemble-of-baselines the census did not capture). Two variant rows of the same family (base/big) share one `system_id`.
+  - `setting_id`: the id of the **local Setting** this row was measured under — used **only when one metric spans several splits**. Leave `""` when the metric's `setting_ids` already scope every row uniformly.
+- **Never collapse a dataset/split column.** When the same measure is reported across several datasets, splits, or language pairs (a BLEU table with EN-DE *and* EN-FR columns, an mAP table across COCO/VOC), keep **one row per (system × split)** and pin each row's `setting_id` to its split's Setting — do not keep one number per system, which silently drops the other column's values and mixes incomparable scores under one metric. Define a Setting per split so each row has a `setting_id` to point at.
+- Capturing the baseline rows (with their `system_id`) is how the quantitative comparison is preserved; the matching baseline systems are `compared_against` Method units carrying `compares_to` edges from the relation pass. The metric `evaluates` only the contribution — baselines are **not** `evaluates` targets.
 
 ### Setting — operational constraint
-Fields: `description`.
+Fields: `setting_kind`, `description`.
+- `setting_kind`: which axis of the evaluation this setup constrains —
+  - `data_split`: the dataset / subset / split / language pair a metric was computed on (newstest2014 EN-DE, ImageNet val, COCO val).
+  - `inference_protocol`: a test-time procedure (beam search beam=4 / α=0.6, 10-crop single-scale, single-view).
+  - `training_config`: a training / compute setup that scopes a reported number (8 P100 GPUs / 3.5 days, fine-tuning regime, training steps).
+  - `ensembling`: a multi-model or multi-scale combination presented as a configuration (ensemble of six models + multi-scale) — kept distinct because an ensemble number is not a fair peer of a single-model one.
+  - `population`: a study population / cohort (e.g. a human-evaluation panel).
 - `description`: a single sentence that **names the concrete setup** that scopes a metric — the actual dataset/split, population size, OOD source-vs-target pair, protocol, or hyperparameter, carrying the paper's real names and numbers rather than a paraphrase. Never replace a specific setup with a vague generic restatement (e.g. "evaluated to assess whether the model is more confident") — that loses the recall the Setting exists to carry.
-- **Enumerate each distinct evaluation setup as its own Setting.** A separate dataset, a cross-dataset generalization or transfer protocol, a robustness / distribution-shift setup, a user study, and a timing protocol each get their **own** Setting — even when no separate Metric attaches to it. Do not collapse several named setups into one.
+- **Enumerate each distinct evaluation setup as its own Setting.** A separate dataset/split, a cross-dataset generalization or transfer protocol, a robustness / distribution-shift setup, a user study, and a timing protocol each get their **own** Setting — even when no separate Metric attaches to it. A `data_split` Setting per split is also what lets a multi-split metric's score rows carry a `setting_id` (see Metric above). Do not collapse several named setups into one.
 
 ### Claim — interpretive finding
 Fields: `statement`, `claim_kind`.
@@ -49,10 +61,10 @@ Worked boundary example — a table that interleaves both:
 
 | Configuration        | BLEU | becomes |
 |----------------------|------|---------|
-| GNMT (baseline)      | 24.6 | a `scores` entry on the BLEU Metric (`variant: "GNMT"`); GNMT is a `compared_against` Method unit |
-| Transformer Base     | 27.3 | a `scores` entry on the BLEU Metric |
-| Transformer Big      | 28.4 | a `scores` entry on the BLEU Metric |
-| Base, no pos. enc.   | 25.1 | an ablation Claim + supporting ablation Metric |
+| GNMT (baseline)      | 24.6 | a `scores` entry on the BLEU Metric (`variant: "GNMT"`, `system_id: "mth:gnmt"`); GNMT is a `compared_against` Method unit |
+| Transformer Base     | 27.3 | a `scores` entry on the BLEU Metric (`system_id: "mth:transformer"`) |
+| Transformer Big      | 28.4 | a `scores` entry on the BLEU Metric (`system_id: "mth:transformer"`) |
+| Base, no pos. enc.   | 25.1 | an ablation Claim + supporting ablation Metric (the ablated row's `system_id` is `""`) |
 | Base, single-head    | 26.0 | an ablation Claim + supporting ablation Metric |
 
 Making this call once, with the full table visible, is the whole point of the merged section: a deployable row and a diagnostic row from the same table no longer get double-extracted or dropped by two passes that cannot see each other.
@@ -80,7 +92,7 @@ This section authors the claim-centric edges in `relations[]`:
 
 ## Baseline handling
 
-- **Capture every baseline the paper compares against.** Its score is a `scores[]` row on the relevant Metric (`variant` = the system's name), and the system itself is a `compared_against` **Method** unit (materialized in the method section) that carries a `compares_to` edge from the relation pass. The comparison is captured both quantitatively (the row) and structurally (the edge).
+- **Capture every baseline the paper compares against.** Its score is a `scores[]` row on the relevant Metric (`variant` = the system's name, `system_id` = the baseline's Method node id), and the system itself is a `compared_against` **Method** unit (materialized in the method section) that carries a `compares_to` edge from the relation pass. The comparison is captured both quantitatively (the row, joined to the system by `system_id`) and structurally (the edge).
 - Do **not** model a baseline/comparison system as an **Entity** unit — a baseline is a Method, never a dataset/benchmark/task. Entities are testbeds only.
 - The Metric still `evaluates` the contribution (its primary subject); the baseline rows in its `scores[]` record what the contribution was measured against, they do not change the metric's subject.
 - If the paper's own method modifies a named base model, that base model is a Method (it should be a census node), not an evidence Entity.
@@ -90,26 +102,28 @@ This section authors the claim-centric edges in `relations[]`:
 - Do not create a `subject_id` or `evaluated_on` field on a Metric — they no longer exist; use the global `evaluates`/`measured_on` edges (already present) and local `setting_ids`.
 - Do not create Method units here; reference method nodes by id in `about` edges.
 - Do not duplicate a deployable row as both a `scores` entry and an ablation Claim.
+- Do not collapse a multi-dataset/multi-split column into one number per system; keep a row per (system × split) with each row's `setting_id`.
+- Do not leave `system_id` blank when a Method node for the row's system exists in `node_registry` — the blank is reserved for systems the census did not capture.
 
 ## Worked example
 
 {
   "section": {
     "section_type": "evidence",
-    "anchor_id": "met:bleu_en_de",
+    "anchor_id": "met:bleu",
     "metrics": [
       {
-        "id": "met:bleu_en_de",
+        "id": "met:bleu",
         "type": "Metric",
-        "name": "BLEU (EN-DE)",
+        "name": "BLEU",
         "unit": "BLEU",
-        "setting_ids": ["set:wmt_newstest2014"],
+        "setting_ids": ["set:newstest2014_ende", "set:newstest2014_enfr"],
         "comparison_direction": "higher_is_better",
         "scores": [
-          {"variant": "GNMT", "value": "24.6", "variance": ""},
-          {"variant": "ConvS2S", "value": "25.16", "variance": ""},
-          {"variant": "Transformer Base", "value": "27.3", "variance": ""},
-          {"variant": "Transformer Big", "value": "28.4", "variance": ""}
+          {"variant": "GNMT", "value": "24.6", "variance": "", "system_id": "mth:gnmt", "setting_id": "set:newstest2014_ende"},
+          {"variant": "GNMT", "value": "39.92", "variance": "", "system_id": "mth:gnmt", "setting_id": "set:newstest2014_enfr"},
+          {"variant": "Transformer (big)", "value": "28.4", "variance": "", "system_id": "mth:transformer", "setting_id": "set:newstest2014_ende"},
+          {"variant": "Transformer (big)", "value": "41.0", "variance": "", "system_id": "mth:transformer", "setting_id": "set:newstest2014_enfr"}
         ],
         "provenance": ["§6"]
       },
@@ -121,17 +135,25 @@ This section authors the claim-centric edges in `relations[]`:
         "setting_ids": [],
         "comparison_direction": "higher_is_better",
         "scores": [
-          {"variant": "full", "value": "27.3", "variance": ""},
-          {"variant": "no pos. enc.", "value": "25.1", "variance": ""}
+          {"variant": "full (base)", "value": "25.8", "variance": "", "system_id": "mth:transformer", "setting_id": ""},
+          {"variant": "no pos. enc.", "value": "23.6", "variance": "", "system_id": "", "setting_id": ""}
         ],
         "provenance": ["§6"]
       }
     ],
     "settings": [
       {
-        "id": "set:wmt_newstest2014",
+        "id": "set:newstest2014_ende",
         "type": "Setting",
-        "description": "Evaluated on the WMT 2014 English-German newstest2014 test set with beam search.",
+        "setting_kind": "data_split",
+        "description": "WMT 2014 English-German newstest2014 test set, beam search with beam size 4 and length penalty alpha=0.6.",
+        "provenance": ["§6"]
+      },
+      {
+        "id": "set:newstest2014_enfr",
+        "type": "Setting",
+        "setting_kind": "data_split",
+        "description": "WMT 2014 English-French newstest2014 test set, same beam search decoding.",
         "provenance": ["§6"]
       }
     ],
@@ -145,13 +167,8 @@ This section authors the claim-centric edges in `relations[]`:
       }
     ],
     "entities": [
-      {
-        "id": "ent:wmt2014_en_de",
-        "type": "Entity",
-        "name": "WMT 2014 English-German",
-        "entity_class": "benchmark",
-        "provenance": ["§6"]
-      }
+      {"id": "ent:wmt2014_en_de", "type": "Entity", "name": "WMT 2014 English-German", "entity_class": "benchmark", "provenance": ["§6"]},
+      {"id": "ent:wmt2014_en_fr", "type": "Entity", "name": "WMT 2014 English-French", "entity_class": "benchmark", "provenance": ["§6"]}
     ],
     "relations": [
       {"source_id": "met:pos_enc_ablation", "relation": "supports", "target_id": "clm:pos_enc_matters", "provenance": ["§6"]},
@@ -160,7 +177,7 @@ This section authors the claim-centric edges in `relations[]`:
   }
 }
 
-Here `met:bleu_en_de --evaluates--> mth:transformer` and `met:bleu_en_de --measured_on--> ent:wmt2014_en_de` are **not** emitted in this section; they already live in the global `relations` from the relation pass. The `GNMT` and `ConvS2S` score rows name `compared_against` Method units defined in the method section; their `mth:transformer --compares_to--> mth:gnmt` edges likewise come from the relation pass, not from here.
+The single `met:bleu` metric holds both language-pair columns: each row carries its own `setting_id`, so the EN-FR headline `41.0` is preserved instead of being dropped when the column collapses. Baseline rows (`GNMT`) and contribution rows (`Transformer (big)`) are distinguished by `system_id`, not by parsing the `variant` string; the ablated `"no pos. enc."` row has `system_id: ""` because no Method node represents that disabled configuration. The edges `met:bleu --evaluates--> mth:transformer`, `met:bleu --measured_on--> ent:wmt2014_en_de`/`ent:wmt2014_en_fr`, and `mth:transformer --compares_to--> mth:gnmt` are **not** emitted here — they already live in the global `relations` from the relation pass (and `evaluates` points only at the contribution, never at `mth:gnmt`).
 
 ## Anchor
 

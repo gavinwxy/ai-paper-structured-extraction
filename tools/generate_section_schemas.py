@@ -26,6 +26,7 @@ from section_pipeline import (  # noqa: E402
     METHOD_KINDS,
     NODE_ROLES,
     SECTION_AUTHORS_RELATIONS,
+    SETTING_KINDS,
 )
 
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
@@ -77,6 +78,7 @@ ENUM_ORDER: dict[str, list[str]] = {
     "entity_class": ["dataset", "benchmark", "task"],
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
+    "setting_kind": ["data_split", "inference_protocol", "training_config", "ensembling", "population"],
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
@@ -86,6 +88,7 @@ ENUM_VALUES: dict[str, set[str]] = {
     "entity_class": ENTITY_CLASSES,
     "method_kind": METHOD_KINDS,
     "comparison_direction": COMPARISON_DIRECTIONS,
+    "setting_kind": SETTING_KINDS,
 }
 
 
@@ -151,10 +154,10 @@ def scores_schema(description: str) -> dict[str, Any]:
         "type": "array",
         "items": {
             "type": "object",
-            "required": ["variant", "value", "variance"],
+            "required": ["variant", "value", "variance", "system_id", "setting_id"],
             "additionalProperties": False,
             "properties": {
-                "variant": {"type": "string", "description": "System name for this score row — a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"},
+                "variant": {"type": "string", "description": "System name for this score row as the paper labels it — a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"},
                 "value": {
                     "type": "string",
                     "description": "Reported score encoded as a string, including numeric values",
@@ -162,6 +165,14 @@ def scores_schema(description: str) -> dict[str, Any]:
                 "variance": {
                     "type": "string",
                     "description": "Uncertainty (e.g. '± 0.3'); empty string when unreported",
+                },
+                "system_id": {
+                    "type": "string",
+                    "description": "ID of the Method unit this row reports — the contribution variant or the compared-against baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture).",
+                },
+                "setting_id": {
+                    "type": "string",
+                    "description": "ID of the local Setting unit this row was measured under (the dataset split / language pair / protocol), when one Metric spans several. Empty string when the metric's own setting_ids already scope every row.",
                 },
             },
         },
@@ -272,6 +283,11 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
         },
         "Setting": {
             **base_unit_properties("Setting"),
+            "setting_kind": enum_schema(
+                "setting_kind",
+                "Which axis of the evaluation this setup constrains: data_split, "
+                "inference_protocol, training_config, ensembling, or population",
+            ),
             "description": string_schema(
                 "Single-sentence prose statement of the operational constraint that scopes a "
                 "metric — the concrete dataset split, protocol, population, or hyperparameter"

@@ -169,6 +169,19 @@ CONTEXT_KINDS = {
     "challenge",
     "assumption",
 }
+# Setting kinds (reintroduced 2026-05-27). The old `condition_kind` was dropped as monotone
+# (always evaluation_setup), but Settings are in fact heterogeneous: a metric is scoped by a
+# data split, a test-time inference protocol, a training/compute config, an ensembling regime,
+# or a study population — and these are not interchangeable (an ensemble number is not a fair
+# peer of a single-model number). `setting_kind` names that axis so consumers can separate
+# training/compute setups from evaluation splits without re-parsing the description.
+SETTING_KINDS = {
+    "data_split",          # the dataset/subset/split the metric was computed on
+    "inference_protocol",  # test-time procedure: beam search params, crop/scale, single-view
+    "training_config",     # training/compute setup: hardware, steps, fine-tuning regime
+    "ensembling",          # multi-model or multi-scale combination presented as a configuration
+    "population",          # study population / cohort (e.g. a human-evaluation panel)
+}
 # Entity = the data/problem substrate. `model` moved to Method (a named model is a Method)
 # and `hardware` is apparatus, not a node — both were dropped.
 ENTITY_CLASSES = {
@@ -181,10 +194,10 @@ METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objecti
 COMPARISON_DIRECTIONS = {"higher_is_better", "lower_is_better", "target", "unspecified"}
 # Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Metric
 # `value_type` (always scalar), Claim `novelty` (always original), Claim `epistemic_status`
-# (always conclusion), Claim `polarity` (dropped by request), and Setting `condition_kind`
-# (always evaluation_setup — Setting now carries only a description). The provenance
-# `source_kind` enum was likewise dropped (2026-05-26): provenance is now a flat list of
-# `§N` location markers, so SOURCE_KINDS no longer exists.
+# (always conclusion), Claim `polarity` (dropped by request). The provenance `source_kind`
+# enum was likewise dropped (2026-05-26): provenance is now a flat list of `§N` location
+# markers, so SOURCE_KINDS no longer exists. (Setting `condition_kind` was dropped here too
+# but returns above as the multi-valued `setting_kind`.)
 
 # Global relation type matrix (section-ir-0.7). Endpoints resolve to a unit defined
 # anywhere in the extraction; relations are no longer section-local.
@@ -235,7 +248,7 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "provenance",
     },
     "Context": {"id", "type", "context_kind", "description", "provenance"},
-    "Setting": {"id", "type", "description", "provenance"},
+    "Setting": {"id", "type", "setting_kind", "description", "provenance"},
     "Metric": {
         "id",
         "type",
@@ -1083,6 +1096,126 @@ def build_extraction_notes(
     return notes
 
 
+# C0 control characters (incl. the NULL bytes some models emit in place of '·'/'×') that have
+# no business in extracted text; tab/newline/carriage-return are left alone.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_SANITIZE_SKIP_KEYS = {"id", "type"}
+
+
+def _sanitize_str(value: str) -> str:
+    cleaned = _CONTROL_CHAR_RE.sub(" ", value)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    return cleaned
+
+
+def _sanitize_unit_text(sections: list[dict[str, Any]]) -> list[str]:
+    """Deep-clean control characters out of every unit string value, logging each fix.
+    Identifiers (`id`/`type`) are never touched."""
+    warnings: list[str] = []
+
+    def clean(obj: Any, owner: str, label: str) -> Any:
+        if isinstance(obj, str):
+            cleaned = _sanitize_str(obj)
+            if cleaned != obj:
+                warnings.append(
+                    f"Sanitized control characters in {owner} {label}: {obj!r} -> {cleaned!r}"
+                )
+            return cleaned
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key in _SANITIZE_SKIP_KEYS or not isinstance(value, (str, list, dict)):
+                    continue
+                obj[key] = clean(value, owner, f"{label}.{key}" if label else key)
+            return obj
+        if isinstance(obj, list):
+            for index, item in enumerate(obj):
+                if isinstance(item, (str, list, dict)):
+                    obj[index] = clean(item, owner, f"{label}[{index}]")
+            return obj
+        return obj
+
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if isinstance(unit, dict):
+                clean(unit, unit.get("id", "?"), "")
+    return warnings
+
+
+def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
+    """Blank dangling or wrong-type per-row score references (system_id/setting_id) once the
+    full unit set is known — lossy-but-safe, logged to uncertain_assignments. system_id resolves
+    globally (Methods live in the method section); setting_id resolves to a section-local Setting."""
+    warnings: list[str] = []
+    unit_index = {
+        unit["id"]: unit
+        for section in sections
+        for unit in section.get("units", []) or []
+        if isinstance(unit, dict) and unit.get("id")
+    }
+    for section in sections:
+        local_ids = {
+            unit.get("id") for unit in section.get("units", []) or [] if isinstance(unit, dict)
+        }
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") != "Metric":
+                continue
+            for index, score in enumerate(unit.get("scores", []) or []):
+                if not isinstance(score, dict):
+                    continue
+                system_id = score.get("system_id")
+                if system_id and (
+                    system_id not in unit_index or unit_index[system_id].get("type") != "Method"
+                ):
+                    warnings.append(
+                        f"Metric {unit.get('id')} scores[{index}] system_id {system_id!r} "
+                        "did not resolve to a Method; blanked"
+                    )
+                    score["system_id"] = ""
+                setting_id = score.get("setting_id")
+                if setting_id and (
+                    setting_id not in local_ids
+                    or unit_index.get(setting_id, {}).get("type") != "Setting"
+                ):
+                    warnings.append(
+                        f"Metric {unit.get('id')} scores[{index}] setting_id {setting_id!r} "
+                        "is not a local Setting; blanked"
+                    )
+                    score["setting_id"] = ""
+    return warnings
+
+
+def _drop_baseline_evaluates(
+    relations: list[dict[str, Any]], census: dict[str, Any] | None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Drop `evaluates` edges pointing at a `compared_against` baseline. By policy a Metric
+    `evaluates` only the method family it measures (contribution/component); a baseline is linked
+    structurally by `compares_to` and quantitatively by a score row (system_id), never evaluated —
+    so the metric's primary subject stays recoverable instead of diluted across every system row."""
+    if not census:
+        return relations, []
+    role_by_id = {
+        node.get("node_id"): node.get("role")
+        for node in (census.get("nodes") or [])
+        if isinstance(node, dict)
+    }
+    kept: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for relation in relations:
+        if (
+            isinstance(relation, dict)
+            and relation.get("relation") == "evaluates"
+            and role_by_id.get(relation.get("target_id")) == "compared_against"
+        ):
+            warnings.append(
+                "Dropped evaluates edge to compared_against baseline: "
+                f"{relation.get('source_id')} -> {relation.get('target_id')} "
+                "(baseline linked via compares_to + score row instead)"
+            )
+            continue
+        kept.append(relation)
+    return kept, warnings
+
+
 def assemble_extraction(
     census: dict[str, Any],
     stage_b_relations: list[dict[str, Any]],
@@ -1125,17 +1258,21 @@ def assemble_extraction(
     _canonicalize_relation_aliases(relations)
 
     assembly_warnings: list[str] = []
+    assembly_warnings.extend(_sanitize_unit_text(sections))
     assembly_warnings.extend(_dedup_entities(sections, relations))
     assembly_warnings.extend(_dedup_unit_ids(sections))
     assembly_warnings.extend(_drop_empty_sections(sections))
     assembly_warnings.extend(_normalize_provenance_markers(sections))
     assembly_warnings.extend(_repair_section_anchors(sections))
+    assembly_warnings.extend(_repair_score_refs(sections))
 
     relations, warns = _dedup_relations(relations)
     assembly_warnings.extend(warns)
     relations, warns = _drop_dangling_relations(relations, sections)
     assembly_warnings.extend(warns)
     relations, warns = _drop_invalid_relations(relations, sections)
+    assembly_warnings.extend(warns)
+    relations, warns = _drop_baseline_evaluates(relations, census)
     assembly_warnings.extend(warns)
 
     _assign_covers_entries(sections, all_census_node_ids(census))
@@ -1766,6 +1903,10 @@ def _validate_unit_fields(
     elif utype == "Setting":
         if not unit.get("description"):
             issues.append(f"Setting {uid} missing description")
+        if not unit.get("setting_kind"):
+            issues.append(f"Setting {uid} missing setting_kind")
+        elif unit.get("setting_kind") not in SETTING_KINDS:
+            issues.append(f"Setting {uid} has invalid setting_kind: {unit.get('setting_kind')}")
     elif utype == "Metric":
         for key in ("name", "unit"):
             if not unit.get(key):
@@ -1786,6 +1927,25 @@ def _validate_unit_fields(
                     issues.append(f"Metric {uid} scores[{index}] value must be a string")
                 if not isinstance(score.get("variance"), str):
                     issues.append(f"Metric {uid} scores[{index}] variance must be a string")
+                # Per-row references (0.7, 2026-05-27): a row may name the Method it reports
+                # (system_id, global) and the local Setting it was measured under (setting_id).
+                # Both are optional — "" means "not pinned" — but when non-empty they must resolve.
+                system_id = score.get("system_id")
+                if system_id:
+                    system_unit = unit_index.get(system_id)
+                    if system_unit is None:
+                        issues.append(f"Metric {uid} scores[{index}] has unknown system_id: {system_id}")
+                    elif system_unit.get("type") != "Method":
+                        issues.append(f"Metric {uid} scores[{index}] system_id {system_id} must point to a Method")
+                row_setting_id = score.get("setting_id")
+                if row_setting_id:
+                    row_setting_unit = unit_index.get(row_setting_id)
+                    if row_setting_unit is None:
+                        issues.append(f"Metric {uid} scores[{index}] has unknown setting_id: {row_setting_id}")
+                    elif row_setting_id not in local_ids:
+                        issues.append(f"Metric {uid} scores[{index}] setting_id must be section-local: {row_setting_id}")
+                    elif row_setting_unit.get("type") != "Setting":
+                        issues.append(f"Metric {uid} scores[{index}] setting_id {row_setting_id} must point to a local Setting")
         # setting_ids scope a metric to local Settings. In 0.7 it is optional: a
         # deployable metric may carry scoping Settings, an ablation metric may carry
         # none. The metric->method and metric->dataset edges are global relations now.
