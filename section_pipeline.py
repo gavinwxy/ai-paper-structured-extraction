@@ -1738,6 +1738,65 @@ def run_references_extraction(
     return _parse_llm_json(raw)
 
 
+def _normalize_name(text: Any) -> str:
+    """Lowercase a name to space-joined alphanumeric tokens for tolerant matching."""
+    if not isinstance(text, str):
+        return ""
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def reconcile_reference_units(
+    references: dict[str, Any] | None,
+    extraction: dict[str, Any],
+) -> list[str]:
+    """Link each reference's `provides_name` to a spine Method/Entity unit by name.
+
+    The references pass runs before section extraction, so it never knows the final
+    unit IDs and always emits `provides_unit_ids: []`. Once the spine exists, match
+    each reference's `provides_name` against Method/Entity unit names to materialize
+    the bibliography->spine "uses" edge. Conservative by design: links only on a
+    unique normalized-name match; an ambiguous (multi-unit) or unmatched name stays
+    `[]`. Mutates `references` in place and returns warnings for the audit trail.
+    """
+    warnings: list[str] = []
+    if not isinstance(references, dict):
+        return warnings
+    ref_list = references.get("references")
+    if not isinstance(ref_list, list):
+        return warnings
+
+    name_to_ids: dict[str, list[str]] = {}
+    for section in extraction.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") not in {"Method", "Entity"}:
+                continue
+            key = _normalize_name(unit.get("name"))
+            uid = unit.get("id")
+            if key and isinstance(uid, str) and uid not in name_to_ids.setdefault(key, []):
+                name_to_ids[key].append(uid)
+
+    for ref in ref_list:
+        if not isinstance(ref, dict):
+            continue
+        relation = ref.get("relation")
+        if not isinstance(relation, dict):
+            continue
+        relation["provides_unit_ids"] = []  # model cannot know unit IDs; Python owns this field
+        key = _normalize_name(relation.get("provides_name"))
+        if not key:
+            continue
+        matches = name_to_ids.get(key, [])
+        if len(matches) == 1:
+            relation["provides_unit_ids"] = list(matches)
+            warnings.append(
+                f"Linked reference {ref.get('id')!r} provides_name "
+                f"{relation.get('provides_name')!r} to unit {matches[0]}"
+            )
+    return warnings
+
+
 def _validate_section_result_shape(result: dict[str, Any], section_plan: dict[str, Any]) -> None:
     if not isinstance(result.get("section"), dict):
         raise ValueError("Section extraction result missing section object")
@@ -1958,6 +2017,8 @@ def run_pipeline(
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=prompt_cache_retention,
     )
+    if references is not None:
+        pipeline_warnings.extend(reconcile_reference_units(references, extraction))
     validation_issues = validate_section_ir(extraction, plan=plan)
     result = {
         "plan": plan,

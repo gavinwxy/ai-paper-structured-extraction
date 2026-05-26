@@ -8,7 +8,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "authors", "title", "venue", "year", "doi", "url"],
+        "required": ["id", "authors", "title", "venue", "year", "doi", "url", "relation"],
         "additionalProperties": false,
         "properties": {
           "id": {
@@ -39,6 +39,41 @@
           "url": {
             "type": ["string", "null"],
             "description": "URL if available"
+          },
+          "relation": {
+            "type": "object",
+            "required": ["roles", "stance", "salience", "provides_name", "provides_unit_ids"],
+            "additionalProperties": false,
+            "description": "How this reference relates to the citing paper, judged from in-text citation context.",
+            "properties": {
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["background", "motivation", "uses_method", "uses_data", "extends", "baseline", "contrast", "future_work", "related"]
+                },
+                "description": "Functional roles this reference plays for the citing paper; one or more. background=field/concept context; motivation=why the problem matters or a prior limitation that motivates this work; uses_method=a method/architecture/algorithm/technique/tool/optimizer/library reused or built upon; uses_data=a dataset or benchmark used; extends=the direct predecessor this paper improves on; baseline=compared against experimentally; contrast=disagreed with or critiqued; future_work=cited only as a future direction; related=passing mention. Use 'related' only when no stronger role fits."
+              },
+              "stance": {
+                "type": "string",
+                "enum": ["supportive", "neutral", "critical"],
+                "description": "How the citing paper positions itself: builds on it (supportive), neutral mention, or critiques/contrasts it (critical). Default neutral when unclear."
+              },
+              "salience": {
+                "type": "string",
+                "enum": ["central", "peripheral"],
+                "description": "central = load-bearing for this paper's argument or experiments (a main baseline, a core building block, or relied on repeatedly); peripheral = passing mention."
+              },
+              "provides_name": {
+                "type": "string",
+                "description": "For uses_method/uses_data/extends/baseline roles, the single most specific named artifact the citing paper takes from this work (e.g. 'Transformer', 'ImageNet', 'Adam', 'BERT'). Empty string for background/related/future_work or when no concrete artifact is named."
+              },
+              "provides_unit_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Always output an empty array []. Links to spine unit IDs are filled deterministically by the pipeline after section extraction; never populate this yourself."
+              }
+            }
           }
         }
       }
