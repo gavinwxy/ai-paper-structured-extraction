@@ -446,7 +446,7 @@ def node_census_schema() -> dict[str, Any]:
                 "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
                 "items": {
                     "type": "object",
-                    "required": ["node_id", "role", "name", "gloss", "source_scope", "salience"],
+                    "required": ["node_id", "role", "name", "gloss", "source_scope", "cite_keys", "salience"],
                     "additionalProperties": False,
                     "properties": {
                         "node_id": id_schema(
@@ -464,6 +464,14 @@ def node_census_schema() -> dict[str, Any]:
                         "name": string_schema("Short name of the node as the paper refers to it"),
                         "gloss": string_schema("One short phrase describing the node"),
                         "source_scope": string_array_schema("Section markers where the node appears, e.g. ['§3']"),
+                        "cite_keys": string_array_schema(
+                            "In-text bibliography citation marker(s) attached to this node, as "
+                            "bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' "
+                            "for author-year). Fill for builds_on/compared_against/dataset/benchmark "
+                            "nodes (drawn from cited prior work or data), e.g. 'we compare against "
+                            "ConvS2S [8]' -> ['8']. Empty [] for the contribution and its components "
+                            "(your own work), for task/metric nodes, and when no citation is attached."
+                        ),
                         "salience": inline_enum_schema(
                             SALIENCE_ORDER,
                             "must = load-bearing for the contribution; should = adds nuance",

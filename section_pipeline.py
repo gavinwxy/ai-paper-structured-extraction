@@ -924,6 +924,12 @@ def validate_census(census: dict[str, Any]) -> list[str]:
                 )
         if node.get("salience") not in SALIENCE_LEVELS:
             issues.append(f"Census node {label} has invalid salience: {node.get('salience')}")
+        cite_keys = node.get("cite_keys")
+        if cite_keys is not None and (
+            not isinstance(cite_keys, list)
+            or any(not isinstance(key, str) for key in cite_keys)
+        ):
+            issues.append(f"Census node {label} cite_keys must be a list of strings")
         if node_type == "Method":
             method_count += 1
             if role == CONTRIBUTION_ROLE:
@@ -1472,18 +1478,39 @@ def _normalize_name(text: Any) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
+def _normalize_cite_key(value: Any) -> str:
+    """Normalize a citation marker to a comparable key: strip brackets/whitespace, lowercase.
+
+    A reference's `id` and a census node's `cite_keys` both name the same in-text marker but
+    may differ cosmetically ('[31]' vs '31'); normalizing both lets the bibliography join the
+    spine on the paper's own citation rather than on a fuzzy name match.
+    """
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[\[\]\s]+", "", value).lower()
+
+
 def reconcile_reference_units(
     references: dict[str, Any] | None,
     extraction: dict[str, Any],
+    census: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Link each reference's `provides_name` to a spine Method/Entity unit by name.
+    """Link each reference to the spine Method/Entity unit(s) it contributes.
 
-    The references pass runs before section extraction, so it never knows the final
-    unit IDs and always emits `provides_unit_ids: []`. Once the spine exists, match
-    each reference's `provides_name` against Method/Entity unit names to materialize
-    the bibliography->spine "uses" edge. Conservative by design: links only on a
-    unique normalized-name match; an ambiguous (multi-unit) or unmatched name stays
-    `[]`. Mutates `references` in place and returns warnings for the audit trail.
+    The references pass runs before section extraction, so it never knows the final unit IDs
+    and always emits `provides_unit_ids: []`. Once the spine exists, fill it with a two-tier
+    join, strongest signal first:
+
+    1. **Citation key** (primary, exact): a census node carries the in-text bibliography
+       marker(s) it was cited as (`cite_keys`); since `node_id == unit_id`, a reference whose
+       `id` matches a materialized node's cite_key links straight to that unit. Grounded in the
+       paper's own citation, so it catches names the spine spells differently (reference "GNMT"
+       -> unit "GNMT + RL" cited as [31]).
+    2. **Name** (fallback, fuzzy): when no citation key matches, fall back to a unique
+       normalized match of `provides_name` against Method/Entity unit names (the original
+       behavior). Conservative: an ambiguous (multi-unit) or unmatched name stays `[]`.
+
+    Mutates `references` in place and returns warnings for the audit trail.
     """
     warnings: list[str] = []
     if not isinstance(references, dict):
@@ -1492,6 +1519,8 @@ def reconcile_reference_units(
     if not isinstance(ref_list, list):
         return warnings
 
+    # Index materialized Method/Entity units by id and by normalized name.
+    type_by_id: dict[str, Any] = {}
     name_to_ids: dict[str, list[str]] = {}
     for section in extraction.get("sections", []) or []:
         if not isinstance(section, dict):
@@ -1499,10 +1528,27 @@ def reconcile_reference_units(
         for unit in section.get("units", []) or []:
             if not isinstance(unit, dict) or unit.get("type") not in {"Method", "Entity"}:
                 continue
-            key = _normalize_name(unit.get("name"))
             uid = unit.get("id")
-            if key and isinstance(uid, str) and uid not in name_to_ids.setdefault(key, []):
-                name_to_ids[key].append(uid)
+            if not isinstance(uid, str):
+                continue
+            type_by_id[uid] = unit.get("type")
+            name_key = _normalize_name(unit.get("name"))
+            if name_key and uid not in name_to_ids.setdefault(name_key, []):
+                name_to_ids[name_key].append(uid)
+
+    # Index materialized nodes' citation keys -> unit ids (node_id == unit_id).
+    citekey_to_ids: dict[str, list[str]] = {}
+    if isinstance(census, dict):
+        for node in census.get("nodes", []) or []:
+            if not isinstance(node, dict):
+                continue
+            nid = node.get("node_id")
+            if not isinstance(nid, str) or nid not in type_by_id:
+                continue
+            for raw_key in node.get("cite_keys", []) or []:
+                cite_key = _normalize_cite_key(raw_key)
+                if cite_key and nid not in citekey_to_ids.setdefault(cite_key, []):
+                    citekey_to_ids[cite_key].append(nid)
 
     for ref in ref_list:
         if not isinstance(ref, dict):
@@ -1510,16 +1556,26 @@ def reconcile_reference_units(
         relation = ref.get("relation")
         if not isinstance(relation, dict):
             continue
-        relation["provides_unit_ids"] = []  # model cannot know unit IDs; Python owns this field
-        key = _normalize_name(relation.get("provides_name"))
-        if not key:
-            continue
-        matches = name_to_ids.get(key, [])
-        if len(matches) == 1:
-            relation["provides_unit_ids"] = list(matches)
+        # Python owns this field; the model always emits []. Recompute from scratch.
+        relation["provides_unit_ids"] = []
+
+        linked = citekey_to_ids.get(_normalize_cite_key(ref.get("id")), [])
+        via = "cite_key"
+        if not linked:
+            name_key = _normalize_name(relation.get("provides_name"))
+            matches = name_to_ids.get(name_key, []) if name_key else []
+            if len(matches) == 1:
+                linked = matches
+                via = "name"
+        if linked:
+            relation["provides_unit_ids"] = list(linked)
+            detail = (
+                f"cite_key {ref.get('id')!r}"
+                if via == "cite_key"
+                else f"provides_name {relation.get('provides_name')!r}"
+            )
             warnings.append(
-                f"Linked reference {ref.get('id')!r} provides_name "
-                f"{relation.get('provides_name')!r} to unit {matches[0]}"
+                f"Linked reference {ref.get('id')!r} to unit(s) {list(linked)} via {detail}"
             )
     return warnings
 
@@ -1745,7 +1801,7 @@ def run_pipeline(
         prompt_cache_retention=prompt_cache_retention,
     )
     if references is not None:
-        pipeline_warnings.extend(reconcile_reference_units(references, extraction))
+        pipeline_warnings.extend(reconcile_reference_units(references, extraction, census))
     validation_issues = validate_section_ir(extraction, census=census)
     result = {
         "census": census,

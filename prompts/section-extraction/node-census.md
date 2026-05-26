@@ -56,6 +56,7 @@ Each node in `nodes[]` has:
 - `name` — the node's name as the paper refers to it.
 - `gloss` — one short phrase describing the node (not a full sentence). For a method role, what it is; for a metric, what it measures; for a testbed node, what it is.
 - `source_scope` — the `§N` section markers where the node is introduced or defined, e.g. `["§3"]`.
+- `cite_keys` — the in-text bibliography citation marker(s) attached to this node, as **bare keys** matching how the reference list numbers them (`"8"`, not `"[8]"`; `"vaswani2017"` for author-year styles). Record these for `builds_on`, `compared_against`, `dataset`, and `benchmark` nodes — the ones drawn from cited prior work or data — taking the marker where the node is introduced or tabulated (e.g. "we compare against ConvS2S [8]" → `["8"]`; a results-table row "GNMT + RL [31]" → `["31"]`). Use `[]` for the `contribution` and every `component` (your own work), for `task` and `metric` nodes, and whenever no citation is attached. Multiple keys are allowed when several citations introduce the node. This is what later links the node to its bibliography entry, so take the marker verbatim.
 - `salience` — `must` or `should` (see Salience Policy).
 
 ---
@@ -87,7 +88,7 @@ Keep a focused-extraction discipline: census **only argumentatively load-bearing
 1. Read the paper from beginning to end.
 2. Identify the central contribution; write `spine_summary`.
 3. Sweep the four clusters in order: the_method (`contribution`, then each `component`), prior_art (`builds_on`, then `compared_against`), testbed (`dataset` / `benchmark` / `task`), yardsticks (`metric`). If the paper reports results, the testbed and yardstick clusters must not be empty — find what the metrics were measured on.
-4. Assign each node a stable, prefixed `node_id`, a `role`, a `gloss`, `source_scope`, and a `salience`.
+4. Assign each node a stable, prefixed `node_id`, a `role`, a `gloss`, `source_scope`, `cite_keys`, and a `salience`. For a `builds_on`/`compared_against`/`dataset`/`benchmark` node, copy the bibliography marker(s) it carries in the text into `cite_keys`; leave `cite_keys` empty for your own contribution/components and for task/metric nodes.
 5. Tag exactly one node `role: contribution`.
 6. Do not state any relationship between nodes — that is stage B's job.
 
@@ -111,6 +112,7 @@ Return a single JSON object:
       "name": "Transformer",
       "gloss": "attention-only encoder-decoder architecture",
       "source_scope": ["§3"],
+      "cite_keys": [],
       "salience": "must"
     },
     {
@@ -119,7 +121,17 @@ Return a single JSON object:
       "name": "Scaled Dot-Product Attention",
       "gloss": "attention weighting scaled by key dimension",
       "source_scope": ["§3"],
+      "cite_keys": [],
       "salience": "must"
+    },
+    {
+      "node_id": "mth:convs2s",
+      "role": "compared_against",
+      "name": "ConvS2S",
+      "gloss": "convolutional sequence-to-sequence baseline",
+      "source_scope": ["§6"],
+      "cite_keys": ["8"],
+      "salience": "should"
     },
     {
       "node_id": "met:bleu_en_de",
@@ -127,6 +139,7 @@ Return a single JSON object:
       "name": "BLEU (EN-DE)",
       "gloss": "translation quality on English-German",
       "source_scope": ["§6"],
+      "cite_keys": [],
       "salience": "must"
     },
     {
@@ -135,6 +148,7 @@ Return a single JSON object:
       "name": "WMT 2014 English-German",
       "gloss": "machine-translation benchmark",
       "source_scope": ["§6"],
+      "cite_keys": ["41"],
       "salience": "should"
     }
   ]
@@ -150,7 +164,7 @@ Read the following scientific paper and produce a flat node census.
 {{paper_content}}
 </paper>
 
-Sweep the four clusters in order — the_method (contribution, components), prior_art (builds_on, compared_against), testbed (dataset/benchmark/task), yardsticks (metric) — and emit every argumentatively load-bearing node. Assign each a prefixed node_id, a role, a gloss, source_scope, and salience, and tag exactly one node role: contribution. Do not state any relationship between nodes.
+Sweep the four clusters in order — the_method (contribution, components), prior_art (builds_on, compared_against), testbed (dataset/benchmark/task), yardsticks (metric) — and emit every argumentatively load-bearing node. Assign each a prefixed node_id, a role, a gloss, source_scope, cite_keys (the bibliography marker(s) a cited prior-art/testbed node carries, else []), and salience, and tag exactly one node role: contribution. Do not state any relationship between nodes.
 
 Output a single JSON object with keys: spine_summary, nodes.
 ```

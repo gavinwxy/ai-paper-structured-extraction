@@ -38,6 +38,7 @@
           "name",
           "gloss",
           "source_scope",
+          "cite_keys",
           "salience"
         ],
         "additionalProperties": false,
@@ -75,6 +76,13 @@
               "type": "string"
             },
             "description": "Section markers where the node appears, e.g. ['\u00a73']"
+          },
+          "cite_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "In-text bibliography citation marker(s) attached to this node, as bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' for author-year). Fill for builds_on/compared_against/dataset/benchmark nodes (drawn from cited prior work or data), e.g. 'we compare against ConvS2S [8]' -> ['8']. Empty [] for the contribution and its components (your own work), for task/metric nodes, and when no citation is attached."
           },
           "salience": {
             "type": "string",

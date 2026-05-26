@@ -530,10 +530,12 @@ def render_unit_card(
     method_roles: dict[str, str] | None = None,
     baseline_keys: set[str] | None = None,
     baseline_ids: set[str] | None = None,
+    cite_by_unit: dict[str, list[str]] | None = None,
 ) -> str:
     method_roles = method_roles or {}
     baseline_keys = baseline_keys or set()
     baseline_ids = baseline_ids or set()
+    cite_by_unit = cite_by_unit or {}
     uid = unit.get("id", "?")
     utype = unit.get("type", "?")
     color = SECTION_COLORS.get(section_type, "#999")
@@ -559,6 +561,17 @@ def render_unit_card(
 
     tag_html = "".join(f"<span class='tag'>{escape(str(unit[f]))}</span>" for f in TAG_FIELDS if unit.get(f))
     tags_html = f"<div class='tags'>{tag_html}</div>" if tag_html else ""
+
+    # Citation badge(s): the bibliography reference id(s) this unit was linked to via the
+    # census cite_keys join. Clicking jumps to the references panel.
+    cite_ids = cite_by_unit.get(uid, [])
+    cite_html = ""
+    if cite_ids:
+        chips = "".join(
+            f"<a class='cite-badge' href='#references' title='Cited as reference {escape(str(r))}'>[{escape(str(r))}]</a>"
+            for r in cite_ids
+        )
+        cite_html = f"<span class='cite-badges'>{chips}</span>"
 
     # Expandable detail: prose, then type-specific rich blocks, then any leftover fields.
     prose = ""
@@ -598,6 +611,7 @@ def render_unit_card(
         <span class="unit-type-badge" style="background:{color}">{escape(utype)}</span>
         {role_badge}
         <span class="unit-id">{escape(uid)}</span>
+        {cite_html}
         {'<span class="anchor-badge">ANCHOR</span>' if is_anchor else ''}
         <span class="unit-chevron">&#9654;</span>
       </div>
@@ -707,14 +721,16 @@ def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
     </div>"""
 
 
-def render_references_panel(references: dict | None) -> str:
+def render_references_panel(references: dict | None, unit_index: dict | None = None) -> str:
     if not references:
         return ""
     refs = references.get("references", [])
     if not refs:
         return ""
+    unit_index = unit_index or {}
 
     rows = ""
+    linked_count = 0
     for r in refs:
         rid = r.get("id", "")
         authors = r.get("authors", [])
@@ -730,12 +746,35 @@ def render_references_panel(references: dict | None) -> str:
         year_str = f", {year}" if year else ""
         venue_str = f" &mdash; {escape(venue)}{escape(str(year_str))}" if venue else ""
 
-        rows += f'<div class="ref-entry"><span class="ref-id">[{escape(str(rid))}]</span> {escape(author_str)} <span class="ref-title">&ldquo;{escape(title)}&rdquo;</span>{venue_str}</div>\n'
+        # Spine links (filled by reconcile_reference_units): which method/evidence unit(s)
+        # this reference contributes. Clicking a badge scrolls to that unit card.
+        relation = r.get("relation") or {}
+        unit_ids = relation.get("provides_unit_ids") or []
+        roles = relation.get("roles") or []
+        entry_cls = "ref-entry central" if relation.get("salience") == "central" else "ref-entry"
+        link_html = ""
+        if unit_ids:
+            linked_count += 1
+            badges = "".join(
+                f"<a class='ref-link' data-target='{escape(str(uid))}'>"
+                f"{escape((unit_index.get(uid) or {}).get('name') or str(uid))}</a>"
+                for uid in unit_ids
+            )
+            link_html = f"<div class='ref-links'>&rarr; {badges}</div>"
+        roles_html = f"<span class='ref-roles'>{escape(', '.join(roles))}</span>" if roles else ""
 
+        rows += (
+            f'<div class="{entry_cls}">'
+            f'<span class="ref-id">[{escape(str(rid))}]</span> {escape(author_str)} '
+            f'<span class="ref-title">&ldquo;{escape(title)}&rdquo;</span>{venue_str}{roles_html}'
+            f'{link_html}</div>\n'
+        )
+
+    header_extra = f" &middot; {linked_count} linked to spine" if linked_count else ""
     return f"""
-    <div class="references-section">
+    <div class="references-section" id="references">
       <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
-        <span class="section-title">References ({len(refs)})</span>
+        <span class="section-title">References ({len(refs)}){header_extra}</span>
         <span class="section-chevron">&#9660;</span>
       </div>
       <div class="section-body">
@@ -756,8 +795,10 @@ def render_section_card(
     method_roles: dict[str, str],
     baseline_keys: set[str],
     baseline_ids: set[str] | None = None,
+    cite_by_unit: dict[str, list[str]] | None = None,
 ) -> str:
     baseline_ids = baseline_ids or set()
+    cite_by_unit = cite_by_unit or {}
     color = SECTION_COLORS[section_type]
     label = SECTION_LABELS[section_type]
 
@@ -789,6 +830,7 @@ def render_section_card(
         render_unit_card(
             u, unit_index, is_anchor=a, section_type=section_type,
             method_roles=method_roles, baseline_keys=baseline_keys, baseline_ids=baseline_ids,
+            cite_by_unit=cite_by_unit,
         )
         for (u, a) in card_items
     )
@@ -852,6 +894,22 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     }
     baseline_keys.discard("")
     baseline_ids = {uid for uid, role in method_roles.items() if role == "baseline"}
+
+    # Invert reference->unit links (relation.provides_unit_ids) into unit_id -> [reference id]
+    # so each method/evidence unit card can show the bibliography marker it was cited as.
+    cite_by_unit: dict[str, list[str]] = {}
+    if isinstance(references, dict):
+        for ref in references.get("references", []) or []:
+            if not isinstance(ref, dict):
+                continue
+            rid = ref.get("id")
+            relation = ref.get("relation") or {}
+            for uid in relation.get("provides_unit_ids", []) or []:
+                if isinstance(uid, str) and isinstance(rid, str):
+                    bucket = cite_by_unit.setdefault(uid, [])
+                    if rid not in bucket:
+                        bucket.append(rid)
+
     grouped = group_sections_by_type(data)
 
     doc = data.get("document", {})
@@ -889,6 +947,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
             section_cards += render_section_card(
                 st, sections_for_type, unit_index, unit_section, graph_id, all_links,
                 subject_by_metric, dataset_by_metric, method_roles, baseline_keys, baseline_ids,
+                cite_by_unit=cite_by_unit,
             )
             graph_data = build_section_graph(st, sections_for_type, unit_index, all_links)
             if graph_data:
@@ -909,7 +968,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
             </div>"""
 
     # References panel
-    references_html = render_references_panel(references)
+    references_html = render_references_panel(references, unit_index)
 
     # Notes
     notes_html = ""
@@ -1049,6 +1108,17 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .ref-entry {{ font-size: 0.78rem; color: #94a3b8; padding: 4px 0; border-bottom: 1px solid #0f172a; }}
 .ref-id {{ color: #64748b; font-family: monospace; font-size: 0.7rem; margin-right: 6px; }}
 .ref-title {{ color: #cbd5e1; }}
+.ref-entry.central {{ border-left: 2px solid #fbbf24; padding-left: 8px; }}
+.ref-roles {{ color: #475569; font-size: 0.68rem; margin-left: 6px; }}
+.ref-links {{ margin-top: 3px; }}
+.ref-link {{ color: #60a5fa; font-size: 0.72rem; text-decoration: none; margin-right: 8px; cursor: pointer; }}
+.ref-link::before {{ content: "\\1F517 "; }}
+.ref-link:hover {{ text-decoration: underline; }}
+
+/* Citation badge on unit cards (links to references panel) */
+.cite-badges {{ display: inline-flex; gap: 3px; margin-left: 4px; }}
+.cite-badge {{ color: #fbbf24; background: #422006; font-family: monospace; font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; text-decoration: none; }}
+.cite-badge:hover {{ background: #713f12; }}
 
 /* Notes */
 .notes-section {{ margin-top: 20px; background: #1e293b; border-radius: 8px; padding: 14px 16px; }}
@@ -1178,6 +1248,28 @@ function initSectionGraph(containerId, nodes, edges) {{
 
 // Collapse references by default
 document.querySelectorAll('.references-section').forEach(el => el.classList.add('collapsed'));
+
+// Reference <-> unit navigation: a reference's spine link scrolls to that unit card;
+// a unit's citation badge opens the references panel.
+document.querySelectorAll('.ref-link').forEach(el => {{
+  el.addEventListener('click', function() {{
+    document.querySelectorAll('.unit-card.highlighted').forEach(c => c.classList.remove('highlighted'));
+    const target = document.querySelector('[data-unit-id="' + el.dataset.target + '"]');
+    if (target) {{
+      const section = target.closest('.section-card');
+      if (section) section.classList.remove('collapsed');
+      target.classList.add('highlighted', 'expanded');
+      target.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+      setTimeout(() => target.classList.remove('highlighted'), 3000);
+    }}
+  }});
+}});
+document.querySelectorAll('.cite-badge').forEach(el => {{
+  el.addEventListener('click', function() {{
+    const refs = document.getElementById('references');
+    if (refs) refs.classList.remove('collapsed');
+  }});
+}});
 </script>
 </body>
 </html>"""

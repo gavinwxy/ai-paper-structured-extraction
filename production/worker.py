@@ -150,7 +150,7 @@ async def _run_paper_pipeline(
             sections_omitted=[],
         )
         if references is not None:
-            warnings.extend(reconcile_reference_units(references, extraction))
+            warnings.extend(reconcile_reference_units(references, extraction, census))
         save_json(paper_dir / "06_extraction.json", extraction)
 
         # Validate
