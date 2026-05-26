@@ -4,69 +4,74 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository now implements and documents a **5-section scientific literature extraction pipeline**.
+This repository implements and documents a **4-section scientific literature extraction pipeline** (section-ir-0.7).
 
 The active system extracts a paper's argumentative spine into section-IR:
 
-`context and gap -> claim -> method -> experiment -> analysis`
+`context and gap -> claim -> method -> evidence`
+
+`evidence` is the merged experiment+analysis section: it carries both what was measured and what those measurements mean.
 
 ## Active Architecture
 
-The pipeline is two-stage:
+The pipeline is **three-stage** (`node census -> relation pass -> content fill`):
 
-1. **Planning pass**: `prompts/section-extraction/planning-pass.md`
-   - Produces `spine_summary` and `section_plans[]` only for `method` and `experiment`.
-   - Method and experiment plan items may include structural `relations` hints: `part_of`, `feeds`, `alternative_to`, and `evaluates`.
-   - `section_pipeline.py` injects empty planless stubs for `context`, `claim`, and `analysis` before extraction.
+1. **Node census (stage A)**: `prompts/section-extraction/node-census.md`
+   - One full-paper call producing `spine_summary` and a flat `nodes[]` list of every load-bearing `Method`, `Entity`, and `Metric` node — with **no relations**.
+   - Each node has a typed `node_id` (`mth:`/`ent:`/`met:`) reused verbatim as the final unit id, a `salience` (`must`/`should`), and (for one Method) `is_root`.
+   - `normalize_census_nodes` backfills/demotes the single root and dedups ids; `validate_census` is the stage-A contract.
 
-2. **Parallel section extraction**: `prompts/section-extraction/section-extraction-pass.md`
-   - `section-extraction-pass.md` is a **slim shared core**: only the rules common to every section (identifiers, provenance format, the output envelope, universal hard constraints). It is byte-identical across all section calls, so the paper text stays in the cross-section prompt cache.
-   - Each expanded section extracts independently and returns `section`.
-   - Receives injected schema constraint, spine_summary, id_registry, section_plan, section_focus, and paper text.
-   - Planless sections receive `items: []`, extract directly from `section_focus` and `spine_summary`, and return `covers_entries: []`.
-   - Per-section modules (`prompts/section-extraction/section-modules/{context,claim,method,experiment,analysis}.md`) are **self-contained section contracts** injected into the user prompt as `section_focus`. Each module declares its section's allowed unit types and field contracts, the controlled vocabularies and link-matrix subset it uses, plan-relation handling (method/experiment), a worked example, and section-specific rules — none of it duplicated in the shared core.
+2. **Relation pass (stage B)**: `prompts/section-extraction/relation-pass.md`
+   - One call receiving the full paper plus the complete flat node list. It establishes the structural entity↔entity edges (`part_of`, `compares_to`, `evaluates`, `measured_on`) with the whole node set in view, so cross-section composition and metric-subject binding need no forward references and no reconcile crutches.
+
+3. **Content fill (stage C)**: `prompts/section-extraction/section-extraction-pass.md`
+   - `section-extraction-pass.md` is a **slim shared core**: only the rules common to every section (identifiers, provenance format, the output envelope, universal hard constraints). It is byte-identical across all section calls, and the paper/spine_summary/node_registry/relations blocks precede `section_focus`, so the paper text stays in the cross-section prompt cache.
+   - Four sections run in parallel (`context`, `claim`, `method`, `evidence`), each returning `section`. Each materializes the census nodes it owns (reusing `node_id` as the unit id) and creates its born units; `claim` and `evidence` also author claim-centric edges (`about`, `supports`) in a per-section `relations[]`.
+   - Receives the injected schema constraint, `spine_summary`, `node_registry` (all nodes), the global `relations[]` from stage B, and `section_focus`.
+   - Per-section modules (`prompts/section-extraction/section-modules/{context,claim,method,evidence}.md`) are **self-contained section contracts** injected as `section_focus`: allowed unit types and field contracts, the controlled vocabularies and relation subset used, a worked example, and section-specific rules — none of it duplicated in the shared core.
 
 Assembly and validation run in Python (`section_pipeline.py`). The default entrypoint is `run_pipeline()`.
 
-Both stages always use API-level structured output (`response_format` with `strict: True`). Planning schema is `schemas/planning-output.schema.json` and constrains LLM planning output to method/experiment plans. Section extraction uses the active per-section schemas under `schemas/section-{section}.schema.json`; each expanded section receives the schema for its own `section_type`.
+Every stage uses API-level structured output (`response_format` with `strict: True`). Stage schemas: `schemas/node-census-output.schema.json`, `schemas/relation-pass-output.schema.json`, and the per-section `schemas/section-{section}.schema.json`.
 
-Section extraction responses use typed unit arrays instead of a flat `units[]` array. Each schema exposes only the arrays allowed for that section, such as `contexts`, `entities`, and `claims` for context sections, `metrics`, `conditions`, and `entities` for experiment sections, and `claims`, `metrics`, and `entities` for analysis sections. `section_pipeline.py` flattens these typed arrays back into `section["units"]` during assembly so validation and rendering continue to consume the stable section-IR shape.
+Content responses use typed unit arrays instead of a flat `units[]` array: `contexts` for context, `claims` for claim, `methods` for method, and `metrics`/`conditions`/`claims`/`entities` for evidence. `section_pipeline.py` flattens these typed arrays into `section["units"]` during assembly, and lifts each section's `relations[]` plus the stage-B edges into a single top-level `relations[]`.
 
 Implementation entry point: `section_pipeline.py`.
 
 Authoritative validation: Python `validate_section_ir()` in `section_pipeline.py` is the runtime contract.
 
-Default section schemas: `schemas/section-context.schema.json`, `section-claim.schema.json`, `section-method.schema.json`, `section-experiment.schema.json`, `section-analysis.schema.json`.
+Default section schemas: `schemas/section-context.schema.json`, `section-claim.schema.json`, `section-method.schema.json`, `section-evidence.schema.json`.
 
-Regenerate per-section schemas with `python tools/generate_section_schemas.py`.
+Regenerate all schemas (per-section + census + relation pass) with `python tools/generate_section_schemas.py`. They are generated from constants in `section_pipeline.py`; never hand-edit the JSON.
 
-Per-section schemas are generated from `tools/generate_section_schemas.py`.
+Per-section focus modules: `prompts/section-extraction/section-modules/context.md`, `claim.md`, `method.md`, `evidence.md`.
 
-Per-section focus modules: `prompts/section-extraction/section-modules/context.md`, `claim.md`, `method.md`, `experiment.md`, `analysis.md`.
-
-Design reference: `docs/section-ir-design.md`.
+Design reference: `docs/section-ir-0.7-redesign.md` (full spec); `docs/section-ir-design.md` (legacy 0.6).
 
 ## Section-IR Rules
 
 - Units have flat structure — type-specific fields sit directly on the unit, no `payload` wrapper.
-- Raw section responses group units into typed arrays: `contexts`, `claims`, `methods`, `metrics`, `conditions`, and `entities` as allowed by each section schema.
+- Raw content responses group units into typed arrays: `contexts`, `claims`, `methods`, `metrics`, `conditions`, and `entities` as allowed by each section schema.
 - Assembled extraction sections include flattened `units[]` for downstream validation and rendering.
 - `section_type` exists only on `sections`, never on individual units.
 - Section anchors use `anchor_id`, not inline `anchor` objects.
-- `covers_entries[]` is the authoritative trace from sections back to plan items.
-- Each unit ID must be defined exactly once in its home section. Metrics may reference external unit IDs through `subject_id`; Claims may reference external unit IDs through `target_ids`.
+- Top-level keys are `document`, `sections`, `relations`, `extraction_notes`. `relations[]` is the single global edge list; sections no longer carry `links`.
+- `covers_entries[]` is the authoritative trace from a section back to the census nodes it materialized. Assembly derives it deterministically (census node_id ∩ section unit ids), so the model does not echo it.
+- Each unit ID is defined exactly once. A census `node_id` is reused verbatim as the unit id when a section materializes it. Cross-unit references are edges in the global `relations[]`, not unit fields — the only remaining reference-list unit field is `Metric.context_ids` (local Condition scoping).
 - Every `Claim` and `Metric` must have non-empty provenance.
-- Every `Metric` needs `subject_id`, `context_ids`, and provenance; experiment metrics require non-empty `context_ids`; analysis metrics require empty `context_ids`. `Metric.evaluated_on` is an optional list of section-local `dataset`/`benchmark` Entity IDs the metric was measured on (the structured dataset link); omit it when no such local Entity exists.
-- Extraction output has no top-level `cross_section_links`; all explicit links are section-local.
-- `Method.components[]` is a denormalized projection of section-local `Method --part_of--> Method` links, present only in assembled output. The extraction schema no longer exposes a component field; extractors express composition solely with `part_of` links and assembly (`_reconcile_method_components`) rebuilds `components[]` from them.
+- Every `Metric` needs `name`, `unit`, non-empty `scores`, and `context_ids`. `context_ids` (when non-empty) must point to section-local `Condition` units; it may be empty (an ablation metric carries none, a deployable metric is normally scoped by one). The metric→method link is the `evaluates` relation and the metric→dataset link is the `measured_on` relation, both in the global `relations[]` — `Metric` no longer has `subject_id` or `evaluated_on` fields.
+- `Claim` has no `target_ids` field; what a claim is about is the `about` relation in `relations[]`.
+- `Method` has no `components` field; composition is the `part_of` relation in `relations[]` (established by the relation pass over the full node set, so cross-section composition is captured without reconcile crutches).
 - `Method` optional fields (omitted entirely when unsupported, never invented): `inputs[]`, `outputs[]`, `formulas[]` (each `{name, expression, symbols[]}`), and `objective_function` (`{expression, description, symbols[]}`). Each `symbols[]` entry is `{symbol, description}` glossing one token of the equation; the array may be empty when the expression introduces no symbols. Only `name`, `method_kind`, `description`, and `implementation_notes` are required. When present, every `formulas[]` entry and `objective_function` must carry a non-empty `expression`, and each `symbols[]` entry must carry a non-empty `symbol` and `description`.
-- Exactly one method plan item is `is_root: true`, document-level (across all method section plans, not per section). `normalize_planning_item_ids` backfills it when the planner omits it and demotes extras, so a missing root no longer hard-fails planning.
-- Assembly performs lossy-but-safe repairs and logs each to `extraction_notes.uncertain_assignments`: `_reconcile_metric_subjects` aligns each experiment `Metric.subject_id` with the plan's `evaluates` target (falling back to the root method when missing or dangling); `_reconcile_analysis_metric_subjects` re-points an analysis `Metric.subject_id` to the component its supported ablation Claim targets (only when the metric's `supports` links resolve to exactly one component; never downgrades an already-component subject); `_drop_empty_sections` removes unit-less (often over-split) sections; `_normalize_provenance_markers` collapses `§N.M` sources to their real top-level `§N` (appendix/table markers are left to fail); `_drop_invalid_links` removes link-matrix violations; `_repair_section_anchors` re-points non-local anchors; `_reconcile_covers_entries` prunes `covers_entries` that no longer resolve to a unit (uncovered must-items then resurface in `extraction_notes.uncovered_items`).
-- IR version: `section-ir-0.6`.
+- Exactly one census Method node is `is_root: true`, document-level. `normalize_census_nodes` backfills it when omitted and demotes extras, so a missing root no longer hard-fails the census.
+- Assembly merges the stage-B relations with each content section's `relations[]` into the global list, then performs lossy-but-safe repairs logged to `extraction_notes.uncertain_assignments`: `_dedup_entities` merges same-name Entities (rewriting relation endpoints); `_dedup_unit_ids` drops later duplicate definitions; `_drop_empty_sections` removes unit-less sections; `_normalize_provenance_markers` collapses `§N.M` to top-level `§N`; `_repair_section_anchors` re-points non-local anchors; `_dedup_relations`/`_drop_dangling_relations`/`_drop_invalid_relations` clean the global edge list against the relation matrix once the full unit set is known; `_assign_covers_entries` recomputes the census trace. Coverage is measured against census `must` nodes; an unmaterialized must-node surfaces in `extraction_notes.uncovered_items`.
+- IR version: `section-ir-0.7`. `extraction_notes.input_mode` is `node_census_pipeline`.
 
 Allowed unit types:
 
 `Document`, `Entity`, `Method`, `Claim`, `Context`, `Condition`, `Metric`
+
+`Method`, `Entity`, and `Metric` are census nodes; `Context`, `Condition`, and `Claim` are born during content fill.
 
 ## Context vs. Condition
 
@@ -75,13 +80,20 @@ Allowed unit types:
 
 Archived legacy types such as `Relation`, `Category`, `SystemModel`, `MethodArtifact`, `Proposition`, and `RoleBinding` are not valid in active section-IR output.
 
-## Link Relations
+## Relations (global)
 
-Allowed link relations:
+`relations[]` is top-level and global; every edge resolves to a unit defined anywhere. Allowed relations and their type matrix:
 
-`supports`, `part_of`, `compares_to`
+| relation | source → target | authored by |
+|---|---|---|
+| `part_of` | {Method, Entity} → {Method, Entity} | relation pass (B) |
+| `compares_to` | {Method, Entity, Metric} → same | relation pass (B) |
+| `evaluates` | Metric → Method | relation pass (B) |
+| `measured_on` | Metric → Entity (dataset/benchmark) | relation pass (B) |
+| `about` | Claim → {Method, Entity, Metric} | content (claim/evidence) |
+| `supports` | {Metric, Claim} → Claim | content (claim/evidence) |
 
-Follow the type matrix in `docs/section-ir-design.md` and `prompts/section-extraction/section-extraction-pass.md`. (`occurs_under` was removed in `section-ir-0.6`; the 5-section partition leaves no section able to co-locate a valid source and target for it.)
+The matrix lives in `RELATION_MATRIX` in `section_pipeline.py`. (`occurs_under` was removed in 0.6; `subject_id`/`target_ids`/`evaluated_on`/`components` were promoted to global edges in 0.7.)
 
 ## Test Corpus
 

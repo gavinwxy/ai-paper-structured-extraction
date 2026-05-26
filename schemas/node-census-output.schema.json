@@ -1,0 +1,96 @@
+{
+  "type": "object",
+  "title": "Node Census Output",
+  "description": "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing Method, Entity, and Metric node, with no relations. Context, Condition, and Claim are not nodes; they are born during content extraction.",
+  "required": [
+    "spine_summary",
+    "nodes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "spine_summary": {
+      "type": "object",
+      "required": [
+        "central_contribution",
+        "argument_flow"
+      ],
+      "additionalProperties": false,
+      "description": "Summary of the paper's contribution and argument structure",
+      "properties": {
+        "central_contribution": {
+          "type": "string",
+          "description": "One sentence naming the main contribution."
+        },
+        "argument_flow": {
+          "type": "string",
+          "description": "One sentence describing how context, claim, method, and evidence fit together."
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
+      "items": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "type",
+          "name",
+          "gloss",
+          "entity_class",
+          "source_scope",
+          "salience",
+          "is_root"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+            "description": "Node id; prefix matches type (mth:/ent:/met:)"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "Method",
+              "Entity",
+              "Metric"
+            ],
+            "description": "Node type: Method, Entity, or Metric"
+          },
+          "name": {
+            "type": "string",
+            "description": "Short name of the node as the paper refers to it"
+          },
+          "gloss": {
+            "type": "string",
+            "description": "One short phrase describing the node"
+          },
+          "entity_class": {
+            "type": "string",
+            "description": "For an Entity node, one of: dataset, benchmark, model, task, hardware. Empty string \"\" for Method and Metric nodes."
+          },
+          "source_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Section markers where the node appears, e.g. ['\u00a73']"
+          },
+          "salience": {
+            "type": "string",
+            "enum": [
+              "must",
+              "should"
+            ],
+            "description": "must = load-bearing for the contribution; should = adds nuance"
+          },
+          "is_root": {
+            "type": "boolean",
+            "description": "True for the single document-level root Method; false otherwise"
+          }
+        }
+      }
+    }
+  }
+}

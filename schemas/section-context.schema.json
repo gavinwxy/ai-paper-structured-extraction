@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Context Section Output",
-  "description": "Structured output schema for the context section section extraction. Typed unit arrays: contexts. Valid unit types: Context.",
+  "description": "Structured output schema for the context section content extraction. Typed unit arrays: contexts. Valid unit types: Context.",
   "required": [
     "section"
   ],
@@ -12,9 +12,7 @@
       "required": [
         "section_type",
         "anchor_id",
-        "covers_entries",
-        "contexts",
-        "links"
+        "contexts"
       ],
       "additionalProperties": false,
       "properties": {
@@ -28,13 +26,6 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
-        },
-        "covers_entries": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Plan item IDs covered by this section"
         },
         "contexts": {
           "type": "array",
@@ -110,40 +101,6 @@
               "description": {
                 "type": "string",
                 "description": "Single-sentence prose statement of the premise"
-              }
-            }
-          }
-        },
-        "links": {
-          "type": "array",
-          "description": "Section-local links between units",
-          "items": {
-            "type": "object",
-            "required": [
-              "source_id",
-              "relation",
-              "target_id"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "source_id": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-                "description": "Source unit ID"
-              },
-              "relation": {
-                "type": "string",
-                "enum": [
-                  "supports",
-                  "part_of",
-                  "compares_to"
-                ],
-                "description": "Section-local relation. Recommended for context: supports."
-              },
-              "target_id": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-                "description": "Target unit ID"
               }
             }
           }

@@ -1,7 +1,11 @@
 # 5-Section IR Design
 
-This is the active design for the scientific literature extraction pipeline.
-It replaces the archived 8-paradigm IR as the main implementation path.
+> **Superseded (legacy 0.6).** The active design is section-ir-0.7 (`context → claim → method → evidence`,
+> three-stage `node census → relation pass → content fill`, global top-level `relations[]`). See
+> `docs/section-ir-0.7-redesign.md` and `CLAUDE.md`. This file is retained for the 0.6 history below.
+
+This was the active design for the scientific literature extraction pipeline.
+It replaced the archived 8-paradigm IR as the main implementation path.
 
 ## Scope
 

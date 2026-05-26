@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Method Section Output",
-  "description": "Structured output schema for the method section section extraction. Typed unit arrays: methods. Valid unit types: Method.",
+  "description": "Structured output schema for the method section content extraction. Typed unit arrays: methods. Valid unit types: Method.",
   "required": [
     "section"
   ],
@@ -12,9 +12,7 @@
       "required": [
         "section_type",
         "anchor_id",
-        "covers_entries",
-        "methods",
-        "links"
+        "methods"
       ],
       "additionalProperties": false,
       "properties": {
@@ -28,13 +26,6 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
-        },
-        "covers_entries": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Plan item IDs covered by this section"
         },
         "methods": {
           "type": "array",
@@ -222,40 +213,6 @@
               "implementation_notes": {
                 "type": "string",
                 "description": "Key implementation details; empty string when none are reported"
-              }
-            }
-          }
-        },
-        "links": {
-          "type": "array",
-          "description": "Section-local links between units",
-          "items": {
-            "type": "object",
-            "required": [
-              "source_id",
-              "relation",
-              "target_id"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "source_id": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-                "description": "Source unit ID"
-              },
-              "relation": {
-                "type": "string",
-                "enum": [
-                  "supports",
-                  "part_of",
-                  "compares_to"
-                ],
-                "description": "Section-local relation. Recommended for method: part_of, compares_to."
-              },
-              "target_id": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-                "description": "Target unit ID"
               }
             }
           }

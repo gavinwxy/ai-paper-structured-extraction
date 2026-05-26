@@ -13,7 +13,7 @@ def ensure_paper_dir(output_dir: Path, paper_id: str) -> Path:
     """Create and return the per-paper output directory."""
     paper_dir = output_dir / paper_id
     paper_dir.mkdir(parents=True, exist_ok=True)
-    (paper_dir / "04_sections").mkdir(exist_ok=True)
+    (paper_dir / "05_sections").mkdir(exist_ok=True)
     return paper_dir
 
 

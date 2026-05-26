@@ -16,20 +16,18 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-SECTION_ORDER = ["context", "claim", "method", "experiment", "analysis"]
+SECTION_ORDER = ["context", "claim", "method", "evidence"]
 SECTION_COLORS = {
     "context": "#6b7280",
     "claim": "#ef4444",
     "method": "#3b82f6",
-    "experiment": "#22c55e",
-    "analysis": "#f59e0b",
+    "evidence": "#22c55e",
 }
 SECTION_LABELS = {
     "context": "Context & Background",
     "claim": "Claims & Contributions",
     "method": "Method",
-    "experiment": "Experiments",
-    "analysis": "Analysis & Conclusions",
+    "evidence": "Evidence (Experiments & Analysis)",
 }
 TYPE_SHAPES = {
     "Claim": "diamond",
@@ -83,7 +81,7 @@ def load_pipeline_data(
 
 def _load_from_directory(dir_path: Path) -> dict[str, Any]:
     """Load from a production output directory structure."""
-    extraction_path = dir_path / "05_extraction.json"
+    extraction_path = dir_path / "06_extraction.json"
     if not extraction_path.exists():
         candidates = list(dir_path.glob("*_extraction.json"))
         if candidates:
@@ -144,12 +142,20 @@ def build_unit_section_map(data: dict) -> dict[str, str]:
 
 
 def collect_all_links(data: dict) -> list[dict]:
-    links = []
-    for section in data.get("sections", []):
-        st = section.get("section_type", "context")
-        for lk in section.get("links", []):
-            links.append({**lk, "section_type": st})
-    return links
+    """Return the global relation edge list (section-ir-0.7 top-level `relations`)."""
+    relations = data.get("relations", [])
+    return [lk for lk in relations if isinstance(lk, dict)]
+
+
+def build_metric_subjects(data: dict) -> dict[str, str]:
+    """Map each Metric id to the Method it evaluates, from the global `evaluates` relations."""
+    subjects: dict[str, str] = {}
+    for lk in data.get("relations", []):
+        if isinstance(lk, dict) and lk.get("relation") == "evaluates":
+            src, tgt = lk.get("source_id"), lk.get("target_id")
+            if isinstance(src, str) and isinstance(tgt, str):
+                subjects.setdefault(src, tgt)
+    return subjects
 
 
 def group_sections_by_type(data: dict) -> dict[str, list[dict]]:
@@ -264,10 +270,13 @@ def build_section_graph(
     section_type: str,
     sections: list[dict],
     unit_index: dict[str, dict],
+    all_links: list[dict],
 ) -> tuple[list[dict], list[dict]] | None:
-    """Build a local graph for a section group. Returns None if too trivial."""
+    """Build a local graph for a section group. Returns None if too trivial.
+
+    Edges are the global relations whose endpoints both fall inside this section group.
+    """
     local_ids: set[str] = set()
-    links: list[dict] = []
 
     for section in sections:
         aid = section.get("anchor_id")
@@ -275,8 +284,12 @@ def build_section_graph(
             local_ids.add(aid)
         for u in section.get("units", []):
             local_ids.add(u.get("id", ""))
-        for lk in section.get("links", []):
-            links.append(lk)
+
+    links = [
+        lk
+        for lk in all_links
+        if lk.get("source_id") in local_ids and lk.get("target_id") in local_ids
+    ]
 
     if len(local_ids) < 3 or len(links) < 1:
         return None
@@ -372,7 +385,7 @@ def render_unit_card(unit: dict, unit_index: dict, is_anchor: bool = False, sect
     </div>"""
 
 
-def render_metric_table(sections: list[dict], unit_index: dict) -> str:
+def render_metric_table(sections: list[dict], unit_index: dict, subject_by_metric: dict[str, str]) -> str:
     metrics = []
     for section in sections:
         seen = set()
@@ -387,7 +400,7 @@ def render_metric_table(sections: list[dict], unit_index: dict) -> str:
 
     rows = ""
     for m in metrics:
-        subj = m.get("subject_id", "")
+        subj = subject_by_metric.get(m.get("id", ""), "")
         subj_unit = unit_index.get(subj, {})
         subj_name = subj_unit.get("name") or subj_unit.get("statement") or subj
         if isinstance(subj_name, str) and len(subj_name) > 50:
@@ -507,6 +520,8 @@ def render_section_card(
     unit_index: dict,
     unit_section: dict[str, str],
     graph_id: str,
+    all_links: list[dict],
+    subject_by_metric: dict[str, str],
 ) -> str:
     color = SECTION_COLORS[section_type]
     label = SECTION_LABELS[section_type]
@@ -525,9 +540,9 @@ def render_section_card(
             count += 1
             units_html += render_unit_card(u, unit_index, section_type=section_type)
 
-    metric_html = render_metric_table(sections, unit_index) if section_type in {"experiment", "analysis"} else ""
+    metric_html = render_metric_table(sections, unit_index, subject_by_metric) if section_type == "evidence" else ""
 
-    graph_data = build_section_graph(section_type, sections, unit_index)
+    graph_data = build_section_graph(section_type, sections, unit_index, all_links)
     has_graph = graph_data is not None
 
     if has_graph:
@@ -572,6 +587,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     unit_index = build_unit_index(data)
     unit_section = build_unit_section_map(data)
     all_links = collect_all_links(data)
+    subject_by_metric = build_metric_subjects(data)
     grouped = group_sections_by_type(data)
 
     doc = data.get("document", {})
@@ -606,8 +622,8 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
         sections_for_type = grouped.get(st, [])
         graph_id = f"graph-{st}"
         if sections_for_type:
-            section_cards += render_section_card(st, sections_for_type, unit_index, unit_section, graph_id)
-            graph_data = build_section_graph(st, sections_for_type, unit_index)
+            section_cards += render_section_card(st, sections_for_type, unit_index, unit_section, graph_id, all_links, subject_by_metric)
+            graph_data = build_section_graph(st, sections_for_type, unit_index, all_links)
             if graph_data:
                 sg_nodes, sg_edges = graph_data
                 section_graphs_js += f"""
@@ -743,7 +759,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
   <div class="stats">
     <div class="stat"><div class="stat-value">{total_sections}</div><div class="stat-label">Sections</div></div>
     <div class="stat"><div class="stat-value">{total_units}</div><div class="stat-label">Units</div></div>
-    <div class="stat"><div class="stat-value">{total_links}</div><div class="stat-label">Links</div></div>
+    <div class="stat"><div class="stat-value">{total_links}</div><div class="stat-label">Relations</div></div>
     <div class="stat"><div class="stat-value">{escape(cov_value)}</div><div class="stat-label">Must Coverage</div></div>
     <div class="stat">
       <div class="coverage">{coverage_dots}</div>

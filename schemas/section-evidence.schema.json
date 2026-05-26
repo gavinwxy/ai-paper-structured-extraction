@@ -1,7 +1,7 @@
 {
   "type": "object",
-  "title": "Experiment Section Output",
-  "description": "Structured output schema for the experiment section section extraction. Typed unit arrays: metrics, conditions, entities. Valid unit types: Metric, Condition, Entity.",
+  "title": "Evidence Section Output",
+  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: metrics, conditions, claims, entities. Valid unit types: Metric, Condition, Claim, Entity. Authors claim-centric relations.",
   "required": [
     "section"
   ],
@@ -12,31 +12,24 @@
       "required": [
         "section_type",
         "anchor_id",
-        "covers_entries",
         "metrics",
         "conditions",
+        "claims",
         "entities",
-        "links"
+        "relations"
       ],
       "additionalProperties": false,
       "properties": {
         "section_type": {
           "type": "string",
           "enum": [
-            "experiment"
+            "evidence"
           ]
         },
         "anchor_id": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
-        },
-        "covers_entries": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Plan item IDs covered by this section"
         },
         "metrics": {
           "type": "array",
@@ -49,7 +42,6 @@
               "provenance",
               "name",
               "unit",
-              "subject_id",
               "context_ids",
               "scores"
             ],
@@ -109,24 +101,12 @@
                 "type": "string",
                 "description": "Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"
               },
-              "subject_id": {
-                "type": "string",
-                "description": "ID of the unit being measured"
-              },
               "context_ids": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "minItems": 1,
-                "description": "IDs of local Condition units scoping this metric; experiment metrics require at least one local Condition."
-              },
-              "evaluated_on": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "IDs of local dataset/benchmark Entity units this metric was measured on; omit entirely when no such local Entity exists"
+                "description": "IDs of local Condition units scoping this metric; empty when none apply"
               },
               "comparison_direction": {
                 "type": "string",
@@ -255,6 +235,116 @@
             }
           }
         },
+        "claims": {
+          "type": "array",
+          "description": "Claim units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "statement",
+              "claim_kind"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Claim"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Source references for this unit",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source_kind",
+                    "source"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_kind": {
+                      "type": "string",
+                      "enum": [
+                        "sentence",
+                        "table",
+                        "figure",
+                        "appendix",
+                        "caption",
+                        "equation",
+                        "supplementary_material"
+                      ],
+                      "description": "Source marker kind"
+                    },
+                    "source": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                    }
+                  }
+                }
+              },
+              "statement": {
+                "type": "string",
+                "description": "The claim as a single declarative sentence"
+              },
+              "claim_kind": {
+                "type": "string",
+                "enum": [
+                  "descriptive",
+                  "mechanistic",
+                  "causal",
+                  "correlational",
+                  "comparative",
+                  "modeling",
+                  "ablation_finding",
+                  "failure_mode"
+                ],
+                "description": "Classification of the claim"
+              },
+              "polarity": {
+                "type": "string",
+                "enum": [
+                  "positive",
+                  "negative",
+                  "neutral",
+                  "mixed"
+                ],
+                "description": "Directional assertion of the claim; omit when unspecified"
+              },
+              "novelty": {
+                "type": "string",
+                "enum": [
+                  "original",
+                  "replication",
+                  "citation",
+                  "synthesis"
+                ],
+                "description": "Whether the claim is original to this paper; omit when unspecified"
+              },
+              "epistemic_status": {
+                "type": "string",
+                "enum": [
+                  "hypothesis",
+                  "conclusion",
+                  "established_fact"
+                ],
+                "description": "Confidence level of the claim; omit when unspecified"
+              }
+            }
+          }
+        },
         "entities": {
           "type": "array",
           "description": "Entity units extracted for this section",
@@ -323,22 +413,26 @@
                 "type": "string",
                 "enum": [
                   "dataset",
-                  "benchmark"
+                  "benchmark",
+                  "model",
+                  "task",
+                  "hardware"
                 ],
                 "description": "Classification of the entity"
               }
             }
           }
         },
-        "links": {
+        "relations": {
           "type": "array",
-          "description": "Section-local links between units",
+          "description": "Claim-centric edges this evidence section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
           "items": {
             "type": "object",
             "required": [
               "source_id",
               "relation",
-              "target_id"
+              "target_id",
+              "provenance"
             ],
             "additionalProperties": false,
             "properties": {
@@ -350,16 +444,49 @@
               "relation": {
                 "type": "string",
                 "enum": [
-                  "supports",
-                  "part_of",
-                  "compares_to"
+                  "about",
+                  "supports"
                 ],
-                "description": "Section-local relation. Recommended for experiment: compares_to."
+                "description": "about = a Claim is about a Method/Entity/Metric; supports = a Metric or Claim supports a Claim."
               },
               "target_id": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
                 "description": "Target unit ID"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Source references for this unit",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source_kind",
+                    "source"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_kind": {
+                      "type": "string",
+                      "enum": [
+                        "sentence",
+                        "table",
+                        "figure",
+                        "appendix",
+                        "caption",
+                        "equation",
+                        "supplementary_material"
+                      ],
+                      "description": "Source marker kind"
+                    },
+                    "source": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                    }
+                  }
+                }
               }
             }
           }

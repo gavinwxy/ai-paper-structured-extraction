@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Generate per-section typed-array schemas."""
+"""Generate per-section typed-array schemas plus the node-census and relation-pass schemas.
+
+section-ir-0.7: the pipeline is three stages — node census (stage A), relation pass
+(stage B), and per-section content fill (stage C). This script is the single source for
+every structured-output schema, generated from the controlled vocabularies in
+``section_pipeline.py`` so the schemas never drift from the runtime contract.
+"""
 
 from __future__ import annotations
 
@@ -19,10 +25,10 @@ from section_pipeline import (  # noqa: E402
     CONTEXT_KINDS,
     ENTITY_CLASSES,
     EPISTEMIC_STATUSES,
-    LINK_MATRIX,
     METHOD_KINDS,
     NOVELTIES,
     POLARITIES,
+    SECTION_AUTHORS_RELATIONS,
     SOURCE_KINDS,
     VALUE_TYPES,
 )
@@ -30,22 +36,22 @@ from section_pipeline import (  # noqa: E402
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
 ID_PATTERN = r"^[a-z][a-z0-9_]*:[a-z0-9_]+$"
 
+# Typed unit arrays each content section (stage C) returns.
 SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
     "context": ["contexts"],
     "claim": ["claims"],
     "method": ["methods"],
-    "experiment": ["metrics", "conditions", "entities"],
-    "analysis": ["claims", "metrics", "entities"],
+    "evidence": ["metrics", "conditions", "claims", "entities"],
 }
 
+# Entity classes allowed per section. Evidence may carry any class an entity node can take.
 ENTITY_CLASSES_BY_SECTION: dict[str, list[str]] = {
-    "experiment": ["dataset", "benchmark"],
-    "analysis": ["dataset", "benchmark", "model", "task", "hardware"],
+    "evidence": ["dataset", "benchmark", "model", "task", "hardware"],
 }
 
 OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
     "Claim": {"polarity", "novelty", "epistemic_status"},
-    "Metric": {"comparison_direction", "value_type", "evaluated_on"},
+    "Metric": {"comparison_direction", "value_type"},
     "Method": {"inputs", "outputs", "formulas", "objective_function"},
 }
 
@@ -57,6 +63,12 @@ ARRAY_TYPE_NAMES: dict[str, str] = {
     "metrics": "Metric",
     "methods": "Method",
 }
+
+# Census node types and the relation vocabularies, with explicit ordering for stable schemas.
+NODE_TYPE_ORDER = ["Method", "Entity", "Metric"]
+SALIENCE_ORDER = ["must", "should"]
+STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates", "measured_on"]
+STAGE_C_RELATION_ORDER = ["about", "supports"]
 
 ENUM_ORDER: dict[str, list[str]] = {
     "claim_kind": ["descriptive", "mechanistic", "causal", "correlational", "comparative", "modeling", "ablation_finding", "failure_mode"],
@@ -129,31 +141,19 @@ def string_array_schema(description: str) -> dict[str, Any]:
     }
 
 
-def metric_context_ids_schema(section_type: str) -> dict[str, Any]:
-    """Section-aware `context_ids` constraint for Metric.
+def metric_context_ids_schema() -> dict[str, Any]:
+    """`context_ids` scopes a metric to local Condition units in the evidence section.
 
-    The same field flips polarity by section: experiment metrics must be scoped
-    by at least one local Condition, while analysis metrics have no local
-    Conditions and must leave it empty. Encoding these bounds in the schema lets
-    the structured-output backend enforce the rule directly instead of relying on
-    the model to remember a per-section reversal (see issues P0-3).
+    In 0.7 this is optional in cardinality: a deployable metric may carry scoping
+    Conditions while an ablation metric may carry none, so no min/max bound is imposed.
+    The metric->method (`evaluates`) and metric->dataset (`measured_on`) edges that used
+    to live on the Metric are global relations now.
     """
-    schema: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
-    if section_type == "experiment":
-        schema["minItems"] = 1
-        schema["description"] = (
-            "IDs of local Condition units scoping this metric; "
-            "experiment metrics require at least one local Condition."
-        )
-    elif section_type == "analysis":
-        schema["maxItems"] = 0
-        schema["description"] = (
-            "Must be an empty array: analysis sections have no local Conditions, "
-            "so analysis metrics carry no context_ids."
-        )
-    else:
-        schema["description"] = "IDs of local Condition units scoping this metric"
-    return schema
+    return {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "IDs of local Condition units scoping this metric; empty when none apply",
+    }
 
 
 def scores_schema(description: str) -> dict[str, Any]:
@@ -297,7 +297,6 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             **base_unit_properties("Claim"),
             "statement": string_schema("The claim as a single declarative sentence"),
             "claim_kind": enum_schema("claim_kind", "Classification of the claim"),
-            "target_ids": string_array_schema("IDs of entities or methods the claim is about"),
             "polarity": enum_schema("polarity", "Directional assertion of the claim; omit when unspecified"),
             "novelty": enum_schema("novelty", "Whether the claim is original to this paper; omit when unspecified"),
             "epistemic_status": enum_schema("epistemic_status", "Confidence level of the claim; omit when unspecified"),
@@ -321,12 +320,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             **base_unit_properties("Metric"),
             "name": string_schema("Name of the metric"),
             "unit": string_schema("Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"),
-            "subject_id": string_schema("ID of the unit being measured"),
-            "context_ids": metric_context_ids_schema(section_type),
-            "evaluated_on": string_array_schema(
-                "IDs of local dataset/benchmark Entity units this metric was measured on; "
-                "omit entirely when no such local Entity exists"
-            ),
+            "context_ids": metric_context_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
             "value_type": enum_schema("value_type", "Shape of the metric value; omit when unspecified"),
             "scores": scores_schema("Flat array of reported scores for method-family variants under this metric"),
@@ -351,31 +345,30 @@ def array_schema(array_key: str, unit_schemas: dict[str, dict[str, Any]]) -> dic
     }
 
 
-LINK_RELATION_HINTS: dict[str, str] = {
-    "context": "supports",
-    "claim": "supports",
-    "method": "part_of, compares_to",
-    "experiment": "compares_to",
-    "analysis": "supports, compares_to",
-}
-
-
-def links_schema(section_type: str) -> dict[str, Any]:
+def relations_schema(section_type: str) -> dict[str, Any]:
+    """The claim-centric edges a content section authors (about / supports)."""
     return {
         "type": "array",
-        "description": "Section-local links between units",
+        "description": (
+            f"Claim-centric edges this {section_type} section authors. Lifted into the global "
+            "relations[] during assembly. Empty array when none apply."
+        ),
         "items": {
             "type": "object",
-            "required": ["source_id", "relation", "target_id"],
+            "required": ["source_id", "relation", "target_id", "provenance"],
             "additionalProperties": False,
             "properties": {
                 "source_id": id_schema("Source unit ID"),
                 "relation": {
                     "type": "string",
-                    "enum": list(LINK_MATRIX),
-                    "description": f"Section-local relation. Recommended for {section_type}: {LINK_RELATION_HINTS[section_type]}.",
+                    "enum": STAGE_C_RELATION_ORDER,
+                    "description": (
+                        "about = a Claim is about a Method/Entity/Metric; "
+                        "supports = a Metric or Claim supports a Claim."
+                    ),
                 },
                 "target_id": id_schema("Target unit ID"),
+                "provenance": provenance_schema(),
             },
         },
     }
@@ -393,34 +386,136 @@ def section_schema(section_type: str, array_keys: list[str]) -> dict[str, Any]:
             "pattern": ID_PATTERN,
             "description": "ID of the unit that anchors this section; it must be defined in one typed unit array",
         },
-        "covers_entries": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Plan item IDs covered by this section",
-        },
     }
     for array_key in array_keys:
         section_properties[array_key] = array_schema(array_key, unit_schemas)
-    section_properties["links"] = links_schema(section_type)
+
+    required = ["section_type", "anchor_id", *array_keys]
+    authors_relations = section_type in SECTION_AUTHORS_RELATIONS
+    if authors_relations:
+        section_properties["relations"] = relations_schema(section_type)
+        required.append("relations")
 
     type_names = [ARRAY_TYPE_NAMES[array_key] for array_key in array_keys]
     return {
         "type": "object",
         "title": f"{section_type.title()} Section Output",
         "description": (
-            f"Structured output schema for the {section_type} section section extraction. "
+            f"Structured output schema for the {section_type} section content extraction. "
             f"Typed unit arrays: {', '.join(array_keys)}. "
             f"Valid unit types: {', '.join(type_names)}."
+            + (" Authors claim-centric relations." if authors_relations else "")
         ),
         "required": ["section"],
         "additionalProperties": False,
         "properties": {
             "section": {
                 "type": "object",
-                "required": ["section_type", "anchor_id", "covers_entries", *array_keys, "links"],
+                "required": required,
                 "additionalProperties": False,
                 "properties": section_properties,
             }
+        },
+    }
+
+
+def node_census_schema() -> dict[str, Any]:
+    """Stage A schema: spine_summary + a flat list of referenceable nodes."""
+    return {
+        "type": "object",
+        "title": "Node Census Output",
+        "description": (
+            "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing "
+            "Method, Entity, and Metric node, with no relations. Context, Condition, and Claim "
+            "are not nodes; they are born during content extraction."
+        ),
+        "required": ["spine_summary", "nodes"],
+        "additionalProperties": False,
+        "properties": {
+            "spine_summary": {
+                "type": "object",
+                "required": ["central_contribution", "argument_flow"],
+                "additionalProperties": False,
+                "description": "Summary of the paper's contribution and argument structure",
+                "properties": {
+                    "central_contribution": string_schema("One sentence naming the main contribution."),
+                    "argument_flow": string_schema(
+                        "One sentence describing how context, claim, method, and evidence fit together."
+                    ),
+                },
+            },
+            "nodes": {
+                "type": "array",
+                "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
+                "items": {
+                    "type": "object",
+                    "required": ["node_id", "type", "name", "gloss", "entity_class", "source_scope", "salience", "is_root"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "node_id": id_schema("Node id; prefix matches type (mth:/ent:/met:)"),
+                        "type": inline_enum_schema(NODE_TYPE_ORDER, "Node type: Method, Entity, or Metric"),
+                        "name": string_schema("Short name of the node as the paper refers to it"),
+                        "gloss": string_schema("One short phrase describing the node"),
+                        # Plain string (not an enum): Gemini rejects an enum whose member is the
+                        # empty string, and Method/Metric nodes carry "". validate_census enforces
+                        # that Entity nodes use one of dataset|benchmark|model|task|hardware.
+                        "entity_class": string_schema(
+                            "For an Entity node, one of: dataset, benchmark, model, task, hardware. "
+                            "Empty string \"\" for Method and Metric nodes."
+                        ),
+                        "source_scope": string_array_schema("Section markers where the node appears, e.g. ['§3']"),
+                        "salience": inline_enum_schema(
+                            SALIENCE_ORDER,
+                            "must = load-bearing for the contribution; should = adds nuance",
+                        ),
+                        "is_root": {
+                            "type": "boolean",
+                            "description": "True for the single document-level root Method; false otherwise",
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+def relation_pass_schema() -> dict[str, Any]:
+    """Stage B schema: structural entity<->entity edges over the full node set."""
+    return {
+        "type": "object",
+        "title": "Relation Pass Output",
+        "description": (
+            "Stage B of section-ir-0.7: structural edges over the full node set. Sees every "
+            "node, so cross-section composition and metric-subject binding are captured here "
+            "with no forward references."
+        ),
+        "required": ["relations"],
+        "additionalProperties": False,
+        "properties": {
+            "relations": {
+                "type": "array",
+                "description": "Structural entity<->entity edges between census nodes.",
+                "items": {
+                    "type": "object",
+                    "required": ["source_id", "relation", "target_id", "provenance"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "source_id": id_schema("Source node id"),
+                        "relation": {
+                            "type": "string",
+                            "enum": STAGE_B_RELATION_ORDER,
+                            "description": (
+                                "part_of = composition between Methods/Entities; "
+                                "compares_to = contrasted peers; "
+                                "evaluates = Metric measures a Method; "
+                                "measured_on = Metric measured on a dataset/benchmark Entity."
+                            ),
+                        },
+                        "target_id": id_schema("Target node id"),
+                        "provenance": provenance_schema(),
+                    },
+                },
+            },
         },
     }
 
@@ -431,6 +526,14 @@ def main() -> None:
         path = SCHEMAS_DIR / f"section-{section_type}.schema.json"
         payload = section_schema(section_type, array_keys)
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(path.relative_to(PROJECT_ROOT))
+
+    for filename, builder in (
+        ("node-census-output.schema.json", node_census_schema),
+        ("relation-pass-output.schema.json", relation_pass_schema),
+    ):
+        path = SCHEMAS_DIR / filename
+        path.write_text(json.dumps(builder(), indent=2) + "\n", encoding="utf-8")
         print(path.relative_to(PROJECT_ROOT))
 
 

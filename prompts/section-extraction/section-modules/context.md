@@ -2,7 +2,7 @@ SECTION FOCUS: context
 
 This section captures the argumentative premises that make the central contribution necessary and intelligible. Context units establish the research environment, identify the gap or challenge the paper addresses, and frame the assumptions the argument rests on.
 
-This section is planless: `section_plan.items` is empty. Extract the context role directly from `spine_summary`, this focus, and the paper. Set `covers_entries: []`, choose `anchor_id` from a Context unit you define here, and do not invent plan item IDs.
+Context units are **born here** — they are not census nodes. Create them directly from `spine_summary`, this focus, and the paper. This section materializes no census nodes and authors no relations; choose `anchor_id` from a Context unit you define here.
 
 ## Units you may define
 
@@ -13,9 +13,9 @@ Fields: `context_kind`, `description`.
 - `context_kind`: one of `background | gap | motivation | challenge | assumption` — `background` for established prior work, `gap` for the unresolved problem, `motivation` for the "why now", `challenge` for a technical obstacle, `assumption` for a premise taken as given.
 - `description`: a single assertive sentence. Make it specific — what gap, in what task, versus what prior approach.
 
-## Links
+## Relations
 
-This section emits no links — each Context unit stands as an independent premise. Return `links: []`.
+This section authors no relations and its schema has no `relations` field — each Context unit stands as an independent premise.
 
 ## Extraction focus
 
@@ -38,7 +38,6 @@ This section emits no links — each Context unit stands as an independent premi
   "section": {
     "section_type": "context",
     "anchor_id": "ctx:seq_dependency_gap",
-    "covers_entries": [],
     "contexts": [
       {
         "id": "ctx:rnn_sequential",
@@ -54,8 +53,7 @@ This section emits no links — each Context unit stands as an independent premi
         "description": "Sequential recurrence precludes parallelization within a training example and weakens learning of dependencies between distant positions.",
         "provenance": [{"source_kind": "sentence", "source": ["§1", "§2"]}]
       }
-    ],
-    "links": []
+    ]
   }
 }
 

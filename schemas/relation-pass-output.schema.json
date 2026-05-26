@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "title": "Relation Pass Output",
+  "description": "Stage B of section-ir-0.7: structural edges over the full node set. Sees every node, so cross-section composition and metric-subject binding are captured here with no forward references.",
+  "required": [
+    "relations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "relations": {
+      "type": "array",
+      "description": "Structural entity<->entity edges between census nodes.",
+      "items": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "relation",
+          "target_id",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+            "description": "Source node id"
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "part_of",
+              "compares_to",
+              "evaluates",
+              "measured_on"
+            ],
+            "description": "part_of = composition between Methods/Entities; compares_to = contrasted peers; evaluates = Metric measures a Method; measured_on = Metric measured on a dataset/benchmark Entity."
+          },
+          "target_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+            "description": "Target node id"
+          },
+          "provenance": {
+            "type": "array",
+            "description": "Source references for this unit",
+            "items": {
+              "type": "object",
+              "required": [
+                "source_kind",
+                "source"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "source_kind": {
+                  "type": "string",
+                  "enum": [
+                    "sentence",
+                    "table",
+                    "figure",
+                    "appendix",
+                    "caption",
+                    "equation",
+                    "supplementary_material"
+                  ],
+                  "description": "Source marker kind"
+                },
+                "source": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Section markers such as ['\\u00a71', '\\u00a72']"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
