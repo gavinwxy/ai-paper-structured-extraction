@@ -26,7 +26,6 @@ from section_pipeline import (  # noqa: E402
     METHOD_KINDS,
     NODE_ROLES,
     SECTION_AUTHORS_RELATIONS,
-    SOURCE_KINDS,
 )
 
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
@@ -37,7 +36,7 @@ SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
     "context": ["contexts"],
     "claim": ["claims"],
     "method": ["methods"],
-    "evidence": ["metrics", "conditions", "claims", "entities"],
+    "evidence": ["metrics", "settings", "claims", "entities"],
 }
 
 # Entity classes allowed per section. Evidence may carry any class an entity node can take.
@@ -53,7 +52,7 @@ OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
 ARRAY_TYPE_NAMES: dict[str, str] = {
     "entities": "Entity",
     "contexts": "Context",
-    "conditions": "Condition",
+    "settings": "Setting",
     "claims": "Claim",
     "metrics": "Metric",
     "methods": "Method",
@@ -77,7 +76,6 @@ ENUM_ORDER: dict[str, list[str]] = {
     "context_kind": ["background", "gap", "motivation", "challenge", "assumption"],
     "entity_class": ["dataset", "benchmark", "task"],
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function"],
-    "source_kind": ["sentence", "table", "figure", "appendix", "caption", "equation", "supplementary_material"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
 }
 
@@ -87,7 +85,6 @@ ENUM_VALUES: dict[str, set[str]] = {
     "context_kind": CONTEXT_KINDS,
     "entity_class": ENTITY_CLASSES,
     "method_kind": METHOD_KINDS,
-    "source_kind": SOURCE_KINDS,
     "comparison_direction": COMPARISON_DIRECTIONS,
 }
 
@@ -134,18 +131,18 @@ def string_array_schema(description: str) -> dict[str, Any]:
     }
 
 
-def metric_context_ids_schema() -> dict[str, Any]:
-    """`context_ids` scopes a metric to local Condition units in the evidence section.
+def metric_setting_ids_schema() -> dict[str, Any]:
+    """`setting_ids` scopes a metric to local Setting units in the evidence section.
 
     In 0.7 this is optional in cardinality: a deployable metric may carry scoping
-    Conditions while an ablation metric may carry none, so no min/max bound is imposed.
+    Settings while an ablation metric may carry none, so no min/max bound is imposed.
     The metric->method (`evaluates`) and metric->dataset (`measured_on`) edges that used
     to live on the Metric are global relations now.
     """
     return {
         "type": "array",
         "items": {"type": "string"},
-        "description": "IDs of local Condition units scoping this metric; empty when none apply",
+        "description": "IDs of local Setting units scoping this metric; empty when none apply",
     }
 
 
@@ -243,16 +240,8 @@ def objective_function_schema(description: str) -> dict[str, Any]:
 def provenance_schema() -> dict[str, Any]:
     return {
         "type": "array",
-        "description": "Source references for this unit",
-        "items": {
-            "type": "object",
-            "required": ["source_kind", "source"],
-            "additionalProperties": False,
-            "properties": {
-                "source_kind": enum_schema("source_kind", "Source marker kind"),
-                "source": string_array_schema("Section markers such as ['\\u00a71', '\\u00a72']"),
-            },
-        },
+        "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+        "items": {"type": "string"},
     }
 
 
@@ -281,8 +270,8 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "context_kind": enum_schema("context_kind", "Argumentative role of the context premise"),
             "description": string_schema("Single-sentence prose statement of the premise"),
         },
-        "Condition": {
-            **base_unit_properties("Condition"),
+        "Setting": {
+            **base_unit_properties("Setting"),
             "description": string_schema(
                 "Single-sentence prose statement of the operational constraint that scopes a "
                 "metric — the concrete dataset split, protocol, population, or hyperparameter"
@@ -312,7 +301,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             **base_unit_properties("Metric"),
             "name": string_schema("Name of the metric"),
             "unit": string_schema("Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"),
-            "context_ids": metric_context_ids_schema(),
+            "setting_ids": metric_setting_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
             "scores": scores_schema("Flat array of reported scores under this metric — one row per system, covering the method family's own variants and every compared-against baseline"),
         },
@@ -418,7 +407,7 @@ def node_census_schema() -> dict[str, Any]:
         "description": (
             "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing "
             "node, each tagged with one granular role (its type and Entity class are derived "
-            "from the role), with no relations. Context, Condition, and Claim are not nodes; "
+            "from the role), with no relations. Context, Setting, and Claim are not nodes; "
             "they are born during content extraction."
         ),
         "required": ["spine_summary", "nodes"],

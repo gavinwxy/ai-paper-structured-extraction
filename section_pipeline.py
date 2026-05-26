@@ -47,7 +47,7 @@ SECTION_ALLOWED_UNIT_TYPES: dict[str, set[str]] = {
     "context": {"Context"},
     "claim": {"Claim"},
     "method": {"Method"},
-    "evidence": {"Metric", "Condition", "Claim", "Entity"},
+    "evidence": {"Metric", "Setting", "Claim", "Entity"},
 }
 # The unit type that should naturally anchor each section. Used when repairing an
 # anchor that names a non-local unit (e.g. an evidence section reaching for the
@@ -75,7 +75,7 @@ SECTION_AUTHORS_RELATIONS = {"claim", "evidence"}
 TYPED_ARRAY_KEYS: dict[str, str] = {
     "entities": "Entity",
     "contexts": "Context",
-    "conditions": "Condition",
+    "settings": "Setting",
     "claims": "Claim",
     "metrics": "Metric",
     "methods": "Method",
@@ -138,7 +138,7 @@ UNIT_TYPES = {
     "Method",
     "Claim",
     "Context",
-    "Condition",
+    "Setting",
     "Metric",
 }
 FORBIDDEN_UNIT_TYPES = {
@@ -178,20 +178,13 @@ ENTITY_CLASSES = {
 }
 # Method kinds, scoped to AI/ML: `protocol`/`software_system` never fire on this corpus.
 METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function"}
-SOURCE_KINDS = {
-    "sentence",
-    "table",
-    "figure",
-    "appendix",
-    "caption",
-    "equation",
-    "supplementary_material",
-}
 COMPARISON_DIRECTIONS = {"higher_is_better", "lower_is_better", "target", "unspecified"}
 # Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Metric
 # `value_type` (always scalar), Claim `novelty` (always original), Claim `epistemic_status`
-# (always conclusion), Claim `polarity` (dropped by request), and Condition `condition_kind`
-# (always evaluation_setup — Condition now carries only a description).
+# (always conclusion), Claim `polarity` (dropped by request), and Setting `condition_kind`
+# (always evaluation_setup — Setting now carries only a description). The provenance
+# `source_kind` enum was likewise dropped (2026-05-26): provenance is now a flat list of
+# `§N` location markers, so SOURCE_KINDS no longer exists.
 
 # Global relation type matrix (section-ir-0.7). Endpoints resolve to a unit defined
 # anywhere in the extraction; relations are no longer section-local.
@@ -215,7 +208,7 @@ UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Claim": "clm:",
     "Method": "mth:",
     "Entity": "ent:",
-    "Condition": "cnd:",
+    "Setting": "set:",
     "Metric": "met:",
 }
 ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
@@ -242,23 +235,23 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "provenance",
     },
     "Context": {"id", "type", "context_kind", "description", "provenance"},
-    "Condition": {"id", "type", "description", "provenance"},
+    "Setting": {"id", "type", "description", "provenance"},
     "Metric": {
         "id",
         "type",
         "name",
         "unit",
         "scores",
-        "context_ids",
+        "setting_ids",
         "comparison_direction",
         "provenance",
     },
 }
 ALLOWED_SECTION_FIELDS = {"section_type", "anchor_id", "covers_entries", "units"}
 # Unit fields that hold a list of unit-id references (rewritten on dedup). In 0.7
-# only Metric.context_ids remains a reference-list field; subject_id, target_ids,
+# only Metric.setting_ids remains a reference-list field; subject_id, target_ids,
 # components, and evaluated_on were promoted to global relations.
-REFERENCE_LIST_FIELDS = ("context_ids",)
+REFERENCE_LIST_FIELDS = ("setting_ids",)
 
 
 def load_prompt(path: Path) -> tuple[str, str]:
@@ -350,13 +343,13 @@ def _flatten_typed_arrays(section_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _canonicalize_id_alias(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith("cond:"):
-        return f"cnd:{value.split(':', 1)[1]}"
+    if isinstance(value, str) and value.startswith("setting:"):
+        return f"set:{value.split(':', 1)[1]}"
     return value
 
 
 def _canonicalize_section_id_aliases(sections: list[dict[str, Any]]) -> None:
-    """Normalize common LLM ID prefix aliases (e.g. cond: -> cnd:) before validation."""
+    """Normalize common LLM ID prefix aliases (e.g. setting: -> set:) before validation."""
     for section in sections:
         section["anchor_id"] = _canonicalize_id_alias(section.get("anchor_id"))
         covers_entries = section.get("covers_entries")
@@ -582,9 +575,9 @@ def _drop_empty_sections(sections: list[dict[str, Any]]) -> list[str]:
 def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
     """Truncate fine-grained subsection markers (e.g. §4.3) to their top-level §N.
 
-    Paper input carries only top-level `[§N]` markers, so a `§4.3` provenance source
+    Paper input carries only top-level `[§N]` markers, so a `§4.3` provenance marker
     cannot be traced and fails validation. `§4` is a real, coarser anchor that does
-    contain `§4.3`, so collapse the subnumber rather than discard the provenance.
+    contain `§4.3`, so collapse the subnumber rather than discard the marker.
     Appendix (`§G.2`) and table/figure references have no `§N` to collapse to and are
     left untouched so they still surface as genuine provenance violations.
     """
@@ -600,25 +593,19 @@ def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
             provenance = unit.get("provenance")
             if not isinstance(provenance, list):
                 continue
+            rewritten: list[Any] = []
             for marker in provenance:
-                if not isinstance(marker, dict):
-                    continue
-                source = marker.get("source")
-                if not isinstance(source, list):
-                    continue
-                rewritten: list[Any] = []
-                for item in source:
-                    if isinstance(item, str):
-                        match = SUBSECTION_MARKER_RE.match(item.strip())
-                        if match:
-                            new_item = f"§{match.group(1)}"
-                            if item not in seen:
-                                seen.add(item)
-                                warnings.append(f"Normalized provenance marker {item} to {new_item}")
-                            rewritten.append(new_item)
-                            continue
-                    rewritten.append(item)
-                marker["source"] = rewritten
+                if isinstance(marker, str):
+                    match = SUBSECTION_MARKER_RE.match(marker.strip())
+                    if match:
+                        new_marker = f"§{match.group(1)}"
+                        if marker not in seen:
+                            seen.add(marker)
+                            warnings.append(f"Normalized provenance marker {marker} to {new_marker}")
+                        rewritten.append(new_marker)
+                        continue
+                rewritten.append(marker)
+            unit["provenance"] = rewritten
     return warnings
 
 
@@ -1680,19 +1667,8 @@ def _validate_provenance(unit: dict[str, Any], issues: list[str]) -> None:
         issues.append(f"{unit.get('type')} {uid} must have non-empty provenance")
 
     for index, marker in enumerate(provenance):
-        if not isinstance(marker, dict):
-            issues.append(f"Unit {uid} provenance[{index}] must be an object")
-            continue
-        source_kind = marker.get("source_kind")
-        if source_kind not in SOURCE_KINDS:
-            issues.append(f"Unit {uid} provenance[{index}] has invalid source_kind: {source_kind}")
-        source = marker.get("source")
-        if not isinstance(source, list) or not source:
-            issues.append(f"Unit {uid} provenance[{index}] source must be a non-empty list")
-        else:
-            for item in source:
-                if not isinstance(item, str) or not PROVENANCE_SOURCE_RE.match(item):
-                    issues.append(f"provenance source '{item}' does not match §N format")
+        if not isinstance(marker, str) or not PROVENANCE_SOURCE_RE.match(marker):
+            issues.append(f"Unit {uid} provenance[{index}] '{marker}' must be a §N location marker")
 
 
 def _validate_formula_symbols(
@@ -1787,9 +1763,9 @@ def _validate_unit_fields(
                 issues.append(f"Context {uid} missing {key}")
         if unit.get("context_kind") not in CONTEXT_KINDS:
             issues.append(f"Context {uid} has invalid context_kind: {unit.get('context_kind')}")
-    elif utype == "Condition":
+    elif utype == "Setting":
         if not unit.get("description"):
-            issues.append(f"Condition {uid} missing description")
+            issues.append(f"Setting {uid} missing description")
     elif utype == "Metric":
         for key in ("name", "unit"):
             if not unit.get(key):
@@ -1810,24 +1786,24 @@ def _validate_unit_fields(
                     issues.append(f"Metric {uid} scores[{index}] value must be a string")
                 if not isinstance(score.get("variance"), str):
                     issues.append(f"Metric {uid} scores[{index}] variance must be a string")
-        # context_ids scope a metric to local Conditions. In 0.7 it is optional: a
-        # deployable metric may carry scoping Conditions, an ablation metric may carry
+        # setting_ids scope a metric to local Settings. In 0.7 it is optional: a
+        # deployable metric may carry scoping Settings, an ablation metric may carry
         # none. The metric->method and metric->dataset edges are global relations now.
-        context_ids = unit.get("context_ids")
-        if context_ids is None:
-            issues.append(f"Metric {uid} missing context_ids")
-        elif not isinstance(context_ids, list):
-            issues.append(f"Metric {uid} context_ids must be a list")
+        setting_ids = unit.get("setting_ids")
+        if setting_ids is None:
+            issues.append(f"Metric {uid} missing setting_ids")
+        elif not isinstance(setting_ids, list):
+            issues.append(f"Metric {uid} setting_ids must be a list")
         else:
-            for context_id in context_ids:
-                context_unit = unit_index.get(context_id)
-                if context_unit is None:
-                    issues.append(f"Metric {uid} has unknown context_id: {context_id}")
-                elif context_id not in local_ids:
-                    issues.append(f"Metric {uid} context_id must be section-local: {context_id}")
-                elif context_unit.get("type") != "Condition":
+            for setting_id in setting_ids:
+                setting_unit = unit_index.get(setting_id)
+                if setting_unit is None:
+                    issues.append(f"Metric {uid} has unknown setting_id: {setting_id}")
+                elif setting_id not in local_ids:
+                    issues.append(f"Metric {uid} setting_id must be section-local: {setting_id}")
+                elif setting_unit.get("type") != "Setting":
                     issues.append(
-                        f"Metric {uid} context_id {context_id} must point to a local Condition"
+                        f"Metric {uid} setting_id {setting_id} must point to a local Setting"
                     )
         comparison_direction = unit.get("comparison_direction")
         if "comparison_direction" in unit and comparison_direction not in COMPARISON_DIRECTIONS:

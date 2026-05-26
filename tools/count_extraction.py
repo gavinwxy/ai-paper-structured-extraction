@@ -11,8 +11,8 @@ of them so a 0.6 (before) batch and a 0.7 (after) batch are directly comparable:
     measured_on / about / supports) — the new global edge list
   - per-section ``links[]`` (section-ir-0.6: supports / part_of / compares_to)
   - field-encoded edges (Metric.subject_id, Claim.target_ids, Metric.evaluated_on
-    — all promoted to global relations in 0.7 — plus Metric.context_ids, which
-    stays a local field in both versions)
+    — all promoted to global relations in 0.7 — plus the metric's local scoping
+    field, named context_ids in 0.6/early-0.7 and setting_ids after the rename)
 ``Method.components`` is skipped: it is a derived projection of part_of and would
 double-count. The relation total is the union of whatever edges a file carries, so
 the same paper scores comparably whichever IR version produced it.
@@ -31,8 +31,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-UNIT_TYPES = ["Method", "Entity", "Metric", "Claim", "Context", "Condition"]
-FIELD_EDGES = ["subject_id", "target_ids", "evaluated_on", "context_ids"]
+UNIT_TYPES = ["Method", "Entity", "Metric", "Claim", "Context", "Condition", "Setting"]
+FIELD_EDGES = ["subject_id", "target_ids", "evaluated_on", "context_ids", "setting_ids"]
 
 
 def iter_extraction_files(arg: str) -> list[Path]:

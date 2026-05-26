@@ -35,7 +35,7 @@ TYPE_SHAPES = {
     "Method": "hexagon",
     "Entity": "dot",
     "Context": "star",
-    "Condition": "triangleDown",
+    "Setting": "triangleDown",
     "Document": "database",
 }
 RESOURCE_ICONS = {
@@ -396,10 +396,11 @@ def build_section_graph(
 def render_provenance(prov_list: list) -> str:
     if not prov_list:
         return ""
-    parts = []
-    for p in prov_list:
-        srcs = ", ".join(p.get("source", []))
-        parts.append(f'<span class="prov-badge">{escape(p.get("source_kind", ""))}: {srcs}</span>')
+    parts = [
+        f'<span class="prov-badge">{escape(marker)}</span>'
+        for marker in prov_list
+        if isinstance(marker, str)
+    ]
     return " ".join(parts)
 
 
@@ -489,7 +490,7 @@ META_FIELDS = {"id", "type", "provenance"}
 TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "context_kind", "comparison_direction", "unit")
 PROSE_FIELDS = ("description", "implementation_notes")
 # Fields rendered by dedicated logic (or consumed as the card label); never echoed as leftover.
-RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "context_ids", "statement", "name"}
+RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setting_ids", "statement", "name"}
 
 
 def render_unit_card(
@@ -548,12 +549,12 @@ def render_unit_card(
         scores_html = render_scores(unit.get("scores"), baseline_keys)
         if scores_html:
             rich += f"<div class='field-group'><div class='field-label'>Scores</div>{scores_html}</div>"
-        if unit.get("context_ids"):
-            cond_names = [
-                (unit_index.get(c, {}).get("description") or unit_index.get(c, {}).get("name") or c)
-                for c in unit["context_ids"]
+        if unit.get("setting_ids"):
+            setting_names = [
+                (unit_index.get(s, {}).get("description") or unit_index.get(s, {}).get("name") or s)
+                for s in unit["setting_ids"]
             ]
-            rich += render_chips("Conditions", cond_names)
+            rich += render_chips("Settings", setting_names)
 
     handled = META_FIELDS | RICH_FIELDS | set(TAG_FIELDS) | set(PROSE_FIELDS) | used_label_fields
     leftover = {k: v for k, v in unit.items() if k not in handled and v not in (None, "", [], {})}

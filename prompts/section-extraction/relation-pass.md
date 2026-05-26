@@ -47,13 +47,13 @@ Return a single JSON object:
 {
   "relations": [
     {"source_id": "mth:attention", "relation": "part_of", "target_id": "mth:transformer",
-     "provenance": [{"source_kind": "sentence", "source": ["§3"]}]},
+     "provenance": ["§3"]},
     {"source_id": "met:bleu_en_de", "relation": "evaluates", "target_id": "mth:transformer",
-     "provenance": [{"source_kind": "table", "source": ["§6"]}]},
+     "provenance": ["§6"]},
     {"source_id": "met:bleu_en_de", "relation": "measured_on", "target_id": "ent:wmt2014_en_de",
      "provenance": []},
     {"source_id": "mth:sinusoidal_pe", "relation": "compares_to", "target_id": "mth:learned_pe",
-     "provenance": [{"source_kind": "sentence", "source": ["§3"]}]}
+     "provenance": ["§3"]}
   ]
 }
 ```

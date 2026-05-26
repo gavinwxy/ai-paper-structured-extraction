@@ -61,7 +61,7 @@ This section authors no relations and its schema has no `relations` field. Metho
           ]
         },
         "implementation_notes": "Trained with label smoothing (ε=0.1) using 8 GPUs.",
-        "provenance": [{"source_kind": "sentence", "source": ["§5"]}]
+        "provenance": ["§5"]
       },
       {
         "id": "mth:attention_mechanism",
@@ -84,7 +84,7 @@ This section authors no relations and its schema has no `relations` field. Metho
           }
         ],
         "implementation_notes": "",
-        "provenance": [{"source_kind": "sentence", "source": ["§5", "§6"]}]
+        "provenance": ["§5", "§6"]
       }
     ]
   }

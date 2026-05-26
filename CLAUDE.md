@@ -59,9 +59,9 @@ Design reference: `docs/section-ir-0.7-redesign.md` (full spec); `docs/section-i
 - Section anchors use `anchor_id`, not inline `anchor` objects.
 - Top-level keys are `document`, `sections`, `relations`, `extraction_notes`. `relations[]` is the single global edge list; sections no longer carry `links`.
 - `covers_entries[]` is the authoritative trace from a section back to the census nodes it materialized. Assembly derives it deterministically (census node_id ∩ section unit ids), so the model does not echo it.
-- Each unit ID is defined exactly once. A census `node_id` is reused verbatim as the unit id when a section materializes it. Cross-unit references are edges in the global `relations[]`, not unit fields — the only remaining reference-list unit field is `Metric.context_ids` (local Condition scoping).
+- Each unit ID is defined exactly once. A census `node_id` is reused verbatim as the unit id when a section materializes it. Cross-unit references are edges in the global `relations[]`, not unit fields — the only remaining reference-list unit field is `Metric.setting_ids` (local Setting scoping).
 - Every `Claim` and `Metric` must have non-empty provenance.
-- Every `Metric` needs `name`, `unit`, non-empty `scores`, and `context_ids`. `scores[]` holds one row per system reported under the metric — the method family's own variants **and** every compared-against baseline (the `variant` string names the system); the metric still `evaluates` the contribution. `context_ids` (when non-empty) must point to section-local `Condition` units; it may be empty (an ablation metric carries none, a deployable metric is normally scoped by one). The metric→method link is the `evaluates` relation and the metric→dataset link is the `measured_on` relation, both in the global `relations[]` — `Metric` no longer has `subject_id` or `evaluated_on` fields.
+- Every `Metric` needs `name`, `unit`, non-empty `scores`, and `setting_ids`. `scores[]` holds one row per system reported under the metric — the method family's own variants **and** every compared-against baseline (the `variant` string names the system); the metric still `evaluates` the contribution. `setting_ids` (when non-empty) must point to section-local `Setting` units; it may be empty (an ablation metric carries none, a deployable metric is normally scoped by one). The metric→method link is the `evaluates` relation and the metric→dataset link is the `measured_on` relation, both in the global `relations[]` — `Metric` no longer has `subject_id` or `evaluated_on` fields.
 - `Claim` has no `target_ids` field; what a claim is about is the `about` relation in `relations[]`.
 - The controlled vocabularies are **scoped to AI/ML literature** (the type cleanup pruned what never fired on the corpus). `Claim` carries only `statement` + `claim_kind ∈ {descriptive, mechanistic, comparative, modeling, ablation_finding, failure_mode}` — the monotone `polarity`/`novelty`/`epistemic_status` fields were removed, and `causal`/`correlational` dropped. `method_kind ∈ {algorithm, model_architecture, training_strategy, objective_function}` (`protocol`/`software_system` dropped). `Metric` dropped the monotone `value_type`. `Entity.entity_class ∈ {dataset, benchmark, task}` (`model` is a Method now; `hardware` is apparatus, not a node).
 - `Method` has no `components` field; composition is the `part_of` relation in `relations[]` (established by the relation pass over the full node set, so cross-section composition is captured without reconcile crutches).
@@ -72,14 +72,14 @@ Design reference: `docs/section-ir-0.7-redesign.md` (full spec); `docs/section-i
 
 Allowed unit types:
 
-`Document`, `Entity`, `Method`, `Claim`, `Context`, `Condition`, `Metric`
+`Document`, `Entity`, `Method`, `Claim`, `Context`, `Setting`, `Metric`
 
-`Method`, `Entity`, and `Metric` are census nodes (role-tagged in stage A, with `type` derived from `role`); `Context`, `Condition`, and `Claim` are born during content fill.
+`Method`, `Entity`, and `Metric` are census nodes (role-tagged in stage A, with `type` derived from `role`); `Context`, `Setting`, and `Claim` are born during content fill.
 
-## Context vs. Condition
+## Context vs. Setting
 
 - `Context` (argumentative premise): `context_kind ∈ {background, gap, motivation, challenge, assumption}`, fields `{context_kind, description}`.
-- `Condition` (operational constraint): fields `{description}` — a single sentence naming the concrete setup that scopes a metric (dataset split, protocol, population, hyperparameter). The monotone `condition_kind` enum was removed in the AI/ML scoping.
+- `Setting` (operational constraint): fields `{description}` — a single sentence naming the concrete setup that scopes a metric (dataset split, protocol, population, hyperparameter). The monotone `condition_kind` enum was removed in the AI/ML scoping.
 
 Archived legacy types such as `Relation`, `Category`, `SystemModel`, `MethodArtifact`, `Proposition`, and `RoleBinding` are not valid in active section-IR output.
 

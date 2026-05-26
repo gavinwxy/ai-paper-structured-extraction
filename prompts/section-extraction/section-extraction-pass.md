@@ -28,7 +28,7 @@ Output only the current section. Do not output `document`, `sections`, `relation
 
 A content section does two things:
 1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The method section materializes Method nodes; the evidence section materializes Metric and Entity nodes; context and claim sections materialize no census nodes.
-2. **Create** the born units the section is responsible for — units that are not census nodes: Context (context section), Claim (claim and evidence sections), Condition (evidence section).
+2. **Create** the born units the section is responsible for — units that are not census nodes: Context (context section), Claim (claim and evidence sections), Setting (evidence section).
 
 `section_focus` tells you which of these your section does. You may also introduce a node the census missed: give it a fresh, correctly-prefixed id and extract it as a full unit. `anchor_id` must name a unit you define in this section, and it must not be a Document.
 
@@ -46,7 +46,7 @@ A content section does two things:
 | Claim | `clm:` |
 | Method | `mth:` |
 | Entity | `ent:` |
-| Condition | `cnd:` |
+| Setting | `set:` |
 | Metric | `met:` |
 
 - When you materialize a census node, reuse its `node_id` exactly — do not rename it.
@@ -71,10 +71,9 @@ Plus the type-specific fields named in `section_focus`, directly on the unit —
 
 ### provenance
 
-`provenance[]` holds inline markers `{ "source_kind": <kind>, "source": ["§N", ...] }`.
+`provenance[]` is a flat list of top-level `§N` location markers from the paper, such as `["§12", "§14"]`.
 
-- `source_kind` is one of: `sentence`, `table`, `figure`, `appendix`, `caption`, `equation`, `supplementary_material`.
-- `source` is an array of top-level `§N` anchors from the paper, such as `["§12"]`. Use only `§N`; do not invent `§N.M` subsection markers.
+- Use only `§N` markers; do not invent `§N.M` subsection markers, and do not wrap them in objects or attach a kind/label.
 - Every `Claim` and every `Metric` must have non-empty `provenance`. Other units should carry provenance whenever the source can be localized.
 - Do not add `raw_text`, `locator`, or `paper_id`.
 
@@ -106,7 +105,7 @@ Return a single JSON object:
         "id": "<type_prefix:short_name>",
         "type": "<the single KnowledgeUnit type for this array>",
         "<type-specific fields>": "...",
-        "provenance": [{ "source_kind": "<source_kind>", "source": ["<§N>"] }]
+        "provenance": ["<§N>"]
       }
     ],
     "relations": [

@@ -57,7 +57,7 @@ Top-level keys: `document`, `sections`, `relations`, `extraction_notes`.
   ],
   "relations": [
     {"source_id": "met:bleu", "relation": "evaluates",   "target_id": "mth:transformer",
-     "provenance": [{"source_kind": "table", "source": ["§6"]}]},
+     "provenance": ["§6"]},
     {"source_id": "mth:attn", "relation": "part_of",     "target_id": "mth:transformer", "provenance": []},
     {"source_id": "met:bleu", "relation": "measured_on", "target_id": "ent:wmt14",       "provenance": []},
     {"source_id": "clm:abl",  "relation": "about",       "target_id": "mth:attn",        "provenance": []},
@@ -81,8 +81,8 @@ The 0.6 field-encoded edges that dominated the relation count become first-class
 | section-local `compares_to` link | `compares_to` | {Method,Entity,Metric} ↔ {Method,Entity,Metric} |
 | section-local `supports` link | `supports` | {Metric,Claim} → Claim |
 
-Stays a **unit field** (local scoping, not a global argument edge): `Metric.context_ids[]`
-→ the section-local Conditions that scope the metric (evidence section only).
+Stays a **unit field** (local scoping, not a global argument edge): `Metric.setting_ids[]`
+→ the section-local Settings that scope the metric (evidence section only).
 
 Dropped entirely: `Metric.subject_id`, `Metric.evaluated_on`, `Claim.target_ids`,
 `Method.components` (no convenience projections; consumers read `relations[]`).
@@ -133,7 +133,7 @@ One call, full paper. Output (`schemas/node-census-output.schema.json`):
 > in `ROLE_TO_TYPE`), so the model commits to one axis instead of three half-overlapping fields.
 
 - `role` is the one tag the census emits; `type ∈ {Method, Entity, Metric}` is derived from it.
-  Context, Condition, Claim are **not** nodes; they are born in content (stage C).
+  Context, Setting, Claim are **not** nodes; they are born in content (stage C).
 - `node_id` prefix follows from the role's type (`mth:` / `ent:` / `met:`); reused verbatim as
   the final unit id. A **named model is a Method** (role `builds_on`/`compared_against`), and
   **apparatus** (hardware, metric-scoring models) is not a node at all.
@@ -151,7 +151,7 @@ One call, full paper. Output (`schemas/node-census-output.schema.json`):
 - `spine_summary` is carried into content (replaces the 0.6 planner's summary).
 - This is the **"node count"** numerator.
 - **Vocabulary scoping (AI/ML).** Fields that were monotone across the corpus are gone: Metric
-  `value_type`, Claim `novelty`/`epistemic_status`/`polarity`, Condition `condition_kind`.
+  `value_type`, Claim `novelty`/`epistemic_status`/`polarity`, Setting `condition_kind`.
   Enum values that never fired were dropped: `claim_kind` loses `causal`/`correlational`,
   `method_kind` loses `protocol`/`software_system`, `entity_class` loses `model`/`hardware`.
 
@@ -162,7 +162,7 @@ One call. Input: full paper + the flat `nodes[]` (id, type, name, gloss). Output
 
 ```json
 {"relations": [{"source_id": "met:bleu", "relation": "evaluates", "target_id": "mth:transformer",
-                "provenance": [{"source_kind": "table", "source": ["§6"]}]}]}
+                "provenance": ["§6"]}]}
 ```
 
 - Emits only the **entity↔entity** edges: `part_of`, `compares_to`, `evaluates`, `measured_on`.
@@ -185,8 +185,8 @@ authors (`about`, `supports`).
 - **method**: enrich each Method node with `description`, `method_kind`, `formulas`,
   `objective_function`, `inputs`, `outputs`, `implementation_notes`.
 - **evidence** (merged experiment+analysis): enrich each Metric node with `scores`, `unit`,
-  `comparison_direction`, `value_type`; create local `Condition` units and set
-  `Metric.context_ids`; author interpretive `Claim` units (`ablation_finding`, `failure_mode`)
+  `comparison_direction`, `value_type`; create local `Setting` units and set
+  `Metric.setting_ids`; author interpretive `Claim` units (`ablation_finding`, `failure_mode`)
   with `about`/`supports` edges. The deployable-vs-diagnostic call is now made **once, with the
   whole table in view** — encoded as Metric (measurement) vs Claim+supports (interpretation),
   not as a section boundary. Segment `evidence` by experimental purpose (primary / ablation /
@@ -214,11 +214,11 @@ authors (`about`, `supports`).
 
 - Top-level allowed keys: `document, sections, relations, extraction_notes`.
 - `SECTION_TYPES = {context, claim, method, evidence}`;
-  `evidence` allowed unit types = `{Metric, Condition, Claim, Entity}`.
+  `evidence` allowed unit types = `{Metric, Setting, Claim, Entity}`.
 - Validate `relations[]` globally: relation in matrix, endpoints resolve to a defined unit
   (any section), type pairing legal. Drop the section-local hard-fail.
-- Metric: require `name`, `unit`, non-empty `scores`; `context_ids` (if present) must be
-  section-local Conditions. No `subject_id`/`evaluated_on` fields. Soft check
+- Metric: require `name`, `unit`, non-empty `scores`; `setting_ids` (if present) must be
+  section-local Settings. No `subject_id`/`evaluated_on` fields. Soft check
   (`uncertain_assignments`, not fail): a result Metric with no `evaluates` edge.
 - Claim: a Claim outside `{claim, evidence}` needs an incoming `supports` (the `established_fact`
   exemption is gone with `epistemic_status`).

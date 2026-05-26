@@ -2,26 +2,26 @@ SECTION FOCUS: evidence
 
 This section captures the paper's evaluation layer in one pass: both **what was measured** (how the method performs on benchmarks and transfer tests) and **what those measurements mean** (what ablations reveal, what limits the result). The old experiment/analysis split is gone — measurement and interpretation are decided together here, with the whole results table in view, which is exactly the editorial call that the split forced two blind parallel passes to make separately.
 
-This section **materializes** the Metric and Entity census nodes (enriching them with the rich fields below) and **creates** the born Condition and Claim units. The `evaluates` (Metric → Method) and `measured_on` (Metric → dataset Entity) edges are already in the global `relations` from the relation pass — do not restate them. You author only the claim-centric edges (`about`, `supports`).
+This section **materializes** the Metric and Entity census nodes (enriching them with the rich fields below) and **creates** the born Setting and Claim units. The `evaluates` (Metric → Method) and `measured_on` (Metric → dataset Entity) edges are already in the global `relations` from the relation pass — do not restate them. You author only the claim-centric edges (`about`, `supports`).
 
 ## Units you may define
 
 - `Metric` (array `metrics`): headline target-method results and diagnostic ablation/sensitivity values. Materialize each Metric census node; you may add one the census missed.
-- `Condition` (array `conditions`): evaluation protocol, dataset split, benchmark setup, population, or hyperparameter that scopes a metric. **Born here.**
+- `Setting` (array `settings`): evaluation protocol, dataset split, benchmark setup, population, or hyperparameter that scopes a metric. **Born here.**
 - `Claim` (array `claims`): interpretive findings — ablation conclusions, sensitivity conclusions, limitations, failure modes. **Born here.**
 - `Entity` (array `entities`): the datasets, benchmarks, and tasks the method is evaluated on (`dataset | benchmark | task`). Materialize **every** Entity census node in `node_registry`, including `task` nodes — not only the ones a metric was measured on.
 
 ### Metric
-Fields: `name`, `unit`, `context_ids`, optional `comparison_direction`, and `scores`.
+Fields: `name`, `unit`, `setting_ids`, optional `comparison_direction`, and `scores`.
 - `unit`: non-empty measurement unit such as `BLEU`, `%`, `ms`, `F1`, `perplexity`, or `unitless`. Never blank.
 - `comparison_direction` (optional): `higher_is_better | lower_is_better | target | unspecified`.
-- `context_ids`: IDs of **local** Condition units that scope this metric, defined in this same response. A deployable benchmark metric is normally scoped by at least one Condition; a diagnostic ablation metric may carry none (`[]`). There is no `subject_id` or `evaluated_on` field — the method a metric evaluates and the dataset it ran on are global edges (`evaluates`, `measured_on`), already established.
+- `setting_ids`: IDs of **local** Setting units that scope this metric, defined in this same response. A deployable benchmark metric is normally scoped by at least one Setting; a diagnostic ablation metric may carry none (`[]`). There is no `subject_id` or `evaluated_on` field — the method a metric evaluates and the dataset it ran on are global edges (`evaluates`, `measured_on`), already established.
 - `scores`: a flat array of `{variant, value, variance}` — one entry per **system reported under this metric**, covering both the method family's own variants **and every baseline / prior-SOTA system the paper compares against**. `variant` names the system as the paper labels it (`"Transformer (big)"`, `"GNMT"`, `"ConvS2S"`). `value` is always a string ("28.4", "28.4-29.1", or a short categorical string); `variance` is "" when no uncertainty is reported. One entry per system — do not pack multiple scores into one entry. Capturing the baseline rows here is how the quantitative comparison is preserved; the matching baseline systems are `compared_against` Method units and carry `compares_to` edges from the relation pass.
 
-### Condition — operational constraint
+### Setting — operational constraint
 Fields: `description`.
-- `description`: a single sentence that **names the concrete setup** that scopes a metric — the actual dataset/split, population size, OOD source-vs-target pair, protocol, or hyperparameter, carrying the paper's real names and numbers rather than a paraphrase. Never replace a specific setup with a vague generic restatement (e.g. "evaluated to assess whether the model is more confident") — that loses the recall the Condition exists to carry.
-- **Enumerate each distinct evaluation setup as its own Condition.** A separate dataset, a cross-dataset generalization or transfer protocol, a robustness / distribution-shift setup, a user study, and a timing protocol each get their **own** Condition — even when no separate Metric attaches to it. Do not collapse several named setups into one.
+- `description`: a single sentence that **names the concrete setup** that scopes a metric — the actual dataset/split, population size, OOD source-vs-target pair, protocol, or hyperparameter, carrying the paper's real names and numbers rather than a paraphrase. Never replace a specific setup with a vague generic restatement (e.g. "evaluated to assess whether the model is more confident") — that loses the recall the Setting exists to carry.
+- **Enumerate each distinct evaluation setup as its own Setting.** A separate dataset, a cross-dataset generalization or transfer protocol, a robustness / distribution-shift setup, a user study, and a timing protocol each get their **own** Setting — even when no separate Metric attaches to it. Do not collapse several named setups into one.
 
 ### Claim — interpretive finding
 Fields: `statement`, `claim_kind`.
@@ -87,7 +87,7 @@ This section authors the claim-centric edges in `relations[]`:
 
 ## Anti-patterns
 
-- Do not create a `subject_id` or `evaluated_on` field on a Metric — they no longer exist; use the global `evaluates`/`measured_on` edges (already present) and local `context_ids`.
+- Do not create a `subject_id` or `evaluated_on` field on a Metric — they no longer exist; use the global `evaluates`/`measured_on` edges (already present) and local `setting_ids`.
 - Do not create Method units here; reference method nodes by id in `about` edges.
 - Do not duplicate a deployable row as both a `scores` entry and an ablation Claim.
 
@@ -103,7 +103,7 @@ This section authors the claim-centric edges in `relations[]`:
         "type": "Metric",
         "name": "BLEU (EN-DE)",
         "unit": "BLEU",
-        "context_ids": ["cnd:wmt_newstest2014"],
+        "setting_ids": ["set:wmt_newstest2014"],
         "comparison_direction": "higher_is_better",
         "scores": [
           {"variant": "GNMT", "value": "24.6", "variance": ""},
@@ -111,28 +111,28 @@ This section authors the claim-centric edges in `relations[]`:
           {"variant": "Transformer Base", "value": "27.3", "variance": ""},
           {"variant": "Transformer Big", "value": "28.4", "variance": ""}
         ],
-        "provenance": [{"source_kind": "table", "source": ["§6"]}]
+        "provenance": ["§6"]
       },
       {
         "id": "met:pos_enc_ablation",
         "type": "Metric",
         "name": "BLEU under positional-encoding ablation",
         "unit": "BLEU",
-        "context_ids": [],
+        "setting_ids": [],
         "comparison_direction": "higher_is_better",
         "scores": [
           {"variant": "full", "value": "27.3", "variance": ""},
           {"variant": "no pos. enc.", "value": "25.1", "variance": ""}
         ],
-        "provenance": [{"source_kind": "table", "source": ["§6"]}]
+        "provenance": ["§6"]
       }
     ],
-    "conditions": [
+    "settings": [
       {
-        "id": "cnd:wmt_newstest2014",
-        "type": "Condition",
+        "id": "set:wmt_newstest2014",
+        "type": "Setting",
         "description": "Evaluated on the WMT 2014 English-German newstest2014 test set with beam search.",
-        "provenance": [{"source_kind": "sentence", "source": ["§6"]}]
+        "provenance": ["§6"]
       }
     ],
     "claims": [
@@ -141,7 +141,7 @@ This section authors the claim-centric edges in `relations[]`:
         "type": "Claim",
         "statement": "Removing positional encodings lowers BLEU by 2.2, showing they are necessary for the attention-only model.",
         "claim_kind": "ablation_finding",
-        "provenance": [{"source_kind": "table", "source": ["§6"]}]
+        "provenance": ["§6"]
       }
     ],
     "entities": [
@@ -150,12 +150,12 @@ This section authors the claim-centric edges in `relations[]`:
         "type": "Entity",
         "name": "WMT 2014 English-German",
         "entity_class": "benchmark",
-        "provenance": [{"source_kind": "sentence", "source": ["§6"]}]
+        "provenance": ["§6"]
       }
     ],
     "relations": [
-      {"source_id": "met:pos_enc_ablation", "relation": "supports", "target_id": "clm:pos_enc_matters", "provenance": [{"source_kind": "table", "source": ["§6"]}]},
-      {"source_id": "clm:pos_enc_matters", "relation": "about", "target_id": "mth:positional_encoding", "provenance": [{"source_kind": "sentence", "source": ["§6"]}]}
+      {"source_id": "met:pos_enc_ablation", "relation": "supports", "target_id": "clm:pos_enc_matters", "provenance": ["§6"]},
+      {"source_id": "clm:pos_enc_matters", "relation": "about", "target_id": "mth:positional_encoding", "provenance": ["§6"]}
     ]
   }
 }
@@ -164,4 +164,4 @@ Here `met:bleu_en_de --evaluates--> mth:transformer` and `met:bleu_en_de --measu
 
 ## Anchor
 
-`anchor_id` should be the primary headline Metric (`met:`) — the result that most directly validates the main claim. Do not anchor on a Condition, Entity, or Claim.
+`anchor_id` should be the primary headline Metric (`met:`) — the result that most directly validates the main claim. Do not anchor on a Setting, Entity, or Claim.

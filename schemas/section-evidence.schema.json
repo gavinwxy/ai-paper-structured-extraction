@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Evidence Section Output",
-  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: metrics, conditions, claims, entities. Valid unit types: Metric, Condition, Claim, Entity. Authors claim-centric relations.",
+  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: metrics, settings, claims, entities. Valid unit types: Metric, Setting, Claim, Entity. Authors claim-centric relations.",
   "required": [
     "section"
   ],
@@ -13,7 +13,7 @@
         "section_type",
         "anchor_id",
         "metrics",
-        "conditions",
+        "settings",
         "claims",
         "entities",
         "relations"
@@ -42,7 +42,7 @@
               "provenance",
               "name",
               "unit",
-              "context_ids",
+              "setting_ids",
               "scores"
             ],
             "additionalProperties": false,
@@ -61,36 +61,9 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Source references for this unit",
+                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "source_kind",
-                    "source"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "source_kind": {
-                      "type": "string",
-                      "enum": [
-                        "sentence",
-                        "table",
-                        "figure",
-                        "appendix",
-                        "caption",
-                        "equation",
-                        "supplementary_material"
-                      ],
-                      "description": "Source marker kind"
-                    },
-                    "source": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      },
-                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
-                    }
-                  }
+                  "type": "string"
                 }
               },
               "name": {
@@ -101,12 +74,12 @@
                 "type": "string",
                 "description": "Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"
               },
-              "context_ids": {
+              "setting_ids": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "IDs of local Condition units scoping this metric; empty when none apply"
+                "description": "IDs of local Setting units scoping this metric; empty when none apply"
               },
               "comparison_direction": {
                 "type": "string",
@@ -148,9 +121,9 @@
             }
           }
         },
-        "conditions": {
+        "settings": {
           "type": "array",
-          "description": "Condition units extracted for this section",
+          "description": "Setting units extracted for this section",
           "items": {
             "type": "object",
             "required": [
@@ -169,42 +142,15 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Condition"
+                  "Setting"
                 ],
                 "description": "Unit type discriminator"
               },
               "provenance": {
                 "type": "array",
-                "description": "Source references for this unit",
+                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "source_kind",
-                    "source"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "source_kind": {
-                      "type": "string",
-                      "enum": [
-                        "sentence",
-                        "table",
-                        "figure",
-                        "appendix",
-                        "caption",
-                        "equation",
-                        "supplementary_material"
-                      ],
-                      "description": "Source marker kind"
-                    },
-                    "source": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      },
-                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
-                    }
-                  }
+                  "type": "string"
                 }
               },
               "description": {
@@ -242,36 +188,9 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Source references for this unit",
+                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "source_kind",
-                    "source"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "source_kind": {
-                      "type": "string",
-                      "enum": [
-                        "sentence",
-                        "table",
-                        "figure",
-                        "appendix",
-                        "caption",
-                        "equation",
-                        "supplementary_material"
-                      ],
-                      "description": "Source marker kind"
-                    },
-                    "source": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      },
-                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
-                    }
-                  }
+                  "type": "string"
                 }
               },
               "statement": {
@@ -321,36 +240,9 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Source references for this unit",
+                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "source_kind",
-                    "source"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "source_kind": {
-                      "type": "string",
-                      "enum": [
-                        "sentence",
-                        "table",
-                        "figure",
-                        "appendix",
-                        "caption",
-                        "equation",
-                        "supplementary_material"
-                      ],
-                      "description": "Source marker kind"
-                    },
-                    "source": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      },
-                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
-                    }
-                  }
+                  "type": "string"
                 }
               },
               "name": {
@@ -402,36 +294,9 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Source references for this unit",
+                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "source_kind",
-                    "source"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "source_kind": {
-                      "type": "string",
-                      "enum": [
-                        "sentence",
-                        "table",
-                        "figure",
-                        "appendix",
-                        "caption",
-                        "equation",
-                        "supplementary_material"
-                      ],
-                      "description": "Source marker kind"
-                    },
-                    "source": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      },
-                      "description": "Section markers such as ['\\u00a71', '\\u00a72']"
-                    }
-                  }
+                  "type": "string"
                 }
               }
             }

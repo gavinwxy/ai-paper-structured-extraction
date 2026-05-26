@@ -44,14 +44,14 @@ This section authors no relations and its schema has no `relations` field — ea
         "type": "Context",
         "context_kind": "background",
         "description": "Dominant sequence transduction models couple computation to input position through recurrence, processing tokens strictly in order.",
-        "provenance": [{"source_kind": "sentence", "source": ["§1"]}]
+        "provenance": ["§1"]
       },
       {
         "id": "ctx:seq_dependency_gap",
         "type": "Context",
         "context_kind": "gap",
         "description": "Sequential recurrence precludes parallelization within a training example and weakens learning of dependencies between distant positions.",
-        "provenance": [{"source_kind": "sentence", "source": ["§1", "§2"]}]
+        "provenance": ["§1", "§2"]
       }
     ]
   }

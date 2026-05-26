@@ -42,36 +42,9 @@
           },
           "provenance": {
             "type": "array",
-            "description": "Source references for this unit",
+            "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
             "items": {
-              "type": "object",
-              "required": [
-                "source_kind",
-                "source"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "source_kind": {
-                  "type": "string",
-                  "enum": [
-                    "sentence",
-                    "table",
-                    "figure",
-                    "appendix",
-                    "caption",
-                    "equation",
-                    "supplementary_material"
-                  ],
-                  "description": "Source marker kind"
-                },
-                "source": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Section markers such as ['\\u00a71', '\\u00a72']"
-                }
-              }
+              "type": "string"
             }
           }
         }

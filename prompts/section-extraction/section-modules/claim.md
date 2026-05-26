@@ -50,11 +50,11 @@ This section authors claim-centric edges in `relations[]`:
         "type": "Claim",
         "statement": "A sequence transduction architecture based solely on attention, dispensing with recurrence and convolutions, reaches state-of-the-art translation quality while training markedly faster.",
         "claim_kind": "comparative",
-        "provenance": [{"source_kind": "sentence", "source": ["§1"]}]
+        "provenance": ["§1"]
       }
     ],
     "relations": [
-      {"source_id": "clm:attention_only", "relation": "about", "target_id": "mth:transformer", "provenance": [{"source_kind": "sentence", "source": ["§1"]}]}
+      {"source_id": "clm:attention_only", "relation": "about", "target_id": "mth:transformer", "provenance": ["§1"]}
     ]
   }
 }
