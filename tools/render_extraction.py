@@ -147,15 +147,76 @@ def collect_all_links(data: dict) -> list[dict]:
     return [lk for lk in relations if isinstance(lk, dict)]
 
 
-def build_metric_subjects(data: dict) -> dict[str, str]:
-    """Map each Metric id to the Method it evaluates, from the global `evaluates` relations."""
-    subjects: dict[str, str] = {}
+def build_metric_subjects(data: dict) -> dict[str, list[str]]:
+    """Map each Metric id to every Method it evaluates (global `evaluates` relations)."""
+    subjects: dict[str, list[str]] = {}
     for lk in data.get("relations", []):
         if isinstance(lk, dict) and lk.get("relation") == "evaluates":
             src, tgt = lk.get("source_id"), lk.get("target_id")
-            if isinstance(src, str) and isinstance(tgt, str):
-                subjects.setdefault(src, tgt)
+            if isinstance(src, str) and isinstance(tgt, str) and tgt not in subjects.get(src, []):
+                subjects.setdefault(src, []).append(tgt)
     return subjects
+
+
+def build_metric_datasets(data: dict) -> dict[str, list[str]]:
+    """Map each Metric id to the dataset/benchmark Entities it was measured on (`measured_on`)."""
+    out: dict[str, list[str]] = {}
+    for lk in data.get("relations", []):
+        if isinstance(lk, dict) and lk.get("relation") == "measured_on":
+            src, tgt = lk.get("source_id"), lk.get("target_id")
+            if isinstance(src, str) and isinstance(tgt, str) and tgt not in out.get(src, []):
+                out.setdefault(src, []).append(tgt)
+    return out
+
+
+# Method-role rank → render order (contribution first, baselines last)
+METHOD_ROLE_RANK = {"contribution": 0, "component": 1, "other": 2, "baseline": 3}
+METHOD_ROLE_LABELS = {"contribution": "CONTRIBUTION", "component": "COMPONENT", "baseline": "BASELINE"}
+
+
+def classify_methods(data: dict, unit_index: dict[str, dict]) -> dict[str, str]:
+    """Derive each Method's role from the global edges (units no longer carry `role`):
+      - contribution: the `part_of` root (a target that is never a source); else the method anchor.
+      - component:    a `part_of` source.
+      - baseline:     an endpoint of a `compares_to` edge that is not the contribution.
+      - other:        a Method with no structural edge (e.g. a standalone optimizer).
+    """
+    methods = {uid for uid, u in unit_index.items() if u.get("type") == "Method"}
+    part_src: set[str] = set()
+    part_tgt: set[str] = set()
+    compares: set[str] = set()
+    for lk in data.get("relations", []):
+        rel, s, t = lk.get("relation"), lk.get("source_id"), lk.get("target_id")
+        if rel == "part_of":
+            part_src.add(s)
+            part_tgt.add(t)
+        elif rel == "compares_to":
+            compares.update((s, t))
+
+    roots = [m for m in methods if m in part_tgt and m not in part_src]
+    contribution = roots[0] if roots else None
+    if contribution is None:
+        for s in data.get("sections", []):
+            if s.get("section_type") == "method" and s.get("anchor_id") in methods:
+                contribution = s.get("anchor_id")
+                break
+
+    roles: dict[str, str] = {}
+    for m in methods:
+        if m == contribution:
+            roles[m] = "contribution"
+        elif m in part_src:
+            roles[m] = "component"
+        elif m in compares:
+            roles[m] = "baseline"
+        else:
+            roles[m] = "other"
+    return roles
+
+
+def _norm(s: str) -> str:
+    """Lowercase alphanumeric-only key for fuzzy name matching."""
+    return "".join(ch for ch in str(s).lower() if ch.isalnum())
 
 
 def group_sections_by_type(data: dict) -> dict[str, list[dict]]:
@@ -343,100 +404,233 @@ def render_provenance(prov_list: list) -> str:
 
 
 def render_payload_table(payload: dict) -> str:
+    """Fallback for unrecognized leftover fields (keeps the renderer forward-compatible)."""
     rows = ""
     for k, v in payload.items():
         if isinstance(v, (dict, list)):
-            v_str = escape(json.dumps(v, ensure_ascii=False, indent=1))
-            val_html = f"<pre>{v_str}</pre>"
+            val_html = f"<pre>{escape(json.dumps(v, ensure_ascii=False, indent=1))}</pre>"
         else:
             val_html = escape(str(v))
         rows += f"<tr><td class='payload-key'>{escape(k)}</td><td>{val_html}</td></tr>"
     return f"<table class='payload-table'>{rows}</table>" if rows else ""
 
 
-UNIT_META_FIELDS = {"id", "type", "provenance"}
+def render_symbols(symbols: list | None) -> str:
+    rows = "".join(
+        f"<tr><td class='sym'>{escape(str(s.get('symbol', '')))}</td>"
+        f"<td>{escape(str(s.get('description', '')))}</td></tr>"
+        for s in (symbols or [])
+        if isinstance(s, dict) and s.get("symbol")
+    )
+    return f"<table class='symbol-table'>{rows}</table>" if rows else ""
 
 
-def render_unit_card(unit: dict, unit_index: dict, is_anchor: bool = False, section_type: str = "context") -> str:
+def render_formula_block(name: str, expr: str, desc: str, symbols: list | None) -> str:
+    name_html = f"<div class='formula-name'>{escape(name)}</div>" if name else ""
+    desc_html = f"<div class='formula-desc'>{escape(desc)}</div>" if desc else ""
+    return (
+        f"<div class='formula-block'>{name_html}"
+        f"<div class='formula-expr'>{escape(expr)}</div>{desc_html}"
+        f"{render_symbols(symbols)}</div>"
+    )
+
+
+def render_formulas(formulas: list | None) -> str:
+    blocks = "".join(
+        render_formula_block(f.get("name", ""), f.get("expression", ""), "", f.get("symbols", []))
+        for f in (formulas or [])
+        if isinstance(f, dict) and f.get("expression")
+    )
+    return f"<div class='field-group'><div class='field-label'>Formulas</div>{blocks}</div>" if blocks else ""
+
+
+def render_objective(obj: dict | None) -> str:
+    if not isinstance(obj, dict) or not obj.get("expression"):
+        return ""
+    block = render_formula_block("", obj["expression"], obj.get("description", ""), obj.get("symbols", []))
+    return f"<div class='field-group'><div class='field-label'>Objective</div>{block}</div>"
+
+
+def render_chips(label: str, items: list | None) -> str:
+    chips = "".join(f"<span class='chip'>{escape(str(i))}</span>" for i in (items or []))
+    return (
+        f"<div class='field-group'><div class='field-label'>{escape(label)}</div>"
+        f"<div class='chips'>{chips}</div></div>"
+        if chips else ""
+    )
+
+
+def render_scores(scores: list | None, baseline_keys: set[str]) -> str:
+    """Render a Metric's scores[] as a comparison table, tagging baseline rows."""
+    rows = ""
+    for s in (scores or []):
+        if not isinstance(s, dict):
+            continue
+        variant = str(s.get("variant", ""))
+        nv = _norm(variant)
+        is_base = bool(nv) and any(nv in b or b in nv for b in baseline_keys)
+        tag = " <span class='base-tag'>baseline</span>" if is_base else ""
+        var = str(s.get("variance", "") or "")
+        rows += (
+            f"<tr class='score-row{' baseline-row' if is_base else ''}'>"
+            f"<td>{escape(variant)}{tag}</td>"
+            f"<td class='score-val'>{escape(str(s.get('value', '')))}</td>"
+            f"<td class='score-var'>{escape(var) if var else '&mdash;'}</td></tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<table class='score-table'><thead><tr><th>System</th><th>Value</th><th>&plusmn;</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+META_FIELDS = {"id", "type", "provenance"}
+TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "context_kind", "comparison_direction", "unit")
+PROSE_FIELDS = ("description", "implementation_notes")
+# Fields rendered by dedicated logic (or consumed as the card label); never echoed as leftover.
+RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "context_ids", "statement", "name"}
+
+
+def render_unit_card(
+    unit: dict,
+    unit_index: dict,
+    *,
+    is_anchor: bool = False,
+    section_type: str = "context",
+    method_roles: dict[str, str] | None = None,
+    baseline_keys: set[str] | None = None,
+) -> str:
+    method_roles = method_roles or {}
+    baseline_keys = baseline_keys or set()
     uid = unit.get("id", "?")
     utype = unit.get("type", "?")
     color = SECTION_COLORS.get(section_type, "#999")
     prov_html = render_provenance(unit.get("provenance", []))
     anchor_cls = " anchor-unit" if is_anchor else ""
 
-    label = unit.get("statement") or unit.get("name") or unit.get("description") or unit.get("summary") or ""
-    if isinstance(label, str) and len(label) > 140:
-        label = label[:137] + "..."
+    # Label: prefer statement, then name; description is the label only when neither exists.
+    label, label_field = "", ""
+    for cand in ("statement", "name", "description"):
+        if unit.get(cand):
+            label, label_field = unit[cand], cand
+            break
+    if not label:
+        label = unit.get("summary") or ""
+    used_label_fields = {label_field} if label_field else set()
+    disp_label = label[:160] + "..." if isinstance(label, str) and len(label) > 160 else label
 
-    fields = {k: v for k, v in unit.items() if k not in UNIT_META_FIELDS and v is not None}
-    detail_html = render_payload_table(fields)
+    role = method_roles.get(uid) if utype == "Method" else None
+    role_badge = (
+        f"<span class='role-badge role-{role}'>{METHOD_ROLE_LABELS[role]}</span>"
+        if role in METHOD_ROLE_LABELS else ""
+    )
+
+    tag_html = "".join(f"<span class='tag'>{escape(str(unit[f]))}</span>" for f in TAG_FIELDS if unit.get(f))
+    tags_html = f"<div class='tags'>{tag_html}</div>" if tag_html else ""
+
+    # Expandable detail: prose, then type-specific rich blocks, then any leftover fields.
+    prose = ""
+    for f in PROSE_FIELDS:
+        if unit.get(f) and f not in used_label_fields:
+            prose += (
+                f"<div class='field-group'><div class='field-label'>{escape(f.replace('_', ' '))}</div>"
+                f"<div class='field-prose'>{escape(str(unit[f]))}</div></div>"
+            )
+
+    rich = ""
+    if utype == "Method":
+        rich += render_chips("Inputs", unit.get("inputs"))
+        rich += render_chips("Outputs", unit.get("outputs"))
+        rich += render_formulas(unit.get("formulas"))
+        rich += render_objective(unit.get("objective_function"))
+    elif utype == "Metric":
+        scores_html = render_scores(unit.get("scores"), baseline_keys)
+        if scores_html:
+            rich += f"<div class='field-group'><div class='field-label'>Scores</div>{scores_html}</div>"
+        if unit.get("context_ids"):
+            cond_names = [
+                (unit_index.get(c, {}).get("description") or unit_index.get(c, {}).get("name") or c)
+                for c in unit["context_ids"]
+            ]
+            rich += render_chips("Conditions", cond_names)
+
+    handled = META_FIELDS | RICH_FIELDS | set(TAG_FIELDS) | set(PROSE_FIELDS) | used_label_fields
+    leftover = {k: v for k, v in unit.items() if k not in handled and v not in (None, "", [], {})}
+    leftover_html = render_payload_table(leftover)
+
+    detail_html = prose + rich + leftover_html
 
     return f"""
     <div class="unit-card{anchor_cls}" data-unit-id="{escape(uid)}">
       <div class="unit-header" onclick="this.parentElement.classList.toggle('expanded')">
         <span class="unit-type-badge" style="background:{color}">{escape(utype)}</span>
+        {role_badge}
         <span class="unit-id">{escape(uid)}</span>
-        {f'<span class="anchor-badge">ANCHOR</span>' if is_anchor else ''}
+        {'<span class="anchor-badge">ANCHOR</span>' if is_anchor else ''}
         <span class="unit-chevron">&#9654;</span>
       </div>
-      <div class="unit-label">{escape(label)}</div>
+      <div class="unit-label">{escape(disp_label)}</div>
+      {tags_html}
       <div class="unit-prov">{prov_html}</div>
       <div class="unit-detail">{detail_html}</div>
     </div>"""
 
 
-def render_metric_table(sections: list[dict], unit_index: dict, subject_by_metric: dict[str, str]) -> str:
-    metrics = []
+def render_metric_table(
+    sections: list[dict],
+    unit_index: dict,
+    subject_by_metric: dict[str, list[str]],
+    dataset_by_metric: dict[str, list[str]],
+    method_roles: dict[str, str],
+    baseline_keys: set[str],
+) -> str:
+    """Render each Metric as a block: name + unit/direction + evaluated method + dataset, then a
+    full scores comparison table (baseline rows tagged)."""
+    metrics: list[dict] = []
+    seen: set[str] = set()
     for section in sections:
-        seen = set()
         for u in section.get("units", []):
-            if u.get("id") in seen:
-                continue
-            seen.add(u.get("id"))
-            if u.get("type") == "Metric":
+            if u.get("type") == "Metric" and u.get("id") not in seen:
+                seen.add(u.get("id"))
                 metrics.append(u)
     if not metrics:
         return ""
 
-    rows = ""
+    def name_of(uid: str) -> str:
+        u = unit_index.get(uid, {})
+        return u.get("name") or u.get("statement") or uid
+
+    blocks = ""
     for m in metrics:
-        subj = subject_by_metric.get(m.get("id", ""), "")
-        subj_unit = unit_index.get(subj, {})
-        subj_name = subj_unit.get("name") or subj_unit.get("statement") or subj
-        if isinstance(subj_name, str) and len(subj_name) > 50:
-            subj_name = subj_name[:47] + "..."
-        ctx_ids = m.get("context_ids", [])
-        ctx_names = []
-        for cid in ctx_ids:
-            cu = unit_index.get(cid, {})
-            label = cu.get("name") or cu.get("description") or cid
-            if isinstance(label, str) and len(label) > 50:
-                label = label[:47] + "..."
-            ctx_names.append(label)
-        ctx_str = ", ".join(ctx_names) or "-"
+        mid = m.get("id", "")
+        subj_ids = subject_by_metric.get(mid, [])
+        head = next(
+            (s for s in subj_ids if method_roles.get(s) == "contribution"),
+            subj_ids[0] if subj_ids else "",
+        )
+        ds_names = [name_of(d) for d in dataset_by_metric.get(mid, [])]
         direction = m.get("comparison_direction", "")
         dir_icon = {"higher_is_better": "&#9650;", "lower_is_better": "&#9660;"}.get(direction, "")
-        scores = m.get("scores", [])
-        if scores:
-            scores_parts = [f"{s.get('variant', '?')}: {s.get('value', '')}" for s in scores[:5]]
-            val_str = "; ".join(scores_parts)
-        else:
-            val_str = str(m.get("value", ""))
+        scores_html = render_scores(m.get("scores"), baseline_keys)
 
-        rows += f"""<tr>
-          <td>{escape(m.get('name', ''))}</td>
-          <td class='metric-value'>{escape(val_str)} {dir_icon}</td>
-          <td>{escape(str(subj_name))}</td>
-          <td>{escape(ctx_str)}</td>
-        </tr>"""
+        meta_bits = ""
+        if head:
+            meta_bits += f"<span class='metric-meta'>evaluates <b>{escape(str(name_of(head)))}</b></span>"
+        if ds_names:
+            meta_bits += f"<span class='metric-meta'>on {escape(', '.join(str(d) for d in ds_names))}</span>"
 
-    return f"""
-    <div class="metric-table-wrapper">
-      <table class="metric-table">
-        <thead><tr><th>Metric</th><th>Value</th><th>Subject</th><th>Context</th></tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div>"""
+        blocks += f"""
+        <div class="metric-block">
+          <div class="metric-block-head">
+            <span class="metric-name">{escape(m.get('name', ''))}</span>
+            <span class="metric-unit">{escape(str(m.get('unit', '')))} {dir_icon}</span>
+            {meta_bits}
+          </div>
+          {scores_html}
+        </div>"""
+
+    return f'<div class="metrics-wrap">{blocks}</div>'
 
 
 def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
@@ -524,26 +718,50 @@ def render_section_card(
     unit_section: dict[str, str],
     graph_id: str,
     all_links: list[dict],
-    subject_by_metric: dict[str, str],
+    subject_by_metric: dict[str, list[str]],
+    dataset_by_metric: dict[str, list[str]],
+    method_roles: dict[str, str],
+    baseline_keys: set[str],
 ) -> str:
     color = SECTION_COLORS[section_type]
     label = SECTION_LABELS[section_type]
-    count = 0
 
-    units_html = ""
+    # Gather units once, de-duplicated, tracking which are section anchors.
+    seen_ids: set[str] = set()
+    items: list[tuple[dict, bool]] = []
     for section in sections:
         anchor_id = section.get("anchor_id")
         anchor = unit_index.get(anchor_id) if anchor_id else section.get("anchor")
-        if anchor:
-            count += 1
-            units_html += render_unit_card(anchor, unit_index, is_anchor=True, section_type=section_type)
+        if anchor and anchor.get("id") not in seen_ids:
+            seen_ids.add(anchor.get("id"))
+            items.append((anchor, True))
         for u in section.get("units", []):
-            if anchor and u.get("id") == anchor.get("id"):
+            if u.get("id") in seen_ids:
                 continue
-            count += 1
-            units_html += render_unit_card(u, unit_index, section_type=section_type)
+            seen_ids.add(u.get("id"))
+            items.append((u, False))
 
-    metric_html = render_metric_table(sections, unit_index, subject_by_metric) if section_type == "evidence" else ""
+    count = len(items)
+
+    # In evidence, Metrics are shown as comparison blocks rather than cards.
+    card_items = [(u, a) for (u, a) in items if not (section_type == "evidence" and u.get("type") == "Metric")]
+
+    # In method, order contribution -> components -> other -> baselines.
+    if section_type == "method":
+        card_items.sort(key=lambda ia: METHOD_ROLE_RANK.get(method_roles.get(ia[0].get("id"), "other"), 2))
+
+    units_html = "".join(
+        render_unit_card(
+            u, unit_index, is_anchor=a, section_type=section_type,
+            method_roles=method_roles, baseline_keys=baseline_keys,
+        )
+        for (u, a) in card_items
+    )
+
+    metric_html = (
+        render_metric_table(sections, unit_index, subject_by_metric, dataset_by_metric, method_roles, baseline_keys)
+        if section_type == "evidence" else ""
+    )
 
     graph_data = build_section_graph(section_type, sections, unit_index, all_links)
     has_graph = graph_data is not None
@@ -591,6 +809,13 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     unit_section = build_unit_section_map(data)
     all_links = collect_all_links(data)
     subject_by_metric = build_metric_subjects(data)
+    dataset_by_metric = build_metric_datasets(data)
+    method_roles = classify_methods(data, unit_index)
+    baseline_keys = {
+        _norm(unit_index.get(uid, {}).get("name", ""))
+        for uid, role in method_roles.items() if role == "baseline"
+    }
+    baseline_keys.discard("")
     grouped = group_sections_by_type(data)
 
     doc = data.get("document", {})
@@ -625,7 +850,10 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
         sections_for_type = grouped.get(st, [])
         graph_id = f"graph-{st}"
         if sections_for_type:
-            section_cards += render_section_card(st, sections_for_type, unit_index, unit_section, graph_id, all_links, subject_by_metric)
+            section_cards += render_section_card(
+                st, sections_for_type, unit_index, unit_section, graph_id, all_links,
+                subject_by_metric, dataset_by_metric, method_roles, baseline_keys,
+            )
             graph_data = build_section_graph(st, sections_for_type, unit_index, all_links)
             if graph_data:
                 sg_nodes, sg_edges = graph_data
@@ -730,12 +958,48 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .payload-key {{ color: #94a3b8; white-space: nowrap; font-family: monospace; width: 110px; }}
 .payload-table pre {{ margin: 0; font-size: 0.72rem; white-space: pre-wrap; color: #cbd5e1; }}
 
-/* Metric table */
-.metric-table-wrapper {{ overflow-x: auto; margin-top: 8px; margin-bottom: 8px; }}
-.metric-table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
-.metric-table th {{ text-align: left; padding: 7px 9px; border-bottom: 2px solid #334155; color: #94a3b8; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }}
-.metric-table td {{ padding: 7px 9px; border-bottom: 1px solid #1e293b; }}
-.metric-value {{ font-weight: 700; color: #22c55e; font-variant-numeric: tabular-nums; }}
+/* Metric blocks */
+.metrics-wrap {{ margin: 8px 0 4px; display: flex; flex-direction: column; gap: 10px; }}
+.metric-block {{ background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; }}
+.metric-block-head {{ display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }}
+.metric-name {{ font-weight: 600; font-size: 0.9rem; color: #f1f5f9; }}
+.metric-unit {{ font-size: 0.72rem; color: #22c55e; font-weight: 700; font-variant-numeric: tabular-nums; }}
+.metric-meta {{ font-size: 0.72rem; color: #94a3b8; }}
+.metric-meta b {{ color: #cbd5e1; font-weight: 600; }}
+
+/* Score / comparison tables */
+.score-table {{ width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }}
+.score-table th {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid #334155; color: #64748b; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.04em; }}
+.score-table td {{ padding: 4px 8px; border-bottom: 1px solid #1e293b; }}
+.score-val {{ font-weight: 700; color: #22c55e; font-variant-numeric: tabular-nums; }}
+.score-var {{ color: #64748b; font-variant-numeric: tabular-nums; }}
+.score-row.baseline-row td {{ color: #94a3b8; }}
+.score-row.baseline-row .score-val {{ color: #64748b; font-weight: 600; }}
+.base-tag {{ font-size: 0.56rem; background: #334155; color: #94a3b8; padding: 1px 5px; border-radius: 3px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.04em; }}
+
+/* Field groups (formulas, chips, prose) */
+.field-group {{ margin-top: 8px; }}
+.field-label {{ font-size: 0.62rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }}
+.field-prose {{ font-size: 0.8rem; color: #cbd5e1; }}
+.chips {{ display: flex; gap: 5px; flex-wrap: wrap; }}
+.chip {{ font-size: 0.72rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 2px 8px; border-radius: 10px; }}
+
+/* Formula blocks */
+.formula-block {{ background: #0b1220; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }}
+.formula-name {{ font-size: 0.68rem; color: #94a3b8; margin-bottom: 4px; }}
+.formula-expr {{ font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: 0.82rem; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; }}
+.formula-desc {{ font-size: 0.74rem; color: #94a3b8; margin-top: 4px; }}
+.symbol-table {{ margin-top: 6px; border-collapse: collapse; font-size: 0.74rem; }}
+.symbol-table td {{ padding: 2px 8px 2px 0; vertical-align: top; color: #cbd5e1; }}
+.symbol-table .sym {{ font-family: 'SF Mono', Consolas, monospace; color: #93c5fd; white-space: nowrap; }}
+
+/* Tags & role badges */
+.tags {{ display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }}
+.tag {{ font-size: 0.62rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; padding: 1px 7px; border-radius: 3px; }}
+.role-badge {{ font-size: 0.56rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em; }}
+.role-contribution {{ background: #f59e0b; color: #000; }}
+.role-component {{ background: #1d4ed8; color: #dbeafe; }}
+.role-baseline {{ background: #334155; color: #94a3b8; }}
 
 /* References */
 .references-section {{ background: #1e293b; border-radius: 8px; margin-top: 20px; overflow: hidden; }}
