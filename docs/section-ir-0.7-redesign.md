@@ -118,24 +118,42 @@ One call, full paper. Output (`schemas/node-census-output.schema.json`):
 {
   "spine_summary": {"central_contribution": "...", "argument_flow": "..."},
   "nodes": [
-    {"node_id": "mth:transformer", "type": "Method", "name": "Transformer",
-     "gloss": "encoder-decoder attention architecture", "entity_class": "",
-     "source_scope": ["§3"], "salience": "must", "is_root": true}
+    {"node_id": "mth:transformer", "role": "contribution", "name": "Transformer",
+     "gloss": "encoder-decoder attention architecture",
+     "source_scope": ["§3"], "salience": "must"}
   ]
 }
 ```
 
-- `type ∈ {Method, Entity, Metric}` — the referenceable nodes. Context, Condition, Claim are
-  **not** nodes; they are born in content (stage C).
-- `node_id` prefix matches type (`mth:` / `ent:` / `met:`); reused verbatim as the final unit id.
-- `entity_class` (Entity only): `dataset | benchmark | model | task | hardware`.
+> **Type-system cleanup (post-ship).** The census node carries a single granular `role`, not a
+> `type`/`entity_class`/`is_root` triple. The eight roles group into four search clusters by the
+> guiding principle "trace the method's life": **the_method** (`contribution`, `component`),
+> **prior_art** (`builds_on`, `compared_against`), **testbed** (`dataset`, `benchmark`, `task`),
+> **yardsticks** (`metric`). `type` and the Entity class are derived from `role` (total mapping
+> in `ROLE_TO_TYPE`), so the model commits to one axis instead of three half-overlapping fields.
+
+- `role` is the one tag the census emits; `type ∈ {Method, Entity, Metric}` is derived from it.
+  Context, Condition, Claim are **not** nodes; they are born in content (stage C).
+- `node_id` prefix follows from the role's type (`mth:` / `ent:` / `met:`); reused verbatim as
+  the final unit id. A **named model is a Method** (role `builds_on`/`compared_against`), and
+  **apparatus** (hardware, metric-scoring models) is not a node at all.
+- **Baseline capture (policy reversed 2026-05-26).** 0.6 dropped score-only comparison baselines.
+  0.7 captures them in full: every compared-against system is a `compared_against` Method node
+  (even black-box ones), materialized lightweight in the method section, carrying a `compares_to`
+  edge from stage B; its number is a `scores[]` row on the relevant Metric (`variant` = system
+  name). This is prompt-only — `scores[].variant` was already a free string. The smoke test on
+  paper 4 surfaced the prior self-inconsistency: the census emitted the baseline nodes but the
+  method module refused to materialize them, so the `compares_to` edges always dangled and dropped.
 - `salience ∈ {must, should}` — **keep the 0.6 salience discipline**: only argumentatively
-  load-bearing nodes. Baselines are still not modeled unless the authors build on them. Count
-  rises from "relate-what-you-found" + the merge, not from flooding.
-- Exactly one Method has `is_root: true` (document-level); backfilled/demoted deterministically
-  (reuse `normalize_planning_item_ids` logic).
+  load-bearing nodes. Count rises from "relate-what-you-found" + the merge, not from flooding.
+- Exactly one node has `role: contribution` (document-level); promoted/demoted deterministically
+  in `normalize_census_nodes`.
 - `spine_summary` is carried into content (replaces the 0.6 planner's summary).
 - This is the **"node count"** numerator.
+- **Vocabulary scoping (AI/ML).** Fields that were monotone across the corpus are gone: Metric
+  `value_type`, Claim `novelty`/`epistemic_status`/`polarity`, Condition `condition_kind`.
+  Enum values that never fired were dropped: `claim_kind` loses `causal`/`correlational`,
+  `method_kind` loses `protocol`/`software_system`, `entity_class` loses `model`/`hardware`.
 
 ### Stage B — relation pass (`run_relation_pass`)
 
@@ -202,7 +220,8 @@ authors (`about`, `supports`).
 - Metric: require `name`, `unit`, non-empty `scores`; `context_ids` (if present) must be
   section-local Conditions. No `subject_id`/`evaluated_on` fields. Soft check
   (`uncertain_assignments`, not fail): a result Metric with no `evaluates` edge.
-- Claim: a non-`established_fact` Claim outside `{claim, evidence}` needs an incoming `supports`.
+- Claim: a Claim outside `{claim, evidence}` needs an incoming `supports` (the `established_fact`
+  exemption is gone with `epistemic_status`).
 - `extraction_notes.ir_version == "section-ir-0.7"`; `input_mode == "node_census_pipeline"`.
 
 ## Files to change

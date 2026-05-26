@@ -21,16 +21,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from section_pipeline import (  # noqa: E402
     CLAIM_KINDS,
     COMPARISON_DIRECTIONS,
-    CONDITION_KINDS,
     CONTEXT_KINDS,
     ENTITY_CLASSES,
-    EPISTEMIC_STATUSES,
     METHOD_KINDS,
-    NOVELTIES,
-    POLARITIES,
+    NODE_ROLES,
     SECTION_AUTHORS_RELATIONS,
     SOURCE_KINDS,
-    VALUE_TYPES,
 )
 
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
@@ -46,12 +42,11 @@ SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
 
 # Entity classes allowed per section. Evidence may carry any class an entity node can take.
 ENTITY_CLASSES_BY_SECTION: dict[str, list[str]] = {
-    "evidence": ["dataset", "benchmark", "model", "task", "hardware"],
+    "evidence": ["dataset", "benchmark", "task"],
 }
 
 OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Claim": {"polarity", "novelty", "epistemic_status"},
-    "Metric": {"comparison_direction", "value_type"},
+    "Metric": {"comparison_direction"},
     "Method": {"inputs", "outputs", "formulas", "objective_function"},
 }
 
@@ -64,38 +59,36 @@ ARRAY_TYPE_NAMES: dict[str, str] = {
     "methods": "Method",
 }
 
-# Census node types and the relation vocabularies, with explicit ordering for stable schemas.
-NODE_TYPE_ORDER = ["Method", "Entity", "Metric"]
+# Census node roles and the relation vocabularies, with explicit ordering for stable schemas.
+# Roles are listed in search-cluster order (the_method, prior_art, testbed, yardsticks).
+ROLE_ORDER = [
+    "contribution", "component",
+    "builds_on", "compared_against",
+    "dataset", "benchmark", "task",
+    "metric",
+]
 SALIENCE_ORDER = ["must", "should"]
 STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates", "measured_on"]
 STAGE_C_RELATION_ORDER = ["about", "supports"]
 
 ENUM_ORDER: dict[str, list[str]] = {
-    "claim_kind": ["descriptive", "mechanistic", "causal", "correlational", "comparative", "modeling", "ablation_finding", "failure_mode"],
+    "role": ROLE_ORDER,
+    "claim_kind": ["descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode"],
     "context_kind": ["background", "gap", "motivation", "challenge", "assumption"],
-    "condition_kind": ["experimental", "boundary", "evaluation_setup", "hyperparameter"],
-    "entity_class": ["dataset", "benchmark", "model", "task", "hardware"],
-    "method_kind": ["algorithm", "model_architecture", "protocol", "software_system", "training_strategy", "objective_function"],
+    "entity_class": ["dataset", "benchmark", "task"],
+    "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function"],
     "source_kind": ["sentence", "table", "figure", "appendix", "caption", "equation", "supplementary_material"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
-    "value_type": ["scalar", "range", "ratio", "categorical"],
-    "polarity": ["positive", "negative", "neutral", "mixed"],
-    "novelty": ["original", "replication", "citation", "synthesis"],
-    "epistemic_status": ["hypothesis", "conclusion", "established_fact"],
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
+    "role": NODE_ROLES,
     "claim_kind": CLAIM_KINDS,
     "context_kind": CONTEXT_KINDS,
-    "condition_kind": CONDITION_KINDS,
     "entity_class": ENTITY_CLASSES,
     "method_kind": METHOD_KINDS,
     "source_kind": SOURCE_KINDS,
     "comparison_direction": COMPARISON_DIRECTIONS,
-    "value_type": VALUE_TYPES,
-    "polarity": POLARITIES,
-    "novelty": NOVELTIES,
-    "epistemic_status": EPISTEMIC_STATUSES,
 }
 
 
@@ -164,7 +157,7 @@ def scores_schema(description: str) -> dict[str, Any]:
             "required": ["variant", "value", "variance"],
             "additionalProperties": False,
             "properties": {
-                "variant": {"type": "string", "description": "Method variant or configuration name"},
+                "variant": {"type": "string", "description": "System name for this score row — a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"},
                 "value": {
                     "type": "string",
                     "description": "Reported score encoded as a string, including numeric values",
@@ -290,16 +283,15 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
         },
         "Condition": {
             **base_unit_properties("Condition"),
-            "condition_kind": enum_schema("condition_kind", "Operational role of the constraint"),
-            "description": string_schema("Single-sentence prose statement of the constraint"),
+            "description": string_schema(
+                "Single-sentence prose statement of the operational constraint that scopes a "
+                "metric — the concrete dataset split, protocol, population, or hyperparameter"
+            ),
         },
         "Claim": {
             **base_unit_properties("Claim"),
             "statement": string_schema("The claim as a single declarative sentence"),
             "claim_kind": enum_schema("claim_kind", "Classification of the claim"),
-            "polarity": enum_schema("polarity", "Directional assertion of the claim; omit when unspecified"),
-            "novelty": enum_schema("novelty", "Whether the claim is original to this paper; omit when unspecified"),
-            "epistemic_status": enum_schema("epistemic_status", "Confidence level of the claim; omit when unspecified"),
         },
         "Method": {
             **base_unit_properties("Method"),
@@ -322,8 +314,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "unit": string_schema("Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"),
             "context_ids": metric_context_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
-            "value_type": enum_schema("value_type", "Shape of the metric value; omit when unspecified"),
-            "scores": scores_schema("Flat array of reported scores for method-family variants under this metric"),
+            "scores": scores_schema("Flat array of reported scores under this metric — one row per system, covering the method family's own variants and every compared-against baseline"),
         },
     }
     return schemas
@@ -426,8 +417,9 @@ def node_census_schema() -> dict[str, Any]:
         "title": "Node Census Output",
         "description": (
             "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing "
-            "Method, Entity, and Metric node, with no relations. Context, Condition, and Claim "
-            "are not nodes; they are born during content extraction."
+            "node, each tagged with one granular role (its type and Entity class are derived "
+            "from the role), with no relations. Context, Condition, and Claim are not nodes; "
+            "they are born during content extraction."
         ),
         "required": ["spine_summary", "nodes"],
         "additionalProperties": False,
@@ -449,29 +441,28 @@ def node_census_schema() -> dict[str, Any]:
                 "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
                 "items": {
                     "type": "object",
-                    "required": ["node_id", "type", "name", "gloss", "entity_class", "source_scope", "salience", "is_root"],
+                    "required": ["node_id", "role", "name", "gloss", "source_scope", "salience"],
                     "additionalProperties": False,
                     "properties": {
-                        "node_id": id_schema("Node id; prefix matches type (mth:/ent:/met:)"),
-                        "type": inline_enum_schema(NODE_TYPE_ORDER, "Node type: Method, Entity, or Metric"),
+                        "node_id": id_schema(
+                            "Node id; the prefix follows from the role's type — mth: for "
+                            "contribution/component/builds_on/compared_against, ent: for "
+                            "dataset/benchmark/task, met: for metric"
+                        ),
+                        "role": enum_schema(
+                            "role",
+                            "Argumentative role, in search-cluster order. the_method: "
+                            "contribution (the single primary method) and component. prior_art: "
+                            "builds_on and compared_against. testbed: dataset, benchmark, task. "
+                            "yardsticks: metric.",
+                        ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
                         "gloss": string_schema("One short phrase describing the node"),
-                        # Plain string (not an enum): Gemini rejects an enum whose member is the
-                        # empty string, and Method/Metric nodes carry "". validate_census enforces
-                        # that Entity nodes use one of dataset|benchmark|model|task|hardware.
-                        "entity_class": string_schema(
-                            "For an Entity node, one of: dataset, benchmark, model, task, hardware. "
-                            "Empty string \"\" for Method and Metric nodes."
-                        ),
                         "source_scope": string_array_schema("Section markers where the node appears, e.g. ['§3']"),
                         "salience": inline_enum_schema(
                             SALIENCE_ORDER,
                             "must = load-bearing for the contribution; should = adds nuance",
                         ),
-                        "is_root": {
-                            "type": "boolean",
-                            "description": "True for the single document-level root Method; false otherwise",
-                        },
                     },
                 },
             },

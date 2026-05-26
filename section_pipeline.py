@@ -89,6 +89,49 @@ NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Metric": "met:",
 }
 SALIENCE_LEVELS = {"must", "should"}
+# Census node role — the single granular tag the census emits per node. It is the
+# argumentative function the node plays, grouped into four search clusters by the guiding
+# principle "trace the method's life": the_method (mine), prior_art (others'), testbed
+# (data), yardsticks (metrics). `type`, the Entity class, and the document root are all
+# derived from `role` (see ROLE_TO_TYPE / normalize_census_nodes), so the model commits to
+# one axis instead of three half-overlapping fields (the old type/entity_class/is_root).
+NODE_ROLES = {
+    "contribution",       # the_method: the paper's single primary method/system (the root)
+    "component",          # the_method: a sub-method/module that is part of the contribution
+    "builds_on",          # prior_art: an existing method/model the contribution extends
+    "compared_against",   # prior_art: a baseline method the contribution is compared against
+    "dataset",            # testbed: data the method is trained or evaluated on
+    "benchmark",          # testbed: a standardized dataset+protocol for evaluation
+    "task",               # testbed: the problem being solved/evaluated
+    "metric",             # yardsticks: a reported performance measure
+}
+# role -> coarse node type. Total and unambiguous: a node's type is a strict coarsening of
+# its role, so the census carries only `role` and the pipeline derives `type` from it.
+ROLE_TO_TYPE: dict[str, str] = {
+    "contribution": "Method",
+    "component": "Method",
+    "builds_on": "Method",
+    "compared_against": "Method",
+    "dataset": "Entity",
+    "benchmark": "Entity",
+    "task": "Entity",
+    "metric": "Metric",
+}
+# role -> search cluster (carried into the registry as context for the relation pass).
+ROLE_CLUSTER: dict[str, str] = {
+    "contribution": "the_method",
+    "component": "the_method",
+    "builds_on": "prior_art",
+    "compared_against": "prior_art",
+    "dataset": "testbed",
+    "benchmark": "testbed",
+    "task": "testbed",
+    "metric": "yardsticks",
+}
+# The single document-level root method is the node whose role is `contribution`.
+CONTRIBUTION_ROLE = "contribution"
+# Entity roles double as the entity_class on materialized Entity units (identity mapping).
+ENTITY_ROLES = {role for role, type_ in ROLE_TO_TYPE.items() if type_ == "Entity"}
 UNIT_TYPES = {
     "Document",
     "Entity",
@@ -109,11 +152,11 @@ FORBIDDEN_UNIT_TYPES = {
 }
 
 DOC_ROLES = {"research_article", "review", "meta_analysis", "methodology", "benchmark_survey"}
+# Claim kinds, scoped to AI/ML literature: `causal`/`correlational` never fire on this
+# corpus and were dropped. `descriptive` is retained for future-work findings.
 CLAIM_KINDS = {
     "descriptive",
     "mechanistic",
-    "causal",
-    "correlational",
     "comparative",
     "modeling",
     "ablation_finding",
@@ -126,20 +169,15 @@ CONTEXT_KINDS = {
     "challenge",
     "assumption",
 }
-CONDITION_KINDS = {
-    "experimental",
-    "boundary",
-    "evaluation_setup",
-    "hyperparameter",
-}
+# Entity = the data/problem substrate. `model` moved to Method (a named model is a Method)
+# and `hardware` is apparatus, not a node — both were dropped.
 ENTITY_CLASSES = {
     "dataset",
     "benchmark",
-    "model",
     "task",
-    "hardware",
 }
-METHOD_KINDS = {"algorithm", "model_architecture", "protocol", "software_system", "training_strategy", "objective_function"}
+# Method kinds, scoped to AI/ML: `protocol`/`software_system` never fire on this corpus.
+METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function"}
 SOURCE_KINDS = {
     "sentence",
     "table",
@@ -150,10 +188,10 @@ SOURCE_KINDS = {
     "supplementary_material",
 }
 COMPARISON_DIRECTIONS = {"higher_is_better", "lower_is_better", "target", "unspecified"}
-VALUE_TYPES = {"scalar", "range", "ratio", "categorical"}
-POLARITIES = {"positive", "negative", "neutral", "mixed"}
-NOVELTIES = {"original", "replication", "citation", "synthesis"}
-EPISTEMIC_STATUSES = {"hypothesis", "conclusion", "established_fact"}
+# Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Metric
+# `value_type` (always scalar), Claim `novelty` (always original), Claim `epistemic_status`
+# (always conclusion), Claim `polarity` (dropped by request), and Condition `condition_kind`
+# (always evaluation_setup — Condition now carries only a description).
 
 # Global relation type matrix (section-ir-0.7). Endpoints resolve to a unit defined
 # anywhere in the extraction; relations are no longer section-local.
@@ -201,13 +239,10 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "type",
         "statement",
         "claim_kind",
-        "polarity",
-        "novelty",
-        "epistemic_status",
         "provenance",
     },
     "Context": {"id", "type", "context_kind", "description", "provenance"},
-    "Condition": {"id", "type", "condition_kind", "description", "provenance"},
+    "Condition": {"id", "type", "description", "provenance"},
     "Metric": {
         "id",
         "type",
@@ -216,7 +251,6 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "scores",
         "context_ids",
         "comparison_direction",
-        "value_type",
         "provenance",
     },
 }
@@ -786,13 +820,20 @@ def census_must_node_ids(census: dict[str, Any]) -> set[str]:
 def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
     """Repair section-obvious node-census problems before strict validation.
 
-    - Re-prefix a node_id whose prefix disagrees with its declared type (mth:/ent:/met:).
+    - Derive each node's `type` from its `role` (role is the single granular tag the model
+      emits; type/Entity-class/root are coarsenings of it).
+    - Re-prefix a node_id whose prefix disagrees with its derived type (mth:/ent:/met:).
     - Suffix later duplicate node_ids so each is defined exactly once.
-    - Backfill exactly one document-level root Method (first must-priority method, else the
-      first method) when none is marked, and demote extras when several are.
+    - Ensure exactly one document-level root method (role `contribution`): promote the first
+      must-priority method when none is marked, demote extras to `component` when several are.
     """
     normalized = copy.deepcopy(census)
     nodes = iter_census_nodes(normalized)
+
+    for node in nodes:
+        derived = ROLE_TO_TYPE.get(node.get("role"))
+        if derived:
+            node["type"] = derived
 
     for node in nodes:
         node_id = node.get("node_id")
@@ -823,19 +864,16 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
 
     method_nodes = [node for node in nodes if node.get("type") == "Method"]
     if method_nodes:
-        roots = [node for node in method_nodes if node.get("is_root") is True]
+        roots = [node for node in method_nodes if node.get("role") == CONTRIBUTION_ROLE]
         if not roots:
             chosen = next(
                 (node for node in method_nodes if node.get("salience") == "must"),
                 method_nodes[0],
             )
-            chosen["is_root"] = True
+            chosen["role"] = CONTRIBUTION_ROLE
         elif len(roots) > 1:
             for extra in roots[1:]:
-                extra["is_root"] = False
-    for node in nodes:
-        if node.get("type") != "Method" and node.get("is_root") is True:
-            node["is_root"] = False
+                extra["role"] = "component"
     return normalized
 
 
@@ -860,13 +898,13 @@ def validate_census(census: dict[str, Any]) -> list[str]:
 
     seen_ids: set[str] = set()
     method_count = 0
-    method_roots = 0
+    contribution_count = 0
     for node in nodes:
         if not isinstance(node, dict):
             issues.append("Census node must be an object")
             continue
         node_id = node.get("node_id")
-        node_type = node.get("type")
+        role = node.get("role")
         label = node_id if isinstance(node_id, str) else "<missing-id>"
         if not isinstance(node_id, str) or not ID_RE.match(node_id):
             issues.append(f"Census node has invalid node_id: {node_id}")
@@ -874,54 +912,54 @@ def validate_census(census: dict[str, Any]) -> list[str]:
             issues.append(f"Duplicate census node_id: {node_id}")
         else:
             seen_ids.add(node_id)
-        if node_type not in NODE_TYPES:
-            issues.append(f"Census node {label} has invalid type: {node_type}")
+        node_type = ROLE_TO_TYPE.get(role)
+        if node_type is None:
+            issues.append(f"Census node {label} has invalid role: {role}")
         elif isinstance(node_id, str):
             expected = NODE_ID_PREFIX_BY_TYPE[node_type]
             if not node_id.startswith(expected):
                 issues.append(
-                    f"Census node {label} has type {node_type} but id prefix is not {expected!r}"
+                    f"Census node {label} has role {role} (type {node_type}) "
+                    f"but id prefix is not {expected!r}"
                 )
         if node.get("salience") not in SALIENCE_LEVELS:
             issues.append(f"Census node {label} has invalid salience: {node.get('salience')}")
         if node_type == "Method":
             method_count += 1
-            if node.get("is_root") is True:
-                method_roots += 1
-        elif node.get("is_root") is True:
-            issues.append(f"Census node {label} is_root is only valid for Method nodes")
-        entity_class = node.get("entity_class")
-        if node_type == "Entity":
-            if entity_class not in ENTITY_CLASSES:
-                issues.append(f"Census Entity {label} has invalid entity_class: {entity_class}")
-        elif entity_class not in ("", None):
-            issues.append(f"Census node {label} entity_class must be empty for non-Entity nodes")
+            if role == CONTRIBUTION_ROLE:
+                contribution_count += 1
 
-    if method_count and method_roots != 1:
-        issues.append(f"Census must mark exactly one root Method (found {method_roots})")
+    if method_count and contribution_count != 1:
+        issues.append(
+            f"Census must mark exactly one contribution method (found {contribution_count})"
+        )
     return issues
 
 
 def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
     """Build the lightweight all-node registry passed to the relation and content stages.
 
-    Carries only what later stages need to reference a node: id, type, name, gloss,
-    salience, and (for Methods) the root marker. This is the cross-section visibility that
-    lets the relation pass and content stage reference any node by id.
+    Carries what later stages need to reference and route a node: id, type, name, gloss,
+    salience, and the granular `role` with its search `cluster`. The role lets the relation
+    pass route edges (a `component` is part_of the `contribution`; a `compared_against`
+    method is compares_to it) and the content stage find the contribution method. For an
+    Entity, `role` doubles as the entity_class (dataset/benchmark/task).
     """
     registry: list[dict[str, Any]] = []
     for node in iter_census_nodes(census):
+        role = node.get("role")
+        node_type = ROLE_TO_TYPE.get(role, node.get("type"))
         entry: dict[str, Any] = {
             "node_id": node.get("node_id"),
-            "type": node.get("type"),
+            "type": node_type,
+            "role": role,
+            "cluster": ROLE_CLUSTER.get(role, ""),
             "name": node.get("name", ""),
             "gloss": node.get("gloss", ""),
             "salience": node.get("salience", "should"),
         }
-        if node.get("type") == "Entity" and node.get("entity_class"):
-            entry["entity_class"] = node.get("entity_class")
-        if node.get("is_root") is True:
-            entry["role"] = "root"
+        if node_type == "Entity" and role in ENTITY_ROLES:
+            entry["entity_class"] = role
         registry.append(entry)
     return registry
 
@@ -1743,15 +1781,6 @@ def _validate_unit_fields(
                 issues.append(f"Claim {uid} missing {key}")
         if unit.get("claim_kind") not in CLAIM_KINDS:
             issues.append(f"Claim {uid} has invalid claim_kind: {unit.get('claim_kind')}")
-        polarity = unit.get("polarity")
-        if "polarity" in unit and polarity not in POLARITIES:
-            issues.append(f"Claim {uid} has invalid polarity: {polarity}")
-        novelty = unit.get("novelty")
-        if "novelty" in unit and novelty not in NOVELTIES:
-            issues.append(f"Claim {uid} has invalid novelty: {novelty}")
-        epistemic_status = unit.get("epistemic_status")
-        if "epistemic_status" in unit and epistemic_status not in EPISTEMIC_STATUSES:
-            issues.append(f"Claim {uid} has invalid epistemic_status: {epistemic_status}")
     elif utype == "Context":
         for key in ("context_kind", "description"):
             if not unit.get(key):
@@ -1759,11 +1788,8 @@ def _validate_unit_fields(
         if unit.get("context_kind") not in CONTEXT_KINDS:
             issues.append(f"Context {uid} has invalid context_kind: {unit.get('context_kind')}")
     elif utype == "Condition":
-        for key in ("condition_kind", "description"):
-            if not unit.get(key):
-                issues.append(f"Condition {uid} missing {key}")
-        if unit.get("condition_kind") not in CONDITION_KINDS:
-            issues.append(f"Condition {uid} has invalid condition_kind: {unit.get('condition_kind')}")
+        if not unit.get("description"):
+            issues.append(f"Condition {uid} missing description")
     elif utype == "Metric":
         for key in ("name", "unit"):
             if not unit.get(key):
@@ -1806,9 +1832,6 @@ def _validate_unit_fields(
         comparison_direction = unit.get("comparison_direction")
         if "comparison_direction" in unit and comparison_direction not in COMPARISON_DIRECTIONS:
             issues.append(f"Metric {uid} has invalid comparison_direction: {comparison_direction}")
-        value_type = unit.get("value_type")
-        if "value_type" in unit and value_type not in VALUE_TYPES:
-            issues.append(f"Metric {uid} has invalid value_type: {value_type}")
 
 
 def _validate_relation(
@@ -2017,10 +2040,8 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
     }
     for uid, unit in unit_index.items():
         if unit.get("type") == "Claim":
-            status = unit.get("epistemic_status")
             if (
-                status != "established_fact"
-                and unit_sections.get(uid) not in {"claim", "evidence"}
+                unit_sections.get(uid) not in {"claim", "evidence"}
                 and uid not in incoming_argumentative
             ):
                 issues.append(f"Claim {uid} lacks an incoming argumentative (supports) relation")

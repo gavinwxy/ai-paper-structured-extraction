@@ -97,43 +97,12 @@
                 "enum": [
                   "descriptive",
                   "mechanistic",
-                  "causal",
-                  "correlational",
                   "comparative",
                   "modeling",
                   "ablation_finding",
                   "failure_mode"
                 ],
                 "description": "Classification of the claim"
-              },
-              "polarity": {
-                "type": "string",
-                "enum": [
-                  "positive",
-                  "negative",
-                  "neutral",
-                  "mixed"
-                ],
-                "description": "Directional assertion of the claim; omit when unspecified"
-              },
-              "novelty": {
-                "type": "string",
-                "enum": [
-                  "original",
-                  "replication",
-                  "citation",
-                  "synthesis"
-                ],
-                "description": "Whether the claim is original to this paper; omit when unspecified"
-              },
-              "epistemic_status": {
-                "type": "string",
-                "enum": [
-                  "hypothesis",
-                  "conclusion",
-                  "established_fact"
-                ],
-                "description": "Confidence level of the claim; omit when unspecified"
               }
             }
           }

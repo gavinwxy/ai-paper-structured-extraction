@@ -409,7 +409,10 @@ def render_metric_table(sections: list[dict], unit_index: dict, subject_by_metri
         ctx_names = []
         for cid in ctx_ids:
             cu = unit_index.get(cid, {})
-            ctx_names.append(cu.get("name") or cu.get("condition_kind") or cid)
+            label = cu.get("name") or cu.get("description") or cid
+            if isinstance(label, str) and len(label) > 50:
+                label = label[:47] + "..."
+            ctx_names.append(label)
         ctx_str = ", ".join(ctx_names) or "-"
         direction = m.get("comparison_direction", "")
         dir_icon = {"higher_is_better": "&#9650;", "lower_is_better": "&#9660;"}.get(direction, "")

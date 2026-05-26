@@ -28,7 +28,7 @@ This section authors no relations and its schema has no `relations` field — ea
 ## Anti-patterns
 
 - Do not create a Claim unit for a contribution here; contributions belong in the claim section.
-- Do not create Method units for methods cited only as score baselines; baseline scores are not captured in the IR.
+- Do not create Method units here for any reason; a system named as background belongs in the Context `description`. (Comparison baselines are captured as `compared_against` Methods in the method section and as score rows in the evidence section — not here.)
 - Do not bundle background + gap + motivation into one omnibus Context unit; split them.
 - Do not create Context units for paper-structural observations ("this paper is organized as follows").
 

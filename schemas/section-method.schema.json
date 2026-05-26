@@ -98,8 +98,6 @@
                 "enum": [
                   "algorithm",
                   "model_architecture",
-                  "protocol",
-                  "software_system",
                   "training_strategy",
                   "objective_function"
                 ],

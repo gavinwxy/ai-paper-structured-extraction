@@ -9,40 +9,38 @@ This section **materializes** the Metric and Entity census nodes (enriching them
 - `Metric` (array `metrics`): headline target-method results and diagnostic ablation/sensitivity values. Materialize each Metric census node; you may add one the census missed.
 - `Condition` (array `conditions`): evaluation protocol, dataset split, benchmark setup, population, or hyperparameter that scopes a metric. **Born here.**
 - `Claim` (array `claims`): interpretive findings — ablation conclusions, sensitivity conclusions, limitations, failure modes. **Born here.**
-- `Entity` (array `entities`): datasets, benchmarks, and other named factors (`dataset | benchmark | model | task | hardware`). Materialize Entity census nodes used in evaluation.
+- `Entity` (array `entities`): the datasets, benchmarks, and tasks the method is evaluated on (`dataset | benchmark | task`). Materialize **every** Entity census node in `node_registry`, including `task` nodes — not only the ones a metric was measured on.
 
 ### Metric
-Fields: `name`, `unit`, `context_ids`, optional `comparison_direction`, `value_type`, and `scores`.
+Fields: `name`, `unit`, `context_ids`, optional `comparison_direction`, and `scores`.
 - `unit`: non-empty measurement unit such as `BLEU`, `%`, `ms`, `F1`, `perplexity`, or `unitless`. Never blank.
 - `comparison_direction` (optional): `higher_is_better | lower_is_better | target | unspecified`.
-- `value_type` (optional): `scalar | range | ratio | categorical`.
 - `context_ids`: IDs of **local** Condition units that scope this metric, defined in this same response. A deployable benchmark metric is normally scoped by at least one Condition; a diagnostic ablation metric may carry none (`[]`). There is no `subject_id` or `evaluated_on` field — the method a metric evaluates and the dataset it ran on are global edges (`evaluates`, `measured_on`), already established.
-- `scores`: a flat array of `{variant, value, variance}`, one entry per variant of the method family under this metric. `value` is always a string ("28.4", "28.4-29.1", or a short categorical string); `variance` is "" when no uncertainty is reported. One entry per variant — do not pack multiple scores into one entry, and do not include external baselines or prior SOTA.
+- `scores`: a flat array of `{variant, value, variance}` — one entry per **system reported under this metric**, covering both the method family's own variants **and every baseline / prior-SOTA system the paper compares against**. `variant` names the system as the paper labels it (`"Transformer (big)"`, `"GNMT"`, `"ConvS2S"`). `value` is always a string ("28.4", "28.4-29.1", or a short categorical string); `variance` is "" when no uncertainty is reported. One entry per system — do not pack multiple scores into one entry. Capturing the baseline rows here is how the quantitative comparison is preserved; the matching baseline systems are `compared_against` Method units and carry `compares_to` edges from the relation pass.
 
 ### Condition — operational constraint
-Fields: `condition_kind`, `description`.
-- `condition_kind`: `evaluation_setup` for benchmark splits; `experimental` for lab/trial populations; `boundary` for applicability limits; `hyperparameter` for a setup parameter that scopes a reported metric.
-- `description`: a single sentence that **names the concrete setup** — the actual dataset/split, population size, OOD source-vs-target pair, or protocol, carrying the paper's real names and numbers rather than a paraphrase. Never replace a specific setup with a vague generic restatement (e.g. "evaluated to assess whether the model is more confident") — that loses the recall the Condition exists to carry.
+Fields: `description`.
+- `description`: a single sentence that **names the concrete setup** that scopes a metric — the actual dataset/split, population size, OOD source-vs-target pair, protocol, or hyperparameter, carrying the paper's real names and numbers rather than a paraphrase. Never replace a specific setup with a vague generic restatement (e.g. "evaluated to assess whether the model is more confident") — that loses the recall the Condition exists to carry.
 - **Enumerate each distinct evaluation setup as its own Condition.** A separate dataset, a cross-dataset generalization or transfer protocol, a robustness / distribution-shift setup, a user study, and a timing protocol each get their **own** Condition — even when no separate Metric attaches to it. Do not collapse several named setups into one.
 
 ### Claim — interpretive finding
-Fields: `statement`, `claim_kind`, optional `polarity`, `novelty`, `epistemic_status`.
+Fields: `statement`, `claim_kind`.
 Enumerate **every distinct interpretive finding** the evaluation supports — this "what it means" layer is easy to under-capture now that measurement shares the section, so treat completeness here as the job. Each of the following, when the paper states it, is its **own** Claim — do not merge two distinct findings into one, and do not drop a finding because it is secondary. The descriptions below name the *kind* of finding to look for; extract the paper's own finding in its own terms — do not import this wording:
 - **ablation / sensitivity conclusions** (`claim_kind: ablation_finding`), including fine-grained sub-findings — a saturation point where adding more of some component or step stops helping, a capacity ceiling, or which of several components contributes most.
 - **mechanism / interpretability** findings (`claim_kind: mechanistic`) — *why* the method works, or what a learned representation reveals: the reason behind a result, not merely that the result occurred.
 - **comparative analysis** findings (`claim_kind: comparative`) — an analytical "design choice A is more effective than alternative B" conclusion drawn from the results, as distinct from a deployable score row.
 - **limitations and failure modes** (`claim_kind: failure_mode`) — an input regime or setting where the method underperforms, or a regime a competing approach fails to handle that this method does.
 - **future-work directions** that shape interpretation (`claim_kind: descriptive`).
-- `epistemic_status` (optional): use `conclusion` for ablation/limitation findings — never `established_fact`.
 
 ### Entity
-Fields: `name`, `entity_class` (`dataset | benchmark | model | task | hardware`). Materialize the dataset/benchmark Entity nodes the metrics were measured on so the global `measured_on` edges resolve.
+Fields: `name`, `entity_class` (`dataset | benchmark | task`). **Materialize every Entity census node from `node_registry`**, reusing each `node_id`. A `dataset`/`benchmark` anchors the global `measured_on` edges; a `task` anchors `about` edges and frames what was evaluated — materialize it too, even though no `measured_on` points at a task. Leaving any Entity census node unmaterialized strands its edges and leaves a `must` node uncovered.
 
 ## The one editorial call: deployable vs diagnostic
 
 Each result row lives in exactly one place — never both. Decide, once, what the row's purpose is:
 
 - It reports how a **deployable, first-class configuration** performs — a model the authors present as shippable (ResNet-50/101/152, Transformer Base/Big, ViT-S/B/L) → it is a `scores[]` entry on a **Metric** (measurement).
+- It reports an **external comparison system / baseline** (GNMT, ConvS2S, a prior SOTA row) → it is also a `scores[]` entry on the same **Metric**, with `variant` naming the external system. The metric still `evaluates` the contribution; the baseline rows record what it was compared against.
 - It **isolates one component's contribution** by removing, replacing, or disabling it ("without attention", "no skip connections", "−BN", "single-head") to argue that the component matters → it is a **diagnostic ablation**: a `Claim` (`claim_kind: ablation_finding`) plus a supporting **Metric** whose `scores[]` hold the ablation variants. Connect them with `supports` (Metric → Claim) and point the claim `about` the component method.
 
 Operational test: would the paper offer this configuration as a usable model? If yes, it is a deployable variant (a Metric score). If it exists only to show a part is necessary, it is a diagnostic ablation (a Claim + supporting Metric).
@@ -51,6 +49,7 @@ Worked boundary example — a table that interleaves both:
 
 | Configuration        | BLEU | becomes |
 |----------------------|------|---------|
+| GNMT (baseline)      | 24.6 | a `scores` entry on the BLEU Metric (`variant: "GNMT"`); GNMT is a `compared_against` Method unit |
 | Transformer Base     | 27.3 | a `scores` entry on the BLEU Metric |
 | Transformer Big      | 28.4 | a `scores` entry on the BLEU Metric |
 | Base, no pos. enc.   | 25.1 | an ablation Claim + supporting ablation Metric |
@@ -77,18 +76,19 @@ This section authors the claim-centric edges in `relations[]`:
 - Extract best/final target-method results on primary benchmarks, and transfer/generalization results that demonstrate the main claim beyond the primary benchmark.
 - Extract scale/capacity variants only when presented as first-class configurations, not as ablation controls.
 - Capture the **full** "what this means" layer as Claims — every distinct ablation, mechanism, comparative, limitation, and future-work finding listed above — not a duplicate of the primary result rows. Secondary findings (interpretability remarks, edge-case behaviors, fine-grained ablation sub-results) are in scope; only skip a sentence that adds no argumentative nuance.
-- Skip baseline-only scores, intermediate variants, repeated nearly identical metrics, and supplementary rows that do not qualify the main claim.
+- Keep baseline comparison rows; skip only intermediate variants, repeated nearly identical metrics, and supplementary rows that do not qualify the main claim.
 
 ## Baseline handling
 
-- Do not model baseline/comparison systems as Entity units, and do not create baseline Metrics or put baseline scores in `scores[]`. Baselines may be mentioned textually in a Claim `statement` when they matter to the interpretation.
+- **Capture every baseline the paper compares against.** Its score is a `scores[]` row on the relevant Metric (`variant` = the system's name), and the system itself is a `compared_against` **Method** unit (materialized in the method section) that carries a `compares_to` edge from the relation pass. The comparison is captured both quantitatively (the row) and structurally (the edge).
+- Do **not** model a baseline/comparison system as an **Entity** unit — a baseline is a Method, never a dataset/benchmark/task. Entities are testbeds only.
+- The Metric still `evaluates` the contribution (its primary subject); the baseline rows in its `scores[]` record what the contribution was measured against, they do not change the metric's subject.
 - If the paper's own method modifies a named base model, that base model is a Method (it should be a census node), not an evidence Entity.
 
 ## Anti-patterns
 
 - Do not create a `subject_id` or `evaluated_on` field on a Metric — they no longer exist; use the global `evaluates`/`measured_on` edges (already present) and local `context_ids`.
 - Do not create Method units here; reference method nodes by id in `about` edges.
-- Do not set `epistemic_status: established_fact` on ablation conclusions; use `conclusion`.
 - Do not duplicate a deployable row as both a `scores` entry and an ablation Claim.
 
 ## Worked example
@@ -105,8 +105,9 @@ This section authors the claim-centric edges in `relations[]`:
         "unit": "BLEU",
         "context_ids": ["cnd:wmt_newstest2014"],
         "comparison_direction": "higher_is_better",
-        "value_type": "scalar",
         "scores": [
+          {"variant": "GNMT", "value": "24.6", "variance": ""},
+          {"variant": "ConvS2S", "value": "25.16", "variance": ""},
           {"variant": "Transformer Base", "value": "27.3", "variance": ""},
           {"variant": "Transformer Big", "value": "28.4", "variance": ""}
         ],
@@ -119,7 +120,6 @@ This section authors the claim-centric edges in `relations[]`:
         "unit": "BLEU",
         "context_ids": [],
         "comparison_direction": "higher_is_better",
-        "value_type": "scalar",
         "scores": [
           {"variant": "full", "value": "27.3", "variance": ""},
           {"variant": "no pos. enc.", "value": "25.1", "variance": ""}
@@ -131,7 +131,6 @@ This section authors the claim-centric edges in `relations[]`:
       {
         "id": "cnd:wmt_newstest2014",
         "type": "Condition",
-        "condition_kind": "evaluation_setup",
         "description": "Evaluated on the WMT 2014 English-German newstest2014 test set with beam search.",
         "provenance": [{"source_kind": "sentence", "source": ["§6"]}]
       }
@@ -142,9 +141,6 @@ This section authors the claim-centric edges in `relations[]`:
         "type": "Claim",
         "statement": "Removing positional encodings lowers BLEU by 2.2, showing they are necessary for the attention-only model.",
         "claim_kind": "ablation_finding",
-        "polarity": "positive",
-        "novelty": "original",
-        "epistemic_status": "conclusion",
         "provenance": [{"source_kind": "table", "source": ["§6"]}]
       }
     ],
@@ -164,7 +160,7 @@ This section authors the claim-centric edges in `relations[]`:
   }
 }
 
-Here `met:bleu_en_de --evaluates--> mth:transformer` and `met:bleu_en_de --measured_on--> ent:wmt2014_en_de` are **not** emitted in this section; they already live in the global `relations` from the relation pass.
+Here `met:bleu_en_de --evaluates--> mth:transformer` and `met:bleu_en_de --measured_on--> ent:wmt2014_en_de` are **not** emitted in this section; they already live in the global `relations` from the relation pass. The `GNMT` and `ConvS2S` score rows name `compared_against` Method units defined in the method section; their `mth:transformer --compares_to--> mth:gnmt` edges likewise come from the relation pass, not from here.
 
 ## Anchor
 

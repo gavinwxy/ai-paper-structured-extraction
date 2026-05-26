@@ -9,12 +9,9 @@ Claim units are **born here** — they are not census nodes. Create them from `s
 Only `Claim` units (array `claims`). Typical: 1–3 units — the main contribution claim plus at most two direct corollaries.
 
 ### Claim
-Fields: `statement`, `claim_kind`, and optional `polarity`, `novelty`, `epistemic_status`.
-- `claim_kind`: one of `descriptive | mechanistic | causal | correlational | comparative | modeling | ablation_finding | failure_mode`. Be precise: `comparative` for "A outperforms B", `causal` for "X causes Y", `descriptive` for "X is characterized by Y", `mechanistic` for "X works because Y".
-- `epistemic_status` (optional): `conclusion` for claims presented as demonstrated, `hypothesis` for conjectural claims, `established_fact` only for universally accepted prior knowledge.
-- `novelty` (optional): `original` for new contributions, `citation` for prior-work claims, `replication` for reproduced results, `synthesis` for combined findings.
-- `polarity` (optional): `positive | negative | neutral | mixed`.
-- A Claim no longer carries a `target_ids` field. What the claim is about is expressed as an `about` relation (see Relations).
+Fields: `statement`, `claim_kind`.
+- `claim_kind`: one of `descriptive | mechanistic | comparative | modeling | ablation_finding | failure_mode`. Be precise: `comparative` for "A outperforms B", `descriptive` for "X is characterized by Y", `mechanistic` for "X works because Y", `modeling` for a formal or architectural claim.
+- A Claim carries no `target_ids` field. What the claim is about is expressed as an `about` relation (see Relations).
 
 ## Relations
 
@@ -25,7 +22,7 @@ This section authors claim-centric edges in `relations[]`:
 | `about` | Claim → {Method, Entity, Metric} | the claim is about that node |
 | `supports` | Claim → Claim | a corollary claim supports the primary claim |
 
-- Use `about` to bind each claim to the node(s) it is about, referencing `node_registry` ids. For the paper-level contribution claim, point `about` at the method whose `node_registry` role is `root`. If the exact node is absent, point at the nearest broader node, else author no `about` edge.
+- Use `about` to bind each claim to the node(s) it is about, referencing `node_registry` ids. For the paper-level contribution claim, point `about` at the method whose `node_registry` role is `contribution`. If the exact node is absent, point at the nearest broader node, else author no `about` edge.
 - Use `supports` only when the paper states a direct logical dependency from a corollary claim to the primary claim.
 - Endpoints reference nodes/units by id; never invent an id. Every claim needs `provenance`.
 
@@ -53,9 +50,6 @@ This section authors claim-centric edges in `relations[]`:
         "type": "Claim",
         "statement": "A sequence transduction architecture based solely on attention, dispensing with recurrence and convolutions, reaches state-of-the-art translation quality while training markedly faster.",
         "claim_kind": "comparative",
-        "polarity": "positive",
-        "novelty": "original",
-        "epistemic_status": "conclusion",
         "provenance": [{"source_kind": "sentence", "source": ["§1"]}]
       }
     ],

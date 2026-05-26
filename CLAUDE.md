@@ -17,9 +17,11 @@ The active system extracts a paper's argumentative spine into section-IR:
 The pipeline is **three-stage** (`node census -> relation pass -> content fill`):
 
 1. **Node census (stage A)**: `prompts/section-extraction/node-census.md`
-   - One full-paper call producing `spine_summary` and a flat `nodes[]` list of every load-bearing `Method`, `Entity`, and `Metric` node — with **no relations**.
-   - Each node has a typed `node_id` (`mth:`/`ent:`/`met:`) reused verbatim as the final unit id, a `salience` (`must`/`should`), and (for one Method) `is_root`.
-   - `normalize_census_nodes` backfills/demotes the single root and dedups ids; `validate_census` is the stage-A contract.
+   - One full-paper call producing `spine_summary` and a flat `nodes[]` list of every load-bearing node — with **no relations**.
+   - Each node carries a single granular `role` drawn from four search clusters (the guiding principle "trace the method's life"): **the_method** (`contribution`, `component`), **prior_art** (`builds_on`, `compared_against`), **testbed** (`dataset`, `benchmark`, `task`), **yardsticks** (`metric`). The node's coarse `type` (`Method`/`Entity`/`Metric`), Entity class, and document root are all **derived from `role`** — the census commits to one axis, not three. The `node_id` prefix (`mth:`/`ent:`/`met:`) follows from the role's type and is reused verbatim as the final unit id; each node also has a `salience` (`must`/`should`).
+   - Two scoping rules: a **named model is a Method** (`builds_on`/`compared_against`), never a testbed node; **apparatus is not a node** (hardware and metric-scoring models like CLIP are dropped — the scoring model lives in the metric's gloss).
+   - **Baselines are captured in full** (policy reversed 2026-05-26): every system the paper compares against is a `compared_against` Method node (including black-box, score-only baselines), materialized as a lightweight Method unit in the method section, carrying a `compares_to` edge to the contribution; its number is a row in the relevant Metric's `scores[]` (the `variant` names the system). The comparison is thus captured structurally (edge) and quantitatively (score row). Baselines are never Entities.
+   - `normalize_census_nodes` derives `type` from `role`, re-prefixes ids, dedups, and ensures exactly one `contribution` (promoting the first must-method when none, demoting extras to `component`); `validate_census` is the stage-A contract.
 
 2. **Relation pass (stage B)**: `prompts/section-extraction/relation-pass.md`
    - One call receiving the full paper plus the complete flat node list. It establishes the structural entity↔entity edges (`part_of`, `compares_to`, `evaluates`, `measured_on`) with the whole node set in view, so cross-section composition and metric-subject binding need no forward references and no reconcile crutches.
@@ -59,11 +61,12 @@ Design reference: `docs/section-ir-0.7-redesign.md` (full spec); `docs/section-i
 - `covers_entries[]` is the authoritative trace from a section back to the census nodes it materialized. Assembly derives it deterministically (census node_id ∩ section unit ids), so the model does not echo it.
 - Each unit ID is defined exactly once. A census `node_id` is reused verbatim as the unit id when a section materializes it. Cross-unit references are edges in the global `relations[]`, not unit fields — the only remaining reference-list unit field is `Metric.context_ids` (local Condition scoping).
 - Every `Claim` and `Metric` must have non-empty provenance.
-- Every `Metric` needs `name`, `unit`, non-empty `scores`, and `context_ids`. `context_ids` (when non-empty) must point to section-local `Condition` units; it may be empty (an ablation metric carries none, a deployable metric is normally scoped by one). The metric→method link is the `evaluates` relation and the metric→dataset link is the `measured_on` relation, both in the global `relations[]` — `Metric` no longer has `subject_id` or `evaluated_on` fields.
+- Every `Metric` needs `name`, `unit`, non-empty `scores`, and `context_ids`. `scores[]` holds one row per system reported under the metric — the method family's own variants **and** every compared-against baseline (the `variant` string names the system); the metric still `evaluates` the contribution. `context_ids` (when non-empty) must point to section-local `Condition` units; it may be empty (an ablation metric carries none, a deployable metric is normally scoped by one). The metric→method link is the `evaluates` relation and the metric→dataset link is the `measured_on` relation, both in the global `relations[]` — `Metric` no longer has `subject_id` or `evaluated_on` fields.
 - `Claim` has no `target_ids` field; what a claim is about is the `about` relation in `relations[]`.
+- The controlled vocabularies are **scoped to AI/ML literature** (the type cleanup pruned what never fired on the corpus). `Claim` carries only `statement` + `claim_kind ∈ {descriptive, mechanistic, comparative, modeling, ablation_finding, failure_mode}` — the monotone `polarity`/`novelty`/`epistemic_status` fields were removed, and `causal`/`correlational` dropped. `method_kind ∈ {algorithm, model_architecture, training_strategy, objective_function}` (`protocol`/`software_system` dropped). `Metric` dropped the monotone `value_type`. `Entity.entity_class ∈ {dataset, benchmark, task}` (`model` is a Method now; `hardware` is apparatus, not a node).
 - `Method` has no `components` field; composition is the `part_of` relation in `relations[]` (established by the relation pass over the full node set, so cross-section composition is captured without reconcile crutches).
 - `Method` optional fields (omitted entirely when unsupported, never invented): `inputs[]`, `outputs[]`, `formulas[]` (each `{name, expression, symbols[]}`), and `objective_function` (`{expression, description, symbols[]}`). Each `symbols[]` entry is `{symbol, description}` glossing one token of the equation; the array may be empty when the expression introduces no symbols. Only `name`, `method_kind`, `description`, and `implementation_notes` are required. When present, every `formulas[]` entry and `objective_function` must carry a non-empty `expression`, and each `symbols[]` entry must carry a non-empty `symbol` and `description`.
-- Exactly one census Method node is `is_root: true`, document-level. `normalize_census_nodes` backfills it when omitted and demotes extras, so a missing root no longer hard-fails the census.
+- Exactly one census node has `role: contribution` (the document-level root method). `normalize_census_nodes` promotes the first must-method when none is tagged and demotes extras to `component`, so a missing contribution no longer hard-fails the census.
 - Assembly merges the stage-B relations with each content section's `relations[]` into the global list, then performs lossy-but-safe repairs logged to `extraction_notes.uncertain_assignments`: `_dedup_entities` merges same-name Entities (rewriting relation endpoints); `_dedup_unit_ids` drops later duplicate definitions; `_drop_empty_sections` removes unit-less sections; `_normalize_provenance_markers` collapses `§N.M` to top-level `§N`; `_repair_section_anchors` re-points non-local anchors; `_dedup_relations`/`_drop_dangling_relations`/`_drop_invalid_relations` clean the global edge list against the relation matrix once the full unit set is known; `_assign_covers_entries` recomputes the census trace. Coverage is measured against census `must` nodes; an unmaterialized must-node surfaces in `extraction_notes.uncovered_items`.
 - IR version: `section-ir-0.7`. `extraction_notes.input_mode` is `node_census_pipeline`.
 
@@ -71,12 +74,12 @@ Allowed unit types:
 
 `Document`, `Entity`, `Method`, `Claim`, `Context`, `Condition`, `Metric`
 
-`Method`, `Entity`, and `Metric` are census nodes; `Context`, `Condition`, and `Claim` are born during content fill.
+`Method`, `Entity`, and `Metric` are census nodes (role-tagged in stage A, with `type` derived from `role`); `Context`, `Condition`, and `Claim` are born during content fill.
 
 ## Context vs. Condition
 
 - `Context` (argumentative premise): `context_kind ∈ {background, gap, motivation, challenge, assumption}`, fields `{context_kind, description}`.
-- `Condition` (operational constraint): `condition_kind ∈ {experimental, boundary, evaluation_setup, hyperparameter}`, fields `{condition_kind, description}`.
+- `Condition` (operational constraint): fields `{description}` — a single sentence naming the concrete setup that scopes a metric (dataset split, protocol, population, hyperparameter). The monotone `condition_kind` enum was removed in the AI/ML scoping.
 
 Archived legacy types such as `Relation`, `Category`, `SystemModel`, `MethodArtifact`, `Proposition`, and `RoleBinding` are not valid in active section-IR output.
 

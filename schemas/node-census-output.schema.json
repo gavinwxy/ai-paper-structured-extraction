@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Node Census Output",
-  "description": "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing Method, Entity, and Metric node, with no relations. Context, Condition, and Claim are not nodes; they are born during content extraction.",
+  "description": "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type and Entity class are derived from the role), with no relations. Context, Condition, and Claim are not nodes; they are born during content extraction.",
   "required": [
     "spine_summary",
     "nodes"
@@ -34,29 +34,32 @@
         "type": "object",
         "required": [
           "node_id",
-          "type",
+          "role",
           "name",
           "gloss",
-          "entity_class",
           "source_scope",
-          "salience",
-          "is_root"
+          "salience"
         ],
         "additionalProperties": false,
         "properties": {
           "node_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-            "description": "Node id; prefix matches type (mth:/ent:/met:)"
+            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, ent: for dataset/benchmark/task, met: for metric"
           },
-          "type": {
+          "role": {
             "type": "string",
             "enum": [
-              "Method",
-              "Entity",
-              "Metric"
+              "contribution",
+              "component",
+              "builds_on",
+              "compared_against",
+              "dataset",
+              "benchmark",
+              "task",
+              "metric"
             ],
-            "description": "Node type: Method, Entity, or Metric"
+            "description": "Argumentative role, in search-cluster order. the_method: contribution (the single primary method) and component. prior_art: builds_on and compared_against. testbed: dataset, benchmark, task. yardsticks: metric."
           },
           "name": {
             "type": "string",
@@ -65,10 +68,6 @@
           "gloss": {
             "type": "string",
             "description": "One short phrase describing the node"
-          },
-          "entity_class": {
-            "type": "string",
-            "description": "For an Entity node, one of: dataset, benchmark, model, task, hardware. Empty string \"\" for Method and Metric nodes."
           },
           "source_scope": {
             "type": "array",
@@ -84,10 +83,6 @@
               "should"
             ],
             "description": "must = load-bearing for the contribution; should = adds nuance"
-          },
-          "is_root": {
-            "type": "boolean",
-            "description": "True for the single document-level root Method; false otherwise"
           }
         }
       }

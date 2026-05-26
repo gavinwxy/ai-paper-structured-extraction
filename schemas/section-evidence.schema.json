@@ -118,16 +118,6 @@
                 ],
                 "description": "Whether higher or lower values are preferred; omit when unspecified"
               },
-              "value_type": {
-                "type": "string",
-                "enum": [
-                  "scalar",
-                  "range",
-                  "ratio",
-                  "categorical"
-                ],
-                "description": "Shape of the metric value; omit when unspecified"
-              },
               "scores": {
                 "type": "array",
                 "items": {
@@ -141,7 +131,7 @@
                   "properties": {
                     "variant": {
                       "type": "string",
-                      "description": "Method variant or configuration name"
+                      "description": "System name for this score row \u2014 a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"
                     },
                     "value": {
                       "type": "string",
@@ -153,7 +143,7 @@
                     }
                   }
                 },
-                "description": "Flat array of reported scores for method-family variants under this metric"
+                "description": "Flat array of reported scores under this metric \u2014 one row per system, covering the method family's own variants and every compared-against baseline"
               }
             }
           }
@@ -167,7 +157,6 @@
               "id",
               "type",
               "provenance",
-              "condition_kind",
               "description"
             ],
             "additionalProperties": false,
@@ -218,19 +207,9 @@
                   }
                 }
               },
-              "condition_kind": {
-                "type": "string",
-                "enum": [
-                  "experimental",
-                  "boundary",
-                  "evaluation_setup",
-                  "hyperparameter"
-                ],
-                "description": "Operational role of the constraint"
-              },
               "description": {
                 "type": "string",
-                "description": "Single-sentence prose statement of the constraint"
+                "description": "Single-sentence prose statement of the operational constraint that scopes a metric \u2014 the concrete dataset split, protocol, population, or hyperparameter"
               }
             }
           }
@@ -304,43 +283,12 @@
                 "enum": [
                   "descriptive",
                   "mechanistic",
-                  "causal",
-                  "correlational",
                   "comparative",
                   "modeling",
                   "ablation_finding",
                   "failure_mode"
                 ],
                 "description": "Classification of the claim"
-              },
-              "polarity": {
-                "type": "string",
-                "enum": [
-                  "positive",
-                  "negative",
-                  "neutral",
-                  "mixed"
-                ],
-                "description": "Directional assertion of the claim; omit when unspecified"
-              },
-              "novelty": {
-                "type": "string",
-                "enum": [
-                  "original",
-                  "replication",
-                  "citation",
-                  "synthesis"
-                ],
-                "description": "Whether the claim is original to this paper; omit when unspecified"
-              },
-              "epistemic_status": {
-                "type": "string",
-                "enum": [
-                  "hypothesis",
-                  "conclusion",
-                  "established_fact"
-                ],
-                "description": "Confidence level of the claim; omit when unspecified"
               }
             }
           }
@@ -414,9 +362,7 @@
                 "enum": [
                   "dataset",
                   "benchmark",
-                  "model",
-                  "task",
-                  "hardware"
+                  "task"
                 ],
                 "description": "Classification of the entity"
               }
