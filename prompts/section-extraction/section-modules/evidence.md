@@ -2,13 +2,15 @@ SECTION FOCUS: evidence
 
 This section captures the paper's evaluation layer in one pass: both **what was measured** (how the method performs on benchmarks and transfer tests) and **what those measurements mean** (what ablations reveal, what limits the result). The old experiment/analysis split is gone — measurement and interpretation are decided together here, with the whole results table in view, which is exactly the editorial call that the split forced two blind parallel passes to make separately.
 
+This section is also where the paper's discovery arc closes: it states the **headline contribution claim** — the one-sentence answer the evidence establishes — alongside the finer interpretive findings. There is no separate claim section; the contribution claim is born here, like every other claim.
+
 This section **materializes** the Metric and Entity census nodes (enriching them with the rich fields below) and **creates** the born Setting and Claim units. The `evaluates` (Metric → Method) and `measured_on` (Metric → dataset Entity) edges are already in the global `relations` from the relation pass — do not restate them. You author only the claim-centric edges (`about`, `supports`).
 
 ## Units you may define
 
 - `Metric` (array `metrics`): headline target-method results and diagnostic ablation/sensitivity values. Materialize each Metric census node; you may add one the census missed.
 - `Setting` (array `settings`): evaluation protocol, dataset split, benchmark setup, population, or hyperparameter that scopes a metric. **Born here.**
-- `Claim` (array `claims`): interpretive findings — ablation conclusions, sensitivity conclusions, limitations, failure modes. **Born here.**
+- `Claim` (array `claims`): the **headline contribution claim** (the paper's central established answer) plus the interpretive findings — ablation conclusions, sensitivity conclusions, limitations, failure modes. **All born here.**
 - `Entity` (array `entities`): the datasets, benchmarks, and tasks the method is evaluated on (`dataset | benchmark | task`). Materialize **every** Entity census node in `node_registry`, including `task` nodes — not only the ones a metric was measured on.
 
 ### Metric
@@ -35,9 +37,12 @@ Fields: `setting_kind`, `description`.
 - `description`: a single sentence that **names the concrete setup** that scopes a metric — the actual dataset/split, population size, OOD source-vs-target pair, protocol, or hyperparameter, carrying the paper's real names and numbers rather than a paraphrase. Never replace a specific setup with a vague generic restatement (e.g. "evaluated to assess whether the model is more confident") — that loses the recall the Setting exists to carry.
 - **Enumerate each distinct evaluation setup as its own Setting.** A separate dataset/split, a cross-dataset generalization or transfer protocol, a robustness / distribution-shift setup, a user study, and a timing protocol each get their **own** Setting — even when no separate Metric attaches to it. A `data_split` Setting per split is also what lets a multi-split metric's score rows carry a `setting_id` (see Metric above). Do not collapse several named setups into one.
 
-### Claim — interpretive finding
+### Claim — contribution claim and interpretive findings
 Fields: `statement`, `claim_kind`.
-Enumerate **every distinct interpretive finding** the evaluation supports — this "what it means" layer is easy to under-capture now that measurement shares the section, so treat completeness here as the job. Each of the following, when the paper states it, is its **own** Claim — do not merge two distinct findings into one, and do not drop a finding because it is secondary. The descriptions below name the *kind* of finding to look for; extract the paper's own finding in its own terms — do not import this wording:
+
+First, capture the **headline contribution claim**: the single sentence that states what the paper establishes — the answer to the research problem. Author an `about` edge from it to the **contribution** method (the `node_registry` node with role `contribution`); this is what lets the paper's problem→answer throughline be drawn. Its `claim_kind` is usually `comparative` ("A outperforms B") or `modeling` (a formal/architectural claim). Do not restate it as several units; one headline claim, the way the abstract states it.
+
+Then enumerate **every distinct interpretive finding** the evaluation supports — this "what it means" layer is easy to under-capture now that measurement shares the section, so treat completeness here as the job. Each of the following, when the paper states it, is its **own** Claim — do not merge two distinct findings into one, and do not drop a finding because it is secondary. The descriptions below name the *kind* of finding to look for; extract the paper's own finding in its own terms — do not import this wording:
 - **ablation / sensitivity conclusions** (`claim_kind: ablation_finding`), including fine-grained sub-findings — a saturation point where adding more of some component or step stops helping, a capacity ceiling, or which of several components contributes most.
 - **mechanism / interpretability** findings (`claim_kind: mechanistic`) — *why* the method works, or what a learned representation reveals: the reason behind a result, not merely that the result occurred.
 - **comparative analysis** findings (`claim_kind: comparative`) — an analytical "design choice A is more effective than alternative B" conclusion drawn from the results, as distinct from a deployable score row.
@@ -79,6 +84,7 @@ This section authors the claim-centric edges in `relations[]`:
 | `supports` | Claim → Claim | one local finding supports another |
 | `about` | Claim → {Method, Entity, Metric} | the finding is about that node (for an ablation, the **component** it isolates) |
 
+- For the headline contribution claim: emit `Claim --about--> mth:<contribution>`, pointing at the `node_registry` node whose role is `contribution`. (Downstream this is joined with the problem the contribution motivates to draw the closing problem→answer edge — you do not author that edge.)
 - For each ablation finding: emit `Metric --supports--> Claim` and `Claim --about--> mth:<component>`, pointing at the specific component node from `node_registry` (not the whole-system root) when the ablation isolates one part.
 - Do not author `evaluates`, `measured_on`, `part_of`, or `compares_to` — those are global structural edges already established by the relation pass.
 - `compares_to` and other structural edges are never authored here; never put a Claim on either end of a structural edge.

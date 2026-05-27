@@ -30,7 +30,7 @@ Every referenceable node plays one argumentative role, and the roles group into 
 4. **yardsticks** (how it is judged).
    - `metric`: a reported performance measure (e.g. BLEU, top-1 accuracy, F1, perplexity).
 
-Context premises, operational conditions, and claims are **not** nodes — they are created later during content extraction. Do not emit them here.
+The research problem, operational settings, and claims are **not** nodes — they are created later during content extraction. Do not emit them here.
 
 ### Two rules that decide hard cases
 

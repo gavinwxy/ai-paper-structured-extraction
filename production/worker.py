@@ -1,4 +1,4 @@
-"""Per-paper async extraction pipeline (section-ir-0.7) with intermediate saves.
+"""Per-paper async extraction pipeline (section-ir-0.8) with intermediate saves.
 
 Three stages: node census (A) -> relation pass (B) -> per-section content fill (C),
 then deterministic assembly and validation.

@@ -27,8 +27,7 @@ RELATION_PASS_SCHEMA_PATH = SCHEMAS_DIR / "relation-pass-output.schema.json"
 METADATA_SCHEMA_PATH = SCHEMAS_DIR / "metadata-output.schema.json"
 REFERENCES_SCHEMA_PATH = SCHEMAS_DIR / "references-output.schema.json"
 SECTION_SCHEMA_FILES: dict[str, str] = {
-    "context": "section-context.schema.json",
-    "claim": "section-claim.schema.json",
+    "problem": "section-problem.schema.json",
     "method": "section-method.schema.json",
     "evidence": "section-evidence.schema.json",
 }
@@ -47,11 +46,10 @@ PROVENANCE_SOURCE_RE = re.compile(r"^§(?:\d+|[A-Z]+)$")
 # §G.2). The input only anchors top-level sections, so these collapse to their §N / §X parent.
 SUBSECTION_MARKER_RE = re.compile(r"^§(\d+|[A-Z]+)(?:\.\d+)+$")
 
-SECTION_TYPES = {"context", "claim", "method", "evidence"}
-SECTION_ORDER = ["context", "claim", "method", "evidence"]
+SECTION_TYPES = {"problem", "method", "evidence"}
+SECTION_ORDER = ["problem", "method", "evidence"]
 SECTION_ALLOWED_UNIT_TYPES: dict[str, set[str]] = {
-    "context": {"Context"},
-    "claim": {"Claim"},
+    "problem": {"Problem"},
     "method": {"Method"},
     "evidence": {"Metric", "Setting", "Claim", "Entity"},
 }
@@ -60,30 +58,29 @@ SECTION_ALLOWED_UNIT_TYPES: dict[str, set[str]] = {
 # root `mth:` method): prefer re-pointing to a local unit of this type before
 # falling back to the first local non-Document unit.
 SECTION_PREFERRED_ANCHOR_TYPE: dict[str, str] = {
-    "context": "Context",
-    "claim": "Claim",
+    "problem": "Problem",
     "method": "Method",
     "evidence": "Metric",
 }
 # Census node types each content section materializes into full units. Method
 # nodes become Method units in the method section; Metric and Entity nodes become
-# units in the evidence section. Context and Claim are not census nodes — they are
-# born during content extraction.
+# units in the evidence section. Problem and Claim are not census nodes — they are
+# born during content extraction (Problem in the problem section, Claim in evidence).
 SECTION_MATERIALIZED_NODE_TYPES: dict[str, set[str]] = {
-    "context": set(),
-    "claim": set(),
+    "problem": set(),
     "method": {"Method"},
     "evidence": {"Metric", "Entity"},
 }
-# Content sections that author edges in their own `relations[]`: claim/evidence author
-# the claim-centric `about`/`supports`; context authors `motivates` (Context -> the
-# census Method/Entity it justifies). Structural edges are authored earlier by the
-# relation pass. The exact relation enum per section lives in the schema generator's
-# STAGE_C_RELATIONS_BY_SECTION.
-SECTION_AUTHORS_RELATIONS = {"context", "claim", "evidence"}
+# Content sections that author edges in their own `relations[]`: evidence authors the
+# claim-centric `about`/`supports`; problem authors `motivates` (Problem -> the census
+# Method/Entity it justifies). The closing `resolves` (Claim -> Problem) is NOT authored
+# by any section — it crosses two parallel sections, so it is synthesized in assembly
+# (_assign_resolves). Structural edges are authored earlier by the relation pass. The
+# exact relation enum per section lives in the schema generator's STAGE_C_RELATIONS_BY_SECTION.
+SECTION_AUTHORS_RELATIONS = {"problem", "evidence"}
 TYPED_ARRAY_KEYS: dict[str, str] = {
     "entities": "Entity",
-    "contexts": "Context",
+    "problems": "Problem",
     "settings": "Setting",
     "claims": "Claim",
     "metrics": "Metric",
@@ -146,7 +143,7 @@ UNIT_TYPES = {
     "Entity",
     "Method",
     "Claim",
-    "Context",
+    "Problem",
     "Setting",
     "Metric",
 }
@@ -170,13 +167,6 @@ CLAIM_KINDS = {
     "modeling",
     "ablation_finding",
     "failure_mode",
-}
-CONTEXT_KINDS = {
-    "background",
-    "gap",
-    "motivation",
-    "challenge",
-    "assumption",
 }
 # Setting kinds (reintroduced 2026-05-27). The old `condition_kind` was dropped as monotone
 # (always evaluation_setup), but Settings are in fact heterogeneous: a metric is scoped by a
@@ -217,20 +207,25 @@ RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
     "measured_on": ({"Metric"}, {"Entity"}),
     "about": ({"Claim"}, {"Method", "Entity", "Metric"}),
     "supports": ({"Metric", "Claim"}, {"Claim"}),
-    "motivates": ({"Context"}, {"Method", "Entity"}),
+    "motivates": ({"Problem"}, {"Method", "Entity"}),
+    "resolves": ({"Claim"}, {"Problem"}),
 }
 # Which stage authors each relation. The relation pass (stage B) owns the structural
 # entity<->entity edges over the full node set; content extraction (stage C) owns the
 # edges that require units born during content — the claim-centric `about`/`supports`,
-# and `motivates` from a born Context to the census Method/Entity it justifies (the
-# Context-born source plus the globally visible census target are both in hand in the
-# context call, so no forward reference is needed).
+# and `motivates` from a born Problem to the census Method/Entity it justifies (the
+# Problem-born source plus the globally visible census target are both in hand in the
+# problem call, so no forward reference is needed). `resolves` (Claim -> Problem) is the
+# closing stroke of the discovery arc; it joins two units born in *different* parallel
+# sections, so no section can author it — assembly synthesizes it (_assign_resolves) from
+# the contribution-node join, which is globally visible.
 STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates", "measured_on"}
 STAGE_C_RELATIONS = {"about", "supports", "motivates"}
+SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
 UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Document": "doc:",
-    "Context": "ctx:",
+    "Problem": "prb:",
     "Claim": "clm:",
     "Method": "mth:",
     "Entity": "ent:",
@@ -238,7 +233,7 @@ UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Metric": "met:",
 }
 ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Document": {"id", "type", "doc_id", "title", "doc_role", "provenance"},
+    "Document": {"id", "type", "doc_id", "title", "doc_role", "thesis", "provenance"},
     "Entity": {"id", "type", "name", "entity_class", "provenance"},
     "Method": {
         "id",
@@ -260,7 +255,7 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "claim_kind",
         "provenance",
     },
-    "Context": {"id", "type", "context_kind", "description", "provenance"},
+    "Problem": {"id", "type", "description", "provenance"},
     "Setting": {"id", "type", "setting_kind", "description", "provenance"},
     "Metric": {
         "id",
@@ -522,6 +517,10 @@ def _flatten_typed_arrays(section_data: dict[str, Any]) -> list[dict[str, Any]]:
 def _canonicalize_id_alias(value: Any) -> Any:
     if isinstance(value, str) and value.startswith("setting:"):
         return f"set:{value.split(':', 1)[1]}"
+    # Problem ids prefix as prb:; normalize a stray ctx: the model may emit out of habit
+    # (Context was the old type name) so its edges/anchors still resolve.
+    if isinstance(value, str) and value.startswith("ctx:"):
+        return f"prb:{value.split(':', 1)[1]}"
     return value
 
 
@@ -1200,8 +1199,13 @@ def _slugify_doc_id(text: str) -> str:
     return slug[:30].strip("_") or "paper"
 
 
-def build_document_unit(paper_content: str) -> dict[str, Any]:
-    """Build a deterministic Document unit from the paper preamble."""
+def build_document_unit(paper_content: str, thesis: str = "") -> dict[str, Any]:
+    """Build a deterministic Document unit from the paper preamble.
+
+    `thesis` is the one-sentence central contribution; assembly sources it from the census
+    `spine_summary.central_contribution` (already extracted and validated non-empty), so no
+    extra LLM call is needed. It is optional so the builder still works without a census.
+    """
     first_marker = paper_content.find("[§")
     preamble = paper_content[:first_marker] if first_marker >= 0 else paper_content[:500]
     title_match = re.search(r"^#\s+(.+)", preamble, re.MULTILINE)
@@ -1216,6 +1220,7 @@ def build_document_unit(paper_content: str) -> dict[str, Any]:
         "doc_id": doc_id,
         "title": title,
         "doc_role": "research_article",
+        "thesis": thesis,
         "provenance": [],
     }
 
@@ -1246,7 +1251,7 @@ def build_extraction_notes(
     must_nodes = census_must_node_ids(census)
     covered = must_nodes & materialized_ids
     notes: dict[str, Any] = {
-        "ir_version": "section-ir-0.7",
+        "ir_version": "section-ir-0.8",
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
         "uncertain_assignments": [],
         "skipped_spans": [],
@@ -1387,6 +1392,94 @@ def _drop_baseline_evaluates(
     return kept, warnings
 
 
+def _assign_resolves(
+    sections: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    census: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Synthesize the closing `resolves` edges of the discovery arc: Claim -> Problem.
+
+    `resolves` is a born->born edge across two *parallel* content sections (the headline Claim
+    in evidence, the Problem in the problem section), so neither section can author it without a
+    forward reference into the other's freshly-invented ids. But both ends attach to the same
+    globally-visible census `contribution` node — the Problem `motivates` it, the headline Claim
+    is `about` it — so assembly derives the edge deterministically once every section is in hand:
+
+        Problem --motivates--> [contribution] <--about-- Claim   =>   Claim --resolves--> Problem
+
+    Returns new relation dicts to append; downstream `_dedup_relations` removes any duplicates.
+    """
+    if not census:
+        return []
+    contribution_ids = {
+        node.get("node_id")
+        for node in (census.get("nodes") or [])
+        if isinstance(node, dict) and node.get("role") == CONTRIBUTION_ROLE
+    }
+    contribution_ids.discard(None)
+    if not contribution_ids:
+        return []
+
+    unit_type: dict[str, str] = {}
+    unit_prov: dict[str, list[str]] = {}
+    problem_anchor: str | None = None
+    for section in sections:
+        if section.get("section_type") == "problem":
+            anchor = section.get("anchor_id")
+            if isinstance(anchor, str):
+                problem_anchor = anchor
+        for unit in section.get("units", []) or []:
+            if isinstance(unit, dict) and isinstance(unit.get("id"), str):
+                unit_type[unit["id"]] = unit.get("type")
+                if isinstance(unit.get("provenance"), list):
+                    unit_prov[unit["id"]] = unit["provenance"]
+
+    # The Problem that motivates the contribution; fall back to the problem section's anchor,
+    # then to the sole Problem unit.
+    problem_id = next(
+        (
+            rel.get("source_id")
+            for rel in relations
+            if isinstance(rel, dict)
+            and rel.get("relation") == "motivates"
+            and rel.get("target_id") in contribution_ids
+            and unit_type.get(rel.get("source_id")) == "Problem"
+        ),
+        None,
+    )
+    if problem_id is None and unit_type.get(problem_anchor) == "Problem":
+        problem_id = problem_anchor
+    if problem_id is None:
+        problem_units = [uid for uid, t in unit_type.items() if t == "Problem"]
+        problem_id = problem_units[0] if len(problem_units) == 1 else None
+    if problem_id is None:
+        return []
+
+    new_relations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for rel in relations:
+        if (
+            not isinstance(rel, dict)
+            or rel.get("relation") != "about"
+            or rel.get("target_id") not in contribution_ids
+        ):
+            continue
+        claim_id = rel.get("source_id")
+        if unit_type.get(claim_id) != "Claim" or claim_id in seen:
+            continue
+        seen.add(claim_id)
+        prov = rel.get("provenance") or unit_prov.get(problem_id) or unit_prov.get(claim_id) or []
+        new_relations.append(
+            {
+                "source_id": claim_id,
+                "relation": "resolves",
+                "target_id": problem_id,
+                "provenance": list(prov),
+            }
+        )
+    return new_relations
+
+
 def assemble_extraction(
     census: dict[str, Any],
     stage_b_relations: list[dict[str, Any]],
@@ -1446,6 +1539,14 @@ def assemble_extraction(
     relations, warns = _drop_baseline_evaluates(relations, census)
     assembly_warnings.extend(warns)
 
+    # Synthesize the closing `resolves` edge(s) from the surviving contribution-node join,
+    # then dedup so a re-run can't double it. These are valid by construction (Claim->Problem).
+    synthesized = _assign_resolves(sections, relations, census)
+    if synthesized:
+        relations.extend(synthesized)
+        relations, warns = _dedup_relations(relations)
+        assembly_warnings.extend(warns)
+
     _assign_covers_entries(sections, all_census_node_ids(census))
 
     # Build notes from the final, repaired sections so coverage reflects assembly mutations.
@@ -1460,8 +1561,10 @@ def assemble_extraction(
         if isinstance(uncertain, list):
             uncertain.extend(assembly_warnings)
 
+    spine_summary = census.get("spine_summary") if isinstance(census, dict) else None
+    thesis = spine_summary.get("central_contribution") or "" if isinstance(spine_summary, dict) else ""
     return {
-        "document": build_document_unit(paper_content),
+        "document": build_document_unit(paper_content, thesis=thesis),
         "sections": sections,
         "relations": relations,
         "extraction_notes": extraction_notes,
@@ -2134,12 +2237,9 @@ def _validate_unit_fields(
                 issues.append(f"Claim {uid} missing {key}")
         if unit.get("claim_kind") not in CLAIM_KINDS:
             issues.append(f"Claim {uid} has invalid claim_kind: {unit.get('claim_kind')}")
-    elif utype == "Context":
-        for key in ("context_kind", "description"):
-            if not unit.get(key):
-                issues.append(f"Context {uid} missing {key}")
-        if unit.get("context_kind") not in CONTEXT_KINDS:
-            issues.append(f"Context {uid} has invalid context_kind: {unit.get('context_kind')}")
+    elif utype == "Problem":
+        if not unit.get("description"):
+            issues.append(f"Problem {uid} missing description")
     elif utype == "Setting":
         if not unit.get("description"):
             issues.append(f"Setting {uid} missing description")
@@ -2417,7 +2517,7 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
     for uid, unit in unit_index.items():
         if unit.get("type") == "Claim":
             if (
-                unit_sections.get(uid) not in {"claim", "evidence"}
+                unit_sections.get(uid) != "evidence"
                 and uid not in incoming_argumentative
             ):
                 issues.append(f"Claim {uid} lacks an incoming argumentative (supports) relation")
@@ -2440,7 +2540,7 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
                 issues.append(f"extraction_notes missing {key}")
         if notes.get("input_mode") != "node_census_pipeline":
             issues.append(f"extraction_notes has invalid input_mode: {notes.get('input_mode')}")
-        if notes.get("ir_version") != "section-ir-0.7":
+        if notes.get("ir_version") != "section-ir-0.8":
             issues.append(f"extraction_notes has invalid ir_version: {notes.get('ir_version')}")
         sections_used = notes.get("sections_used", [])
         if isinstance(sections_used, list):

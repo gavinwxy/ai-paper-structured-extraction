@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Node Census Output",
-  "description": "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type and Entity class are derived from the role), with no relations. Context, Setting, and Claim are not nodes; they are born during content extraction.",
+  "description": "Stage A of section-ir-0.8: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type and Entity class are derived from the role), with no relations. Problem, Setting, and Claim are not nodes; they are born during content extraction.",
   "required": [
     "spine_summary",
     "nodes"
@@ -23,7 +23,7 @@
         },
         "argument_flow": {
           "type": "string",
-          "description": "One sentence describing how context, claim, method, and evidence fit together."
+          "description": "One sentence describing how problem, method, and evidence fit together."
         }
       }
     },

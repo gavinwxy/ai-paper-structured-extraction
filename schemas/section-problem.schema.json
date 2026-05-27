@@ -1,7 +1,7 @@
 {
   "type": "object",
-  "title": "Context Section Output",
-  "description": "Structured output schema for the context section content extraction. Typed unit arrays: contexts. Valid unit types: Context. Authors relations.",
+  "title": "Problem Section Output",
+  "description": "Structured output schema for the problem section content extraction. Typed unit arrays: problems. Valid unit types: Problem. Authors relations.",
   "required": [
     "section"
   ],
@@ -12,7 +12,7 @@
       "required": [
         "section_type",
         "anchor_id",
-        "contexts",
+        "problems",
         "relations"
       ],
       "additionalProperties": false,
@@ -20,7 +20,7 @@
         "section_type": {
           "type": "string",
           "enum": [
-            "context"
+            "problem"
           ]
         },
         "anchor_id": {
@@ -28,16 +28,15 @@
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
         },
-        "contexts": {
+        "problems": {
           "type": "array",
-          "description": "Context units extracted for this section",
+          "description": "Problem units extracted for this section",
           "items": {
             "type": "object",
             "required": [
               "id",
               "type",
               "provenance",
-              "context_kind",
               "description"
             ],
             "additionalProperties": false,
@@ -50,7 +49,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Context"
+                  "Problem"
                 ],
                 "description": "Unit type discriminator"
               },
@@ -61,27 +60,16 @@
                   "type": "string"
                 }
               },
-              "context_kind": {
-                "type": "string",
-                "enum": [
-                  "background",
-                  "gap",
-                  "motivation",
-                  "challenge",
-                  "assumption"
-                ],
-                "description": "Argumentative role of the context premise"
-              },
               "description": {
                 "type": "string",
-                "description": "Single-sentence prose statement of the premise"
+                "description": "The research problem in one or two sentences \u2014 the unresolved question or unmet need the paper addresses, with the necessary background folded into the prose"
               }
             }
           }
         },
         "relations": {
           "type": "array",
-          "description": "Edges this context section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
+          "description": "Edges this problem section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
           "items": {
             "type": "object",
             "required": [
@@ -102,7 +90,7 @@
                 "enum": [
                   "motivates"
                 ],
-                "description": "motivates = a Context premise motivates the Method/Entity it justifies."
+                "description": "motivates = a Problem motivates the Method/Entity that addresses it."
               },
               "target_id": {
                 "type": "string",

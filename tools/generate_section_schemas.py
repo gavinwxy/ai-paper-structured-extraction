@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate per-section typed-array schemas plus the node-census and relation-pass schemas.
 
-section-ir-0.7: the pipeline is three stages — node census (stage A), relation pass
+section-ir-0.8: the pipeline is three stages — node census (stage A), relation pass
 (stage B), and per-section content fill (stage C). This script is the single source for
 every structured-output schema, generated from the controlled vocabularies in
 ``section_pipeline.py`` so the schemas never drift from the runtime contract.
@@ -21,7 +21,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from section_pipeline import (  # noqa: E402
     CLAIM_KINDS,
     COMPARISON_DIRECTIONS,
-    CONTEXT_KINDS,
     ENTITY_CLASSES,
     METHOD_KINDS,
     NODE_ROLES,
@@ -34,8 +33,7 @@ ID_PATTERN = r"^[a-z][a-z0-9_]*:[a-z0-9_]+$"
 
 # Typed unit arrays each content section (stage C) returns.
 SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
-    "context": ["contexts"],
-    "claim": ["claims"],
+    "problem": ["problems"],
     "method": ["methods"],
     "evidence": ["metrics", "settings", "claims", "entities"],
 }
@@ -52,7 +50,7 @@ OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
 
 ARRAY_TYPE_NAMES: dict[str, str] = {
     "entities": "Entity",
-    "contexts": "Context",
+    "problems": "Problem",
     "settings": "Setting",
     "claims": "Claim",
     "metrics": "Metric",
@@ -70,26 +68,25 @@ ROLE_ORDER = [
 SALIENCE_ORDER = ["must", "should"]
 STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates", "measured_on"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
-# context authors only `motivates` (Context -> the census Method/Entity it justifies);
-# claim/evidence author the claim-centric `about`/`supports`. Scoping the enum per section
-# keeps each section's contract tight — it matters most for json_object models (DeepSeek),
-# whose only constraint is the in-prompt contract, not strict decoding.
+# problem authors only `motivates` (Problem -> the census Method/Entity it justifies);
+# evidence authors the claim-centric `about`/`supports`. The closing `resolves` (Claim ->
+# Problem) is synthesized in assembly, not authored by any section, so it appears in no
+# stage-C enum. Scoping the enum per section keeps each section's contract tight — it matters
+# most for json_object models (DeepSeek), whose only constraint is the in-prompt contract.
 STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
-    "context": ["motivates"],
-    "claim": ["about", "supports"],
+    "problem": ["motivates"],
     "evidence": ["about", "supports"],
 }
 # One-line gloss per stage-C relation, joined into the schema field description.
 STAGE_C_RELATION_GLOSS: dict[str, str] = {
     "about": "about = a Claim is about a Method/Entity/Metric",
     "supports": "supports = a Metric or Claim supports a Claim",
-    "motivates": "motivates = a Context premise motivates the Method/Entity it justifies",
+    "motivates": "motivates = a Problem motivates the Method/Entity that addresses it",
 }
 
 ENUM_ORDER: dict[str, list[str]] = {
     "role": ROLE_ORDER,
     "claim_kind": ["descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode"],
-    "context_kind": ["background", "gap", "motivation", "challenge", "assumption"],
     "entity_class": ["dataset", "benchmark", "task"],
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
@@ -99,7 +96,6 @@ ENUM_ORDER: dict[str, list[str]] = {
 ENUM_VALUES: dict[str, set[str]] = {
     "role": NODE_ROLES,
     "claim_kind": CLAIM_KINDS,
-    "context_kind": CONTEXT_KINDS,
     "entity_class": ENTITY_CLASSES,
     "method_kind": METHOD_KINDS,
     "comparison_direction": COMPARISON_DIRECTIONS,
@@ -291,10 +287,12 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "name": string_schema("Name of the entity"),
             "entity_class": inline_enum_schema(entity_classes, "Classification of the entity"),
         },
-        "Context": {
-            **base_unit_properties("Context"),
-            "context_kind": enum_schema("context_kind", "Argumentative role of the context premise"),
-            "description": string_schema("Single-sentence prose statement of the premise"),
+        "Problem": {
+            **base_unit_properties("Problem"),
+            "description": string_schema(
+                "The research problem in one or two sentences — the unresolved question or unmet "
+                "need the paper addresses, with the necessary background folded into the prose"
+            ),
         },
         "Setting": {
             **base_unit_properties("Setting"),
@@ -435,9 +433,9 @@ def node_census_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Node Census Output",
         "description": (
-            "Stage A of section-ir-0.7: a flat census of every argumentatively load-bearing "
+            "Stage A of section-ir-0.8: a flat census of every argumentatively load-bearing "
             "node, each tagged with one granular role (its type and Entity class are derived "
-            "from the role), with no relations. Context, Setting, and Claim are not nodes; "
+            "from the role), with no relations. Problem, Setting, and Claim are not nodes; "
             "they are born during content extraction."
         ),
         "required": ["spine_summary", "nodes"],
@@ -451,7 +449,7 @@ def node_census_schema() -> dict[str, Any]:
                 "properties": {
                     "central_contribution": string_schema("One sentence naming the main contribution."),
                     "argument_flow": string_schema(
-                        "One sentence describing how context, claim, method, and evidence fit together."
+                        "One sentence describing how problem, method, and evidence fit together."
                     ),
                 },
             },
@@ -503,7 +501,7 @@ def relation_pass_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Relation Pass Output",
         "description": (
-            "Stage B of section-ir-0.7: structural edges over the full node set. Sees every "
+            "Stage B of section-ir-0.8: structural edges over the full node set. Sees every "
             "node, so cross-section composition and metric-subject binding are captured here "
             "with no forward references."
         ),

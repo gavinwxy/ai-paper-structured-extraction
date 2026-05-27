@@ -27,8 +27,8 @@ Output only the current section. Do not output `document`, `sections`, `relation
 ## Two jobs: materialize census nodes, and create born units
 
 A content section does two things:
-1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The method section materializes Method nodes; the evidence section materializes Metric and Entity nodes; context and claim sections materialize no census nodes.
-2. **Create** the born units the section is responsible for — units that are not census nodes: Context (context section), Claim (claim and evidence sections), Setting (evidence section).
+1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The method section materializes Method nodes; the evidence section materializes Metric and Entity nodes; the problem section materializes no census nodes.
+2. **Create** the born units the section is responsible for — units that are not census nodes: Problem (problem section), Claim (evidence section), Setting (evidence section).
 
 `section_focus` tells you which of these your section does. You may also introduce a node the census missed: give it a fresh, correctly-prefixed id and extract it as a full unit. `anchor_id` must name a unit you define in this section, and it must not be a Document.
 
@@ -42,7 +42,7 @@ A content section does two things:
 
 | unit type | prefix |
 |---|---|
-| Context | `ctx:` |
+| Problem | `prb:` |
 | Claim | `clm:` |
 | Method | `mth:` |
 | Entity | `ent:` |
@@ -81,12 +81,15 @@ Plus the type-specific fields named in `section_focus`, directly on the unit —
 
 ## Relations
 
-The structural edges (`part_of`, `compares_to`, `evaluates`, `measured_on`) are already in `relations` — do not restate them. The only edges a content section authors are the **claim-centric** ones, and only the claim and evidence sections author them:
+The structural edges (`part_of`, `compares_to`, `evaluates`, `measured_on`) are already in `relations` — do not restate them. The only edges a content section authors are these, and `section_focus` tells you which (if any) your section authors — the problem section authors `motivates`; the evidence section authors the claim-centric `about`/`supports`:
 
 | relation | source → target | meaning |
 |---|---|---|
+| `motivates` | Problem → {Method, Entity} | the problem is what the node addresses |
 | `about` | Claim → {Method, Entity, Metric} | the Claim is about that node |
 | `supports` | {Metric, Claim} → Claim | the source is evidence for the target Claim |
+
+The closing `resolves` edge (a Claim that answers the Problem) is **not** authored by any section — it is synthesized downstream from the contribution-node join.
 
 Put these in the section's `relations[]`. Endpoints may reference any unit by id, including nodes defined in another section (the edge list is global) — but never invent an id. When a section's schema has no `relations` field, it authors none. When unsure an edge is valid, leave it out — a missing edge is recoverable downstream, an invalid one is discarded anyway.
 
@@ -115,7 +118,7 @@ Return a single JSON object:
 }
 
 - Use the typed arrays present in your section schema; emit an empty array `[]` for an allowed type that has no unit in this section.
-- Include `relations` only when your section schema exposes it (claim and evidence); emit `[]` when there are no claim-centric edges.
+- Include `relations` only when your section schema exposes it (problem and evidence); emit `[]` when there are no edges to author.
 - Use the full paper as source context; extract only the role of the current section.
 - Output a single JSON object with key `section`. No markdown, explanations, notes, or extra top-level keys.
 
@@ -161,7 +164,7 @@ Extract ONLY the current section, following `section_focus`:
 - Materialize the census nodes this section owns into full units (reuse each node_id as the unit id), and create the born units this section is responsible for.
 - Place each unit in the array matching its type, with only the fields its contract names.
 - Reference any node in `node_registry` by id; the structural `relations` are already established — do not restate them.
-- Emit only the claim-centric edges (`about`, `supports`) your section authors, in `relations`.
+- Emit only the edges your section authors (problem: `motivates`; evidence: `about`/`supports`), in `relations`.
 
 Output a single JSON object with key: section.
 ```

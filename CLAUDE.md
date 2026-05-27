@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository implements and documents a **4-section scientific literature extraction pipeline** (section-ir-0.7).
+This repository implements and documents a **3-section scientific literature extraction pipeline** (section-ir-0.8).
 
-The active system extracts a paper's argumentative spine into section-IR:
+The active system extracts a paper as a **scientific-discovery throughline** into section-IR:
 
-`context and gap -> claim -> method -> evidence`
+`problem -> method -> evidence`
 
-`evidence` is the merged experiment+analysis section: it carries both what was measured and what those measurements mean.
+`problem` is the single research problem the paper addresses (the old multi-tag `context` section, collapsed to one trunk). `method` is the technical apparatus. `evidence` is the merged experiment+analysis section: it carries both what was measured and what those measurements mean — and it now also hosts the **headline contribution claim** (the answer the evidence establishes), so there is no separate `claim` section. The discovery arc closes with a synthesized `resolves` edge from that headline claim back to the problem, and the one-sentence contribution is also lifted onto the Document as `thesis`.
 
 ## Active Architecture
 
@@ -29,32 +29,32 @@ The pipeline is **three-stage** (`node census -> relation pass -> content fill`)
 
 3. **Content fill (stage C)**: `prompts/section-extraction/section-extraction-pass.md`
    - `section-extraction-pass.md` is a **slim shared core**: only the rules common to every section (identifiers, provenance format, the output envelope, universal hard constraints). It is byte-identical across all section calls, and the paper/spine_summary/node_registry/relations blocks precede `section_focus`, so the paper text stays in the cross-section prompt cache.
-   - Four sections run in parallel (`context`, `claim`, `method`, `evidence`), each returning `section`. Each materializes the census nodes it owns (reusing `node_id` as the unit id) and creates its born units; `claim` and `evidence` author claim-centric edges (`about`, `supports`) and `context` authors `motivates` (born Context → the census Method/Entity it justifies) in a per-section `relations[]`.
+   - Three sections run in parallel (`problem`, `method`, `evidence`), each returning `section`. Each materializes the census nodes it owns (reusing `node_id` as the unit id) and creates its born units; `evidence` authors claim-centric edges (`about`, `supports`) and `problem` authors `motivates` (born Problem → the census Method/Entity it justifies) in a per-section `relations[]`. The closing `resolves` edge (Claim → Problem) is **not** authored by any section — it joins two units born in different parallel sections, so assembly synthesizes it (`_assign_resolves`) from the contribution-node join.
    - Receives the injected schema constraint, `spine_summary`, `node_registry` (all nodes), the global `relations[]` from stage B, and `section_focus`.
-   - Per-section modules (`prompts/section-extraction/section-modules/{context,claim,method,evidence}.md`) are **self-contained section contracts** injected as `section_focus`: allowed unit types and field contracts, the controlled vocabularies and relation subset used, a worked example, and section-specific rules — none of it duplicated in the shared core.
+   - Per-section modules (`prompts/section-extraction/section-modules/{problem,method,evidence}.md`) are **self-contained section contracts** injected as `section_focus`: allowed unit types and field contracts, the controlled vocabularies and relation subset used, a worked example, and section-specific rules — none of it duplicated in the shared core.
 
 Assembly and validation run in Python (`section_pipeline.py`). The default entrypoint is `run_pipeline()`.
 
 Structured output is **model-adaptive** (see "Model compatibility" below). For models that support strict JSON-schema decoding (the Gemini/OpenAI-compatible proxy) every stage sends `response_format` with `strict: True`. For json_object-only models (official DeepSeek), `response_format` is `{"type": "json_object"}` and the same schema is rendered into the prompt as an OUTPUT FORMAT CONTRACT instead. Stage schemas: `schemas/node-census-output.schema.json`, `schemas/relation-pass-output.schema.json`, and the per-section `schemas/section-{section}.schema.json`.
 
-Content responses use typed unit arrays instead of a flat `units[]` array: `contexts` for context, `claims` for claim, `methods` for method, and `metrics`/`conditions`/`claims`/`entities` for evidence. `section_pipeline.py` flattens these typed arrays into `section["units"]` during assembly, and lifts each section's `relations[]` plus the stage-B edges into a single top-level `relations[]`.
+Content responses use typed unit arrays instead of a flat `units[]` array: `problems` for problem, `methods` for method, and `metrics`/`settings`/`claims`/`entities` for evidence. `section_pipeline.py` flattens these typed arrays into `section["units"]` during assembly, and lifts each section's `relations[]` plus the stage-B edges (and the synthesized `resolves` edges) into a single top-level `relations[]`. The Document's `thesis` is filled from the census `spine_summary.central_contribution` during assembly (no extra LLM call).
 
 Implementation entry point: `section_pipeline.py`.
 
 Authoritative validation: Python `validate_section_ir()` in `section_pipeline.py` is the runtime contract.
 
-Default section schemas: `schemas/section-context.schema.json`, `section-claim.schema.json`, `section-method.schema.json`, `section-evidence.schema.json`.
+Default section schemas: `schemas/section-problem.schema.json`, `section-method.schema.json`, `section-evidence.schema.json`.
 
 Regenerate all schemas (per-section + census + relation pass) with `python tools/generate_section_schemas.py`. They are generated from constants in `section_pipeline.py`; never hand-edit the JSON.
 
-Per-section focus modules: `prompts/section-extraction/section-modules/context.md`, `claim.md`, `method.md`, `evidence.md`.
+Per-section focus modules: `prompts/section-extraction/section-modules/problem.md`, `method.md`, `evidence.md`.
 
-Design reference: `docs/section-ir-0.7-redesign.md` (full spec); `docs/section-ir-design.md` (legacy 0.6).
+Design reference: `docs/section-ir-0.7-redesign.md` (0.7 spec); `docs/section-ir-0.8-redesign.md` (0.8 spine delta); `docs/section-ir-design.md` (legacy 0.6).
 
 ## Section-IR Rules
 
 - Units have flat structure — type-specific fields sit directly on the unit, no `payload` wrapper.
-- Raw content responses group units into typed arrays: `contexts`, `claims`, `methods`, `metrics`, `conditions`, and `entities` as allowed by each section schema.
+- Raw content responses group units into typed arrays: `problems`, `methods`, `metrics`, `settings`, `claims`, and `entities` as allowed by each section schema.
 - Assembled extraction sections include flattened `units[]` for downstream validation and rendering.
 - `section_type` exists only on `sections`, never on individual units.
 - Section anchors use `anchor_id`, not inline `anchor` objects.
@@ -69,17 +69,18 @@ Design reference: `docs/section-ir-0.7-redesign.md` (full spec); `docs/section-i
 - `Method` optional fields (omitted entirely when unsupported, never invented): `inputs[]`, `outputs[]`, `formulas[]` (each `{name, expression, symbols[]}`), and `objective_function` (`{expression, description, symbols[]}`). Each `symbols[]` entry is `{symbol, description}` glossing one token of the equation; the array may be empty when the expression introduces no symbols. Only `name`, `method_kind`, `description`, and `implementation_notes` are required. When present, every `formulas[]` entry and `objective_function` must carry a non-empty `expression`, and each `symbols[]` entry must carry a non-empty `symbol` and `description`.
 - Exactly one census node has `role: contribution` (the document-level root method). `normalize_census_nodes` promotes the first must-method when none is tagged and demotes extras to `component`, so a missing contribution no longer hard-fails the census.
 - Assembly merges the stage-B relations with each content section's `relations[]` into the global list, then performs lossy-but-safe repairs logged to `extraction_notes.uncertain_assignments`: `_sanitize_unit_text` strips C0 control characters (incl. the NULL bytes some models emit for `·`/`×`) from unit string values; `_dedup_entities` merges same-name Entities (rewriting relation endpoints); `_dedup_unit_ids` drops later duplicate definitions; `_drop_empty_sections` removes unit-less sections; `_normalize_provenance_markers` collapses fine-grained subsection markers to their top-level parent — both numeric body sections (`§4.3`→`§4`) and lettered appendices (`§C.1`→`§C`); a bare lettered appendix (`§D`) is itself a valid provenance marker (`PROVENANCE_SOURCE_RE` accepts `§N` or `§X`), so appendix-sourced units no longer fail validation (table/figure refs like `§Table 3` still do); `_repair_section_anchors` re-points non-local anchors; `_repair_score_refs` blanks dangling/wrong-type `scores[].system_id`/`setting_id`; `_dedup_relations`/`_drop_dangling_relations`/`_drop_invalid_relations` clean the global edge list against the relation matrix once the full unit set is known; `_drop_baseline_evaluates` drops `evaluates` edges pointing at a `compared_against` baseline (census-driven, so a metric's primary subject stays recoverable); `_assign_covers_entries` recomputes the census trace. Coverage is measured against census `must` nodes; an unmaterialized must-node surfaces in `extraction_notes.uncovered_items`.
-- IR version: `section-ir-0.7`. `extraction_notes.input_mode` is `node_census_pipeline`.
+- The headline contribution claim is born in the **evidence** section (there is no `claim` section); it carries an `about` edge to the contribution method. Assembly synthesizes the closing `resolves` edge (that headline Claim → the Problem the contribution motivates) from the contribution-node join — no section authors it. The Document `thesis` is the census `spine_summary.central_contribution`, lifted on at assembly.
+- IR version: `section-ir-0.8`. `extraction_notes.input_mode` is `node_census_pipeline`.
 
 Allowed unit types:
 
-`Document`, `Entity`, `Method`, `Claim`, `Context`, `Setting`, `Metric`
+`Document`, `Entity`, `Method`, `Claim`, `Problem`, `Setting`, `Metric`
 
-`Method`, `Entity`, and `Metric` are census nodes (role-tagged in stage A, with `type` derived from `role`); `Context`, `Setting`, and `Claim` are born during content fill.
+`Method`, `Entity`, and `Metric` are census nodes (role-tagged in stage A, with `type` derived from `role`); `Problem`, `Setting`, and `Claim` are born during content fill.
 
-## Context vs. Setting
+## Problem vs. Setting
 
-- `Context` (argumentative premise): `context_kind ∈ {background, gap, motivation, challenge, assumption}`, fields `{context_kind, description}`.
+- `Problem` (the research problem): fields `{description}` — one or two sentences naming the unresolved question or unmet need, with background folded into the prose. **One trunk** per paper; it replaced the old multi-tag `Context` (whose `context_kind ∈ {background, gap, motivation, challenge, assumption}` taxonomy was dropped as over-defined). It is born in the `problem` section and authors a `motivates` edge to the contribution.
 - `Setting` (operational constraint): fields `{setting_kind, description}` — a single sentence naming the concrete setup that scopes a metric. `setting_kind ∈ {data_split, inference_protocol, training_config, ensembling, population}` names which axis it constrains (reintroduced 2026-05-27: the old monotone `condition_kind` was always `evaluation_setup`, but Settings are genuinely heterogeneous — a `training_config`/`ensembling` setup is not interchangeable with a `data_split`, and an ensemble number is not a fair peer of a single-model one). A `data_split` Setting per split is also what lets a multi-split metric's score rows carry a `setting_id`.
 
 Archived legacy types such as `Relation`, `Category`, `SystemModel`, `MethodArtifact`, `Proposition`, and `RoleBinding` are not valid in active section-IR output.
@@ -94,11 +95,12 @@ Archived legacy types such as `Relation`, `Category`, `SystemModel`, `MethodArti
 | `compares_to` | {Method, Entity, Metric} → same | relation pass (B) |
 | `evaluates` | Metric → Method | relation pass (B) |
 | `measured_on` | Metric → Entity (dataset/benchmark) | relation pass (B) |
-| `about` | Claim → {Method, Entity, Metric} | content (claim/evidence) |
-| `supports` | {Metric, Claim} → Claim | content (claim/evidence) |
-| `motivates` | Context → {Method, Entity} | content (context) |
+| `about` | Claim → {Method, Entity, Metric} | content (evidence) |
+| `supports` | {Metric, Claim} → Claim | content (evidence) |
+| `motivates` | Problem → {Method, Entity} | content (problem) |
+| `resolves` | Claim → Problem | assembly (synthesized) |
 
-The matrix lives in `RELATION_MATRIX` in `section_pipeline.py`. (`occurs_under` was removed in 0.6; `subject_id`/`target_ids`/`evaluated_on`/`components` were promoted to global edges in 0.7.) `motivates` (added 2026-05-27) connects the argumentative spine's first arrow — the `gap` Context to the contribution it justifies — and unlike the old `occurs_under` it survives parallel sectioning because the context section authors it from a born Context to a **census** node (visible in every section's `node_registry`), never to another born unit. The relation enum is scoped per section in the schema generator's `STAGE_C_RELATIONS_BY_SECTION` (context = `motivates` only).
+The matrix lives in `RELATION_MATRIX` in `section_pipeline.py`. (`occurs_under` was removed in 0.6; `subject_id`/`target_ids`/`evaluated_on`/`components` were promoted to global edges in 0.7.) `motivates` connects the discovery arc's first arrow — the Problem to the contribution it justifies — and survives parallel sectioning because the problem section authors it from a born Problem to a **census** node (visible in every section's `node_registry`), never to another born unit. `resolves` (added in 0.8) is the closing arrow — the headline Claim back to the Problem — but it joins two units born in *different* parallel sections, so no section can author it; assembly's `_assign_resolves` derives it deterministically (`Problem --motivates--> [contribution] <--about-- Claim` ⇒ `Claim --resolves--> Problem`). The stage-C relation enum is scoped per section in the schema generator's `STAGE_C_RELATIONS_BY_SECTION` (problem = `motivates`; evidence = `about`/`supports`); `resolves` appears in no stage-C enum.
 
 ## Test Corpus
 

@@ -16,16 +16,14 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-SECTION_ORDER = ["context", "claim", "method", "evidence"]
+SECTION_ORDER = ["problem", "method", "evidence"]
 SECTION_COLORS = {
-    "context": "#6b7280",
-    "claim": "#ef4444",
+    "problem": "#6b7280",
     "method": "#3b82f6",
     "evidence": "#22c55e",
 }
 SECTION_LABELS = {
-    "context": "Context & Background",
-    "claim": "Claims & Contributions",
+    "problem": "Research Problem",
     "method": "Method",
     "evidence": "Evidence (Experiments & Analysis)",
 }
@@ -34,7 +32,7 @@ TYPE_SHAPES = {
     "Metric": "square",
     "Method": "hexagon",
     "Entity": "dot",
-    "Context": "star",
+    "Problem": "star",
     "Setting": "triangleDown",
     "Document": "database",
 }
@@ -129,7 +127,7 @@ def build_unit_index(data: dict) -> dict[str, dict]:
 def build_unit_section_map(data: dict) -> dict[str, str]:
     unit_section: dict[str, str] = {}
     for section in data.get("sections", []):
-        st = section.get("section_type", "context")
+        st = section.get("section_type", "problem")
         anchor_id = section.get("anchor_id")
         if anchor_id:
             unit_section.setdefault(anchor_id, st)
@@ -222,7 +220,7 @@ def _norm(s: str) -> str:
 def group_sections_by_type(data: dict) -> dict[str, list[dict]]:
     groups: dict[str, list[dict]] = {s: [] for s in SECTION_ORDER}
     for section in data.get("sections", []):
-        st = section.get("section_type", "context")
+        st = section.get("section_type", "problem")
         groups.setdefault(st, []).append(section)
     return groups
 
@@ -239,7 +237,7 @@ def build_spine_graph(
     # Collect anchors grouped by section type (preserving order within same type)
     anchors_by_section: dict[str, list[str]] = {st: [] for st in SECTION_ORDER}
     for section in data.get("sections", []):
-        st = section.get("section_type", "context")
+        st = section.get("section_type", "problem")
         aid = section.get("anchor_id")
         if aid and aid not in anchors_by_section.get(st, []):
             anchors_by_section.setdefault(st, []).append(aid)
@@ -260,7 +258,7 @@ def build_spine_graph(
         unit = unit_index.get(aid)
         if not unit or unit.get("type") == "Document":
             continue
-        st = unit_section.get(aid, "context")
+        st = unit_section.get(aid, "problem")
         label = unit.get("name") or unit.get("statement") or unit.get("description") or aid
         if len(label) > 50:
             label = label[:47] + "..."
@@ -515,7 +513,7 @@ def render_scores(
 
 
 META_FIELDS = {"id", "type", "provenance"}
-TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "context_kind", "setting_kind", "comparison_direction", "unit")
+TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "setting_kind", "comparison_direction", "unit")
 PROSE_FIELDS = ("description", "implementation_notes")
 # Fields rendered by dedicated logic (or consumed as the card label); never echoed as leftover.
 RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setting_ids", "statement", "name"}
@@ -526,7 +524,7 @@ def render_unit_card(
     unit_index: dict,
     *,
     is_anchor: bool = False,
-    section_type: str = "context",
+    section_type: str = "problem",
     method_roles: dict[str, str] | None = None,
     baseline_keys: set[str] | None = None,
     baseline_ids: set[str] | None = None,
@@ -713,10 +711,18 @@ def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
     else:
         title = doc.get("title", "Untitled")
 
+    thesis = (doc.get("thesis") or "").strip()
+    thesis_html = (
+        f'<div class="thesis"><span class="thesis-label">Thesis</span> {escape(thesis)}</div>'
+        if thesis
+        else ""
+    )
+
     return f"""
     <div class="paper-header">
       <h1>{escape(title)}</h1>
       {authors_html}
+      {thesis_html}
       {resources_html}
     </div>"""
 
@@ -992,6 +998,8 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .paper-header h1 {{ font-size: 1.6rem; font-weight: 700; margin-bottom: 8px; color: #f8fafc; }}
 .authors {{ font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; line-height: 1.8; }}
 .affil {{ font-size: 0.75rem; color: #64748b; }}
+.thesis {{ font-size: 0.9rem; color: #cbd5e1; margin: 8px 0; padding-left: 10px; border-left: 3px solid #3b82f6; line-height: 1.5; }}
+.thesis-label {{ font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #3b82f6; margin-right: 6px; }}
 .resources {{ display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }}
 .resource-link {{ font-size: 0.8rem; color: #3b82f6; text-decoration: none; padding: 3px 10px; background: #1e293b; border-radius: 4px; border: 1px solid #334155; }}
 .resource-link:hover {{ background: #334155; }}
