@@ -41,6 +41,8 @@ Examples:
 - "Deep networks have advanced many fields [1,2,3]." -> roles ["background"], stance "neutral", salience "peripheral", provides_name "".
 
 When the relationship is unclear, use roles ["related"], stance "neutral", salience "peripheral", provides_name "". Do not invent a relationship.
+
+Output a single JSON object with key: references (an array of reference entries; empty array when the paper has none). Output only that JSON object — no markdown code fences or commentary.
 ```
 
 ## User Prompt

@@ -153,6 +153,8 @@ Return a single JSON object:
     }
   ]
 }
+
+Output only the JSON object described above — no markdown code fences, no commentary before or after it.
 ```
 
 ## User Prompt Template

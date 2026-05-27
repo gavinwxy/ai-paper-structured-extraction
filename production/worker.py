@@ -23,6 +23,10 @@ from section_pipeline import (
     load_section_schema,
     load_section_module,
     build_response_format,
+    schema_to_prompt_spec,
+    _augment_prompt_for_json_object,
+    _structured_output_mode,
+    _supports_prompt_cache_kwargs,
     normalize_census_nodes,
     validate_census,
     build_node_registry,
@@ -79,7 +83,14 @@ async def _run_paper_pipeline(
     try:
         paper_content = paper_path.read_text(encoding="utf-8")
         logger.info("[%s] Starting extraction (%d chars)", paper_id, len(paper_content))
-        cache_key = build_prompt_cache_key(config.model, paper_content)
+        # The proxy prompt-cache routing key is unsupported on official DeepSeek (caching is
+        # automatic, unknown params 400) — None there, so every stage's `prompt_cache_key=cache_key`
+        # is skipped by the client's `if prompt_cache_key:` guard.
+        cache_key = (
+            build_prompt_cache_key(config.model, paper_content)
+            if _supports_prompt_cache_kwargs(config.model)
+            else None
+        )
 
         # Phase 1 (stage A): node census + metadata + references in parallel
         census_result, metadata_result, references_result = await asyncio.gather(
@@ -203,6 +214,7 @@ async def _run_census(
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = load_node_census_schema()
     resp_fmt = build_response_format(schema, name="node_census_output", model=config.model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
     raw = await llm.call(
         model=config.model,
@@ -232,6 +244,7 @@ async def _run_relation_pass(
     )
     schema = load_relation_pass_schema()
     resp_fmt = build_response_format(schema, name="relation_pass_output", model=config.model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
     raw = await llm.call(
         model=config.model,
@@ -255,6 +268,7 @@ async def _run_metadata(
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = json.loads(METADATA_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="metadata_output", model=config.model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
     raw = await llm.call(
         model=config.model,
@@ -277,6 +291,7 @@ async def _run_references(
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="references_output", model=config.model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
     raw = await llm.call(
         model=config.model,
@@ -347,6 +362,15 @@ async def _extract_single_content_section(
 ) -> dict[str, Any]:
     """Extract a single content section with retry logic."""
     section_module = load_section_module(section_type)
+    section_schema = load_section_schema(section_type)
+    resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=config.model)
+
+    # json_object models (DeepSeek): fold the schema contract into section_focus so the shared
+    # user-prompt prefix (paper/registry/relations) stays byte-identical across sections and the
+    # cross-section cache stays warm. The system prompt is shared and stays untouched.
+    if _structured_output_mode(config.model) == "json_object":
+        section_module = f"{section_module}\n\n{schema_to_prompt_spec(section_schema)}"
+
     user_prompt = render_content_user_prompt(
         paper_content,
         section_type=section_type,
@@ -355,8 +379,6 @@ async def _extract_single_content_section(
         relations=relations,
         spine_summary=spine_summary,
     )
-    section_schema = load_section_schema(section_type)
-    resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=config.model)
 
     last_error: Exception | None = None
     for attempt in range(MAX_SECTION_RETRIES + 1):

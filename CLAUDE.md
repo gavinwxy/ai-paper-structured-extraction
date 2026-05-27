@@ -35,7 +35,7 @@ The pipeline is **three-stage** (`node census -> relation pass -> content fill`)
 
 Assembly and validation run in Python (`section_pipeline.py`). The default entrypoint is `run_pipeline()`.
 
-Every stage uses API-level structured output (`response_format` with `strict: True`). Stage schemas: `schemas/node-census-output.schema.json`, `schemas/relation-pass-output.schema.json`, and the per-section `schemas/section-{section}.schema.json`.
+Structured output is **model-adaptive** (see "Model compatibility" below). For models that support strict JSON-schema decoding (the Gemini/OpenAI-compatible proxy) every stage sends `response_format` with `strict: True`. For json_object-only models (official DeepSeek), `response_format` is `{"type": "json_object"}` and the same schema is rendered into the prompt as an OUTPUT FORMAT CONTRACT instead. Stage schemas: `schemas/node-census-output.schema.json`, `schemas/relation-pass-output.schema.json`, and the per-section `schemas/section-{section}.schema.json`.
 
 Content responses use typed unit arrays instead of a flat `units[]` array: `contexts` for context, `claims` for claim, `methods` for method, and `metrics`/`conditions`/`claims`/`entities` for evidence. `section_pipeline.py` flattens these typed arrays into `section["units"]` during assembly, and lifts each section's `relations[]` plus the stage-B edges into a single top-level `relations[]`.
 
@@ -135,6 +135,25 @@ If the primary base URL is unreachable, retry the smoke test with:
 ```
 
 Outputs are written to `tests/section-extraction-outputs/`.
+
+## Model compatibility (structured output)
+
+The pipeline detects the model's structured-output capability from the model name (`_structured_output_mode` in `section_pipeline.py`), mirroring the existing Gemini schema-sanitization pattern:
+
+- **json_schema mode** (default — any model whose name is not `deepseek*`, e.g. the Gemini/OpenAI-compatible proxy): the per-stage JSON schema is sent in `response_format` with `strict: True`, so decoding is schema-constrained. Prompts are unchanged.
+- **json_object mode** (`deepseek*`, e.g. official `deepseek-v4-pro` on `https://api.deepseek.com`): the official DeepSeek API does **not** accept `response_format: json_schema`. So the pipeline sends `{"type": "json_object"}` and renders the *same* schema into the prompt as an OUTPUT FORMAT CONTRACT (`schema_to_prompt_spec`), spelling out keys, required/optional fields, enum values, and id patterns — the constraints strict decoding used to enforce. The contract is derived from the schema, so it never drifts. It is appended to the **system prompt** for the four single-shot calls (census, relation pass, metadata, references) and folded into **`<section_focus>`** for content sections, which keeps the cross-section prompt-cache prefix (paper/registry/relations) byte-identical. DeepSeek also rejects the proxy `prompt_cache_key`/`prompt_cache_retention` kwargs (its caching is automatic), so `_call_llm` omits them for `deepseek*`. DeepSeek `json_object` also requires the literal word "json" in the prompt — satisfied by the contract header and the existing "Output a single JSON object" instructions.
+
+To run against official DeepSeek, point the smoke test at it (DeepSeek has a smaller output-token ceiling than the proxy, so lower `--max-tokens`/`--section-max-tokens` if a call 400s or truncates):
+
+```bash
+.venv/bin/python tests/test_section_extraction.py --papers 4 5 \
+  --model deepseek-v4-pro --base-url https://api.deepseek.com \
+  --max-tokens 8192 --section-max-tokens 8192
+```
+
+`API-KEY` in `.env` must be the DeepSeek key. The harness prints the detected `Structured output:` mode at startup.
+
+The async batch path (`production/`, run via `python -m production <in> <out> --model deepseek-v4-pro --base-url https://api.deepseek.com --max-tokens 8192`) shares the same detection: `production/worker.py` augments each stage's prompt with the contract in json_object mode and gates the proxy cache key to `None` for `deepseek*` (so the shared `production/llm.py` transport never sends it).
 
 ## Rendering
 

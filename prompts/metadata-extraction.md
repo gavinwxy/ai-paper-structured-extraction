@@ -15,6 +15,8 @@ Rules:
 - Classify each resource as: code (GitHub/GitLab/source code), project (project homepage), dataset (data download/repository), demo (live demo/interactive tool).
 - If no resources are found, return an empty resources array.
 - Do not infer or fabricate information not present in the paper.
+
+Output a single JSON object with keys: title (string), authors (array), resources (array). Output only that JSON object — no markdown code fences or commentary.
 ```
 
 ## User Prompt

@@ -299,6 +299,140 @@ def _needs_schema_sanitize(model: str) -> bool:
     return "gemini" in model.lower()
 
 
+def _is_deepseek_model(model: str) -> bool:
+    """Official DeepSeek models (deepseek-chat / deepseek-reasoner / deepseek-v4-pro / ...).
+
+    They are served on api.deepseek.com, which (a) supports only `response_format` `text` and
+    `json_object` — never `json_schema` strict decoding — and (b) rejects the OpenAI-proxy
+    `prompt_cache_key`/`prompt_cache_retention` kwargs (its context caching is automatic). Both
+    facts are keyed off this one check.
+    """
+    return "deepseek" in model.lower()
+
+
+def _structured_output_mode(model: str) -> str:
+    """How this model accepts a structured-output constraint.
+
+    - ``"json_schema"`` (default): the model constrains decoding to a JSON schema via
+      ``response_format`` (the OpenAI-compatible / Gemini proxy). The schema does the enforcing.
+    - ``"json_object"`` (DeepSeek): the model only guarantees *some* valid JSON object; the
+      schema cannot be sent, so the shape must be spelled out in the prompt instead (see
+      ``schema_to_prompt_spec`` / ``_augment_prompt_for_json_object``).
+    """
+    return "json_object" if _is_deepseek_model(model) else "json_schema"
+
+
+def _supports_prompt_cache_kwargs(model: str) -> bool:
+    """Whether the endpoint accepts the explicit prompt-cache routing kwargs.
+
+    The OpenAI-compatible proxy does; the official DeepSeek API does not (caching is automatic
+    and unknown params 400), so they are omitted there.
+    """
+    return not _is_deepseek_model(model)
+
+
+def _schema_type_label(schema: Any) -> str:
+    """A short, human-readable label for one property's type, surfacing the constraints that
+    matter once strict decoding is gone: enum members, id pattern, array item type, nullability.
+    """
+    if not isinstance(schema, dict):
+        return "any"
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        if len(enum) == 1:
+            return f'the constant "{enum[0]}"'
+        return "one of [" + ", ".join(str(value) for value in enum) + "]"
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        non_null = [t for t in typ if t != "null"]
+        label = " or ".join(non_null) if non_null else "value"
+        if "null" in typ:
+            label += " (nullable — use null when unknown)"
+        return label
+    if typ == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            item_enum = items.get("enum")
+            if isinstance(item_enum, list) and item_enum:
+                return "array; each item one of [" + ", ".join(str(v) for v in item_enum) + "]"
+            if items.get("type") == "object":
+                return "array of objects"
+            return f"array of {_schema_type_label(items)}"
+        return "array"
+    if typ == "object":
+        return "object"
+    if isinstance(typ, str):
+        label = typ
+        if schema.get("pattern"):
+            label += f' (matching {schema["pattern"]})'
+        return label
+    return "value"
+
+
+def _render_schema_object(obj_schema: dict[str, Any], indent: str, lines: list[str]) -> None:
+    """Render an object schema's properties as an indented, annotated key list, recursing into
+    nested objects and arrays-of-objects."""
+    props = obj_schema.get("properties")
+    if not isinstance(props, dict):
+        return
+    required = set(obj_schema.get("required", []) or [])
+    for key, prop in props.items():
+        if not isinstance(prop, dict):
+            continue
+        is_required = key in required
+        req = "required" if is_required else "optional — omit the key entirely when it does not apply"
+        desc = prop.get("description", "")
+        suffix = f" — {desc}" if desc else ""
+        lines.append(f'{indent}- "{key}" ({_schema_type_label(prop)}, {req}){suffix}')
+        if prop.get("type") == "object":
+            _render_schema_object(prop, indent + "    ", lines)
+        elif prop.get("type") == "array":
+            items = prop.get("items")
+            if isinstance(items, dict) and items.get("type") == "object":
+                lines.append(f"{indent}    — each array item is an object with:")
+                _render_schema_object(items, indent + "      ", lines)
+
+
+def schema_to_prompt_spec(schema: dict[str, Any]) -> str:
+    """Render a JSON Schema into an in-prompt OUTPUT FORMAT CONTRACT.
+
+    Used for json_object-mode models (DeepSeek) that cannot constrain decoding with the schema:
+    the same schema that strict models receive in ``response_format`` is spelled out here so the
+    shape, enums, required/optional fields, and id patterns are stated in the prompt. Derived
+    straight from the schema, so it never drifts from the runtime contract.
+    """
+    title = schema.get("title", "")
+    description = schema.get("description", "")
+    lines: list[str] = [
+        "OUTPUT FORMAT CONTRACT",
+        "Your response is constrained to a single JSON object by response_format=json_object, but "
+        "its exact shape is NOT checked by the decoder — it is enforced only by this contract, so "
+        "follow it precisely.",
+        "",
+    ]
+    if title:
+        lines.append(f"Target: {title}")
+    if description:
+        lines.append(description)
+    if title or description:
+        lines.append("")
+    lines.append(
+        "Emit a single top-level JSON object with exactly these keys (add no key to any object "
+        "beyond those listed here):"
+    )
+    _render_schema_object(schema, "", lines)
+    lines += [
+        "",
+        "Hard output rules:",
+        "- Output ONLY the JSON object — no markdown code fences, no comments, no prose before or after it.",
+        "- Include every key marked 'required'. For an 'optional' key, omit the key entirely (do "
+        'not emit null or "") when it does not apply, unless its description says otherwise.',
+        "- Use only the exact enum values listed; never invent an enum value or an extra key.",
+        "- Every id must match the lowercase prefix:descriptor pattern shown.",
+    ]
+    return "\n".join(lines)
+
+
 class ValidationError(Exception):
     """Raised when strict pipeline validation finds section-IR issues."""
 
@@ -309,9 +443,26 @@ class ValidationError(Exception):
 
 
 def build_response_format(schema: dict, name: str = "response", model: str = "") -> dict:
-    """Build the response_format dict for structured output with JSON schema."""
+    """Build the ``response_format`` for the model's structured-output mode.
+
+    - json_object models (DeepSeek): ``{"type": "json_object"}`` — the schema is conveyed in the
+      prompt instead (``_augment_prompt_for_json_object``), since decoding cannot be schema-bound.
+    - json_schema models (default, e.g. the OpenAI-compatible / Gemini proxy): strict
+      ``json_schema`` (Gemini's schema is first stripped of unsupported features).
+    """
+    if _structured_output_mode(model) == "json_object":
+        return {"type": "json_object"}
     final = _sanitize_schema_for_gemini(schema) if _needs_schema_sanitize(model) else schema
     return {"type": "json_schema", "json_schema": {"name": name, "schema": final, "strict": True}}
+
+
+def _augment_prompt_for_json_object(prompt: str, schema: dict[str, Any], model: str) -> str:
+    """Append the schema's OUTPUT FORMAT CONTRACT to ``prompt`` for json_object-only models;
+    return ``prompt`` unchanged for json_schema models (they get the schema via response_format).
+    """
+    if _structured_output_mode(model) != "json_object":
+        return prompt
+    return f"{prompt}\n\n{schema_to_prompt_spec(schema)}"
 
 
 def load_section_schema(section_type: str) -> dict:
@@ -1374,10 +1525,13 @@ def _call_llm(
     )
     if response_format is not None:
         kwargs["response_format"] = response_format
-    if prompt_cache_key:
-        kwargs["prompt_cache_key"] = prompt_cache_key
-    if prompt_cache_retention:
-        kwargs["prompt_cache_retention"] = prompt_cache_retention
+    # The explicit prompt-cache routing kwargs are OpenAI-proxy features; the official DeepSeek
+    # API rejects unknown params (its caching is automatic), so only send them where supported.
+    if _supports_prompt_cache_kwargs(model):
+        if prompt_cache_key:
+            kwargs["prompt_cache_key"] = prompt_cache_key
+        if prompt_cache_retention:
+            kwargs["prompt_cache_retention"] = prompt_cache_retention
     response = client.chat.completions.create(**kwargs)
     choice = response.choices[0]
     if choice.finish_reason == "length":
@@ -1403,6 +1557,7 @@ def run_node_census(
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = load_node_census_schema()
     resp_fmt = build_response_format(schema, name="node_census_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(
         client, model, system_prompt, user_prompt,
         temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt,
@@ -1431,6 +1586,7 @@ def run_relation_pass(
     )
     schema = load_relation_pass_schema()
     resp_fmt = build_response_format(schema, name="relation_pass_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(
         client, model, system_prompt, user_prompt,
         temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt,
@@ -1451,6 +1607,7 @@ def run_metadata_extraction(
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = json.loads(METADATA_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="metadata_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
     return _parse_llm_json(raw)
 
@@ -1467,6 +1624,7 @@ def run_references_extraction(
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="references_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
     return _parse_llm_json(raw)
 
@@ -1614,6 +1772,16 @@ def extract_single_content_section_sync(
     """Extract one content section (stage C) using the synchronous LLM client."""
     system_prompt, _ = load_prompt(SECTION_EXTRACTION_PROMPT_PATH)
     section_module = load_section_module(section_type)
+    section_schema = load_section_schema(section_type)
+    resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=model)
+
+    # For json_object models (DeepSeek), the schema cannot constrain decoding, so fold its
+    # contract into section_focus. Placing it inside <section_focus> — which already varies per
+    # section — keeps the shared user-prompt prefix (paper, spine_summary, node_registry,
+    # relations) byte-identical across the four sections, so the cross-section cache stays warm.
+    if _structured_output_mode(model) == "json_object":
+        section_module = f"{section_module}\n\n{schema_to_prompt_spec(section_schema)}"
+
     user_prompt = render_content_user_prompt(
         paper_content,
         section_type=section_type,
@@ -1622,9 +1790,6 @@ def extract_single_content_section_sync(
         relations=relations,
         spine_summary=spine_summary,
     )
-
-    section_schema = load_section_schema(section_type)
-    resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=model)
 
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
