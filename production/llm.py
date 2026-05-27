@@ -10,6 +10,8 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from section_pipeline import _is_deepseek_model
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,6 +66,10 @@ class LLMClient:
         )
         if response_format is not None:
             kwargs["response_format"] = response_format
+        # DeepSeek reasons by default; run extraction with thinking DISABLED (faster, no
+        # quality lift on this corpus). Gated to deepseek so other models are untouched.
+        if _is_deepseek_model(model):
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         if prompt_cache_key:
             kwargs["prompt_cache_key"] = prompt_cache_key
         if prompt_cache_retention:

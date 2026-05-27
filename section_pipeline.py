@@ -38,8 +38,14 @@ DEFAULT_SECTION_MAX_TOKENS = 131_072
 MAX_SECTION_RETRIES = 2
 SECTION_MARKER_RE = re.compile(r"(?m)^\[§(\d+)\]\s*")
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*:[a-z0-9_]+$")
-PROVENANCE_SOURCE_RE = re.compile(r"^§\d+$")
-SUBSECTION_MARKER_RE = re.compile(r"^§(\d+)(?:\.\d+)+$")
+# A provenance marker is a top-level §N (numeric body section) or §X (a lettered appendix,
+# e.g. §A, §C). Both are legitimate paper locations; lettered appendices are common and were
+# previously rejected. Figure/table refs (`§Table 3`, `§Fig. 2`) still fail — they mix
+# lowercase/spaces and match neither alternative.
+PROVENANCE_SOURCE_RE = re.compile(r"^§(?:\d+|[A-Z]+)$")
+# A finer-grained subsection of a numeric body section (§4.3) or a lettered appendix (§C.1,
+# §G.2). The input only anchors top-level sections, so these collapse to their §N / §X parent.
+SUBSECTION_MARKER_RE = re.compile(r"^§(\d+|[A-Z]+)(?:\.\d+)+$")
 
 SECTION_TYPES = {"context", "claim", "method", "evidence"}
 SECTION_ORDER = ["context", "claim", "method", "evidence"]
@@ -69,9 +75,12 @@ SECTION_MATERIALIZED_NODE_TYPES: dict[str, set[str]] = {
     "method": {"Method"},
     "evidence": {"Metric", "Entity"},
 }
-# Content sections that author claim-centric edges (about / supports) in their own
-# `relations[]`. Structural edges are authored earlier by the relation pass.
-SECTION_AUTHORS_RELATIONS = {"claim", "evidence"}
+# Content sections that author edges in their own `relations[]`: claim/evidence author
+# the claim-centric `about`/`supports`; context authors `motivates` (Context -> the
+# census Method/Entity it justifies). Structural edges are authored earlier by the
+# relation pass. The exact relation enum per section lives in the schema generator's
+# STAGE_C_RELATIONS_BY_SECTION.
+SECTION_AUTHORS_RELATIONS = {"context", "claim", "evidence"}
 TYPED_ARRAY_KEYS: dict[str, str] = {
     "entities": "Entity",
     "contexts": "Context",
@@ -208,12 +217,16 @@ RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
     "measured_on": ({"Metric"}, {"Entity"}),
     "about": ({"Claim"}, {"Method", "Entity", "Metric"}),
     "supports": ({"Metric", "Claim"}, {"Claim"}),
+    "motivates": ({"Context"}, {"Method", "Entity"}),
 }
 # Which stage authors each relation. The relation pass (stage B) owns the structural
 # entity<->entity edges over the full node set; content extraction (stage C) owns the
-# claim-centric edges that require Claims born during content.
+# edges that require units born during content — the claim-centric `about`/`supports`,
+# and `motivates` from a born Context to the census Method/Entity it justifies (the
+# Context-born source plus the globally visible census target are both in hand in the
+# context call, so no forward reference is needed).
 STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates", "measured_on"}
-STAGE_C_RELATIONS = {"about", "supports"}
+STAGE_C_RELATIONS = {"about", "supports", "motivates"}
 ARGUMENTATIVE_INCOMING = {"supports"}
 UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Document": "doc:",
@@ -737,13 +750,14 @@ def _drop_empty_sections(sections: list[dict[str, Any]]) -> list[str]:
 
 
 def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
-    """Truncate fine-grained subsection markers (e.g. §4.3) to their top-level §N.
+    """Truncate fine-grained subsection markers (e.g. §4.3, §C.1) to their top-level parent.
 
-    Paper input carries only top-level `[§N]` markers, so a `§4.3` provenance marker
-    cannot be traced and fails validation. `§4` is a real, coarser anchor that does
-    contain `§4.3`, so collapse the subnumber rather than discard the marker.
-    Appendix (`§G.2`) and table/figure references have no `§N` to collapse to and are
-    left untouched so they still surface as genuine provenance violations.
+    Paper input carries only top-level section/appendix markers, so a `§4.3` or `§C.1`
+    provenance marker cannot be traced and fails validation. `§4` / `§C` is a real, coarser
+    anchor that contains it, so collapse the subnumber rather than discard the marker. This
+    covers both numeric body sections (§4.3 -> §4) and lettered appendices (§C.1 -> §C).
+    Table/figure references (`§Table 3`) have no clean parent and are left untouched so they
+    still surface as genuine provenance violations.
     """
     warnings: list[str] = []
     seen: set[str] = set()
@@ -1525,6 +1539,11 @@ def _call_llm(
     )
     if response_format is not None:
         kwargs["response_format"] = response_format
+    # DeepSeek reasons by default; the extraction pipeline runs it with thinking DISABLED
+    # (faster, and reasoning gave no quality lift on this corpus). The proxy accepts the
+    # toggle via extra_body; gated to deepseek so other models are untouched.
+    if _is_deepseek_model(model):
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     # The explicit prompt-cache routing kwargs are OpenAI-proxy features; the official DeepSeek
     # API rejects unknown params (its caching is automatic), so only send them where supported.
     if _supports_prompt_cache_kwargs(model):

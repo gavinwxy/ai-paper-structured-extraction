@@ -53,12 +53,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("input_dir", type=Path, help="Directory containing .md paper files")
     parser.add_argument("output_dir", type=Path, help="Output directory for results")
-    parser.add_argument("--model", default="gemini-3-flash-preview-nothinking", help="Model name (default: gemini-3-flash-preview-nothinking)")
+    parser.add_argument("--model", default="deepseek-v4-pro", help="Model name (default: deepseek-v4-pro, run with thinking disabled)")
     parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL")
     parser.add_argument("--paper-concurrency", type=int, default=10, help="Max papers in flight (default: 10)")
     parser.add_argument("--llm-concurrency", type=int, default=30, help="Max concurrent LLM calls (default: 30)")
     parser.add_argument("--temperature", type=float, default=0.0, help="LLM temperature (default: 0.0)")
-    parser.add_argument("--max-tokens", type=int, default=65_536, help="Max tokens for section extraction (default: 65536)")
+    parser.add_argument("--max-tokens", type=int, default=32_768, help="Max tokens for section extraction (default: 32768, deepseek-safe)")
+    parser.add_argument("--planning-max-tokens", type=int, default=24_576, help="Max tokens for planning/aux calls — census, relations, metadata, references (default: 24576)")
     parser.add_argument("--max-retries", type=int, default=3, help="Max retries per LLM call (default: 3)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Console log level")
     parser.add_argument("--limit", type=int, default=0, help="Process at most N papers (0=all)")
@@ -88,6 +89,7 @@ def main() -> None:
         llm_concurrency=args.llm_concurrency,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        planning_max_tokens=args.planning_max_tokens,
         max_retries=args.max_retries,
         limit=args.limit,
         force=args.force,

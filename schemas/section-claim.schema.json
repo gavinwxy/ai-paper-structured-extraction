@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Claim Section Output",
-  "description": "Structured output schema for the claim section content extraction. Typed unit arrays: claims. Valid unit types: Claim. Authors claim-centric relations.",
+  "description": "Structured output schema for the claim section content extraction. Typed unit arrays: claims. Valid unit types: Claim. Authors relations.",
   "required": [
     "section"
   ],
@@ -82,7 +82,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Claim-centric edges this claim section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
+          "description": "Edges this claim section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
           "items": {
             "type": "object",
             "required": [

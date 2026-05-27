@@ -206,6 +206,50 @@ async def _run_paper_pipeline(
         }
 
 
+async def _call_and_parse(
+    llm: LLMClient,
+    *,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    temperature: float,
+    max_tokens: int,
+    response_format: dict | None,
+    paper_id: str,
+    stage: str,
+    prompt_cache_key: str | None = None,
+) -> dict[str, Any]:
+    """Call the LLM and parse its JSON, re-issuing the call on a parse failure.
+
+    `llm.call` already retries transport/truncation errors; this adds the parse-retry the
+    content sections have so a single malformed-but-complete planning response re-issues the
+    call instead of failing the whole paper. The census in particular is a hard dependency.
+    """
+    last_error: Exception | None = None
+    for attempt in range(MAX_SECTION_RETRIES + 1):
+        raw = await llm.call(
+            model=model,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            prompt_cache_key=prompt_cache_key,
+            paper_id=paper_id,
+            stage=stage,
+        )
+        try:
+            return _parse_llm_json(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            if attempt < MAX_SECTION_RETRIES:
+                logger.warning(
+                    "[%s] %s attempt %d JSON parse error: %s — retrying call",
+                    paper_id, stage, attempt + 1, exc,
+                )
+    raise RuntimeError(f"{stage} returned unparseable JSON after retries") from last_error
+
+
 async def _run_census(
     paper_id: str, paper_content: str, cache_key: str, config: Config, llm: LLMClient,
 ) -> dict[str, Any]:
@@ -216,7 +260,8 @@ async def _run_census(
     resp_fmt = build_response_format(schema, name="node_census_output", model=config.model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
-    raw = await llm.call(
+    return await _call_and_parse(
+        llm,
         model=config.model,
         system_prompt=system_prompt,
         user_content=user_prompt,
@@ -227,7 +272,6 @@ async def _run_census(
         paper_id=paper_id,
         stage="census",
     )
-    return _parse_llm_json(raw)
 
 
 async def _run_relation_pass(
@@ -246,7 +290,8 @@ async def _run_relation_pass(
     resp_fmt = build_response_format(schema, name="relation_pass_output", model=config.model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
-    raw = await llm.call(
+    return await _call_and_parse(
+        llm,
         model=config.model,
         system_prompt=system_prompt,
         user_content=user_prompt,
@@ -257,7 +302,6 @@ async def _run_relation_pass(
         paper_id=paper_id,
         stage="relations",
     )
-    return _parse_llm_json(raw)
 
 
 async def _run_metadata(
@@ -270,7 +314,8 @@ async def _run_metadata(
     resp_fmt = build_response_format(schema, name="metadata_output", model=config.model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
-    raw = await llm.call(
+    return await _call_and_parse(
+        llm,
         model=config.model,
         system_prompt=system_prompt,
         user_content=user_prompt,
@@ -280,7 +325,6 @@ async def _run_metadata(
         paper_id=paper_id,
         stage="metadata",
     )
-    return _parse_llm_json(raw)
 
 
 async def _run_references(
@@ -293,7 +337,8 @@ async def _run_references(
     resp_fmt = build_response_format(schema, name="references_output", model=config.model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
-    raw = await llm.call(
+    return await _call_and_parse(
+        llm,
         model=config.model,
         system_prompt=system_prompt,
         user_content=user_prompt,
@@ -303,7 +348,6 @@ async def _run_references(
         paper_id=paper_id,
         stage="references",
     )
-    return _parse_llm_json(raw)
 
 
 async def _run_all_content_sections(

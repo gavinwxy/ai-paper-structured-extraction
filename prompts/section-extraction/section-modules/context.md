@@ -2,7 +2,7 @@ SECTION FOCUS: context
 
 This section captures the argumentative premises that make the central contribution necessary and intelligible. Context units establish the research environment, identify the gap or challenge the paper addresses, and frame the assumptions the argument rests on.
 
-Context units are **born here** — they are not census nodes. Create them directly from `spine_summary`, this focus, and the paper. This section materializes no census nodes and authors no relations; choose `anchor_id` from a Context unit you define here.
+Context units are **born here** — they are not census nodes. Create them directly from `spine_summary`, this focus, and the paper. This section materializes no census nodes; choose `anchor_id` from a Context unit you define here. It authors one edge type, `motivates` (see Relations).
 
 ## Units you may define
 
@@ -15,7 +15,15 @@ Fields: `context_kind`, `description`.
 
 ## Relations
 
-This section authors no relations and its schema has no `relations` field — each Context unit stands as an independent premise.
+This section authors one edge type in `relations[]`, binding a premise to the node it justifies:
+
+| relation | source → target | meaning |
+|---|---|---|
+| `motivates` | Context → {Method, Entity} | this premise is what the node addresses / why it exists |
+
+- Author a `motivates` edge from the `gap` Context — and, only when the paper makes the link explicit, from a `challenge` or `motivation` Context — to the contribution it justifies: point `target_id` at the method whose `node_registry` role is `contribution`. When the premise is instead about a specific dataset or task, point at that Entity node.
+- `background` and `assumption` Context units usually author no edge.
+- Endpoints reference `node_registry` ids; never invent an id, and never point at a Context or Claim — the target must be a Method or Entity node. Give the empty array `[]` when no premise maps to a registry node.
 
 ## Extraction focus
 
@@ -53,6 +61,9 @@ This section authors no relations and its schema has no `relations` field — ea
         "description": "Sequential recurrence precludes parallelization within a training example and weakens learning of dependencies between distant positions.",
         "provenance": ["§1", "§2"]
       }
+    ],
+    "relations": [
+      {"source_id": "ctx:seq_dependency_gap", "relation": "motivates", "target_id": "mth:transformer", "provenance": ["§2"]}
     ]
   }
 }

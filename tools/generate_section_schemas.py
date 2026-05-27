@@ -69,7 +69,22 @@ ROLE_ORDER = [
 ]
 SALIENCE_ORDER = ["must", "should"]
 STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates", "measured_on"]
-STAGE_C_RELATION_ORDER = ["about", "supports"]
+# Stage-C edges each content section authors, ordered as they appear in its schema enum.
+# context authors only `motivates` (Context -> the census Method/Entity it justifies);
+# claim/evidence author the claim-centric `about`/`supports`. Scoping the enum per section
+# keeps each section's contract tight — it matters most for json_object models (DeepSeek),
+# whose only constraint is the in-prompt contract, not strict decoding.
+STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
+    "context": ["motivates"],
+    "claim": ["about", "supports"],
+    "evidence": ["about", "supports"],
+}
+# One-line gloss per stage-C relation, joined into the schema field description.
+STAGE_C_RELATION_GLOSS: dict[str, str] = {
+    "about": "about = a Claim is about a Method/Entity/Metric",
+    "supports": "supports = a Metric or Claim supports a Claim",
+    "motivates": "motivates = a Context premise motivates the Method/Entity it justifies",
+}
 
 ENUM_ORDER: dict[str, list[str]] = {
     "role": ROLE_ORDER,
@@ -342,11 +357,13 @@ def array_schema(array_key: str, unit_schemas: dict[str, dict[str, Any]]) -> dic
 
 
 def relations_schema(section_type: str) -> dict[str, Any]:
-    """The claim-centric edges a content section authors (about / supports)."""
+    """The edges a content section authors, scoped to that section's stage-C relations."""
+    allowed = STAGE_C_RELATIONS_BY_SECTION[section_type]
+    relation_desc = "; ".join(STAGE_C_RELATION_GLOSS[rel] for rel in allowed) + "."
     return {
         "type": "array",
         "description": (
-            f"Claim-centric edges this {section_type} section authors. Lifted into the global "
+            f"Edges this {section_type} section authors. Lifted into the global "
             "relations[] during assembly. Empty array when none apply."
         ),
         "items": {
@@ -357,11 +374,8 @@ def relations_schema(section_type: str) -> dict[str, Any]:
                 "source_id": id_schema("Source unit ID"),
                 "relation": {
                     "type": "string",
-                    "enum": STAGE_C_RELATION_ORDER,
-                    "description": (
-                        "about = a Claim is about a Method/Entity/Metric; "
-                        "supports = a Metric or Claim supports a Claim."
-                    ),
+                    "enum": allowed,
+                    "description": relation_desc,
                 },
                 "target_id": id_schema("Target unit ID"),
                 "provenance": provenance_schema(),
@@ -400,7 +414,7 @@ def section_schema(section_type: str, array_keys: list[str]) -> dict[str, Any]:
             f"Structured output schema for the {section_type} section content extraction. "
             f"Typed unit arrays: {', '.join(array_keys)}. "
             f"Valid unit types: {', '.join(type_names)}."
-            + (" Authors claim-centric relations." if authors_relations else "")
+            + (" Authors relations." if authors_relations else "")
         ),
         "required": ["section"],
         "additionalProperties": False,

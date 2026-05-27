@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Evidence Section Output",
-  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: metrics, settings, claims, entities. Valid unit types: Metric, Setting, Claim, Entity. Authors claim-centric relations.",
+  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: metrics, settings, claims, entities. Valid unit types: Metric, Setting, Claim, Entity. Authors relations.",
   "required": [
     "section"
   ],
@@ -285,7 +285,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Claim-centric edges this evidence section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
+          "description": "Edges this evidence section authors. Lifted into the global relations[] during assembly. Empty array when none apply.",
           "items": {
             "type": "object",
             "required": [
