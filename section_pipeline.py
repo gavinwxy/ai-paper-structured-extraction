@@ -566,6 +566,17 @@ def _canonicalize_id_alias(value: Any) -> Any:
     return f"{alias[prefix]}:{rest}" if prefix in alias else value
 
 
+def _slugify_id_part(value: str) -> str:
+    """Coerce the post-colon part of an id into the ID_RE slug charset ``[a-z0-9_]``.
+
+    Models occasionally emit node ids whose slug carries characters outside the charset —
+    uppercase (``mea:mIoU``) or punctuation (``mea:delta_1.25``). Lowercase, collapse any run
+    of disallowed characters to a single ``_``, and trim leading/trailing ``_``. Returns ""
+    when nothing is salvageable (the caller then leaves the id for strict validation to flag).
+    """
+    return re.sub(r"[^a-z0-9_]+", "_", value.lower()).strip("_")
+
+
 def _canonicalize_section_id_aliases(sections: list[dict[str, Any]]) -> None:
     """Normalize common LLM ID prefix aliases (e.g. setting:/set:/ent: -> exp:) before validation."""
     for section in sections:
@@ -1044,7 +1055,10 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
 
     - Derive each node's `type` from its `role` (role is the single granular tag the model
       emits; type and document root are coarsenings of it).
-    - Re-prefix a node_id whose prefix disagrees with its derived type (mth:/ent:/met:).
+    - Rebuild each node_id from its derived-type prefix plus a sanitized slug: fix a prefix that
+      disagrees with the type (mth:/exp:/mea:) and coerce the slug into the ID_RE charset, so a
+      model id with uppercase or punctuation (mea:mIoU, mea:delta_1.25) is salvaged rather than
+      hard-failing the census.
     - Suffix later duplicate node_ids so each is defined exactly once.
     - Ensure exactly one document-level root method (role `contribution`): promote the first
       must-priority method when none is marked, demote extras to `component` when several are.
@@ -1060,12 +1074,15 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
     for node in nodes:
         node_id = node.get("node_id")
         expected = NODE_ID_PREFIX_BY_TYPE.get(node.get("type"))
-        if not isinstance(node_id, str) or ":" not in node_id or not expected:
+        if not isinstance(node_id, str) or not expected:
             continue
-        if not node_id.startswith(expected):
-            candidate = f"{expected}{node_id.split(':', 1)[1]}"
-            if ID_RE.match(candidate):
-                node["node_id"] = candidate
+        raw_slug = node_id.split(":", 1)[1] if ":" in node_id else node_id
+        slug = _slugify_id_part(raw_slug)
+        if not slug:
+            continue
+        candidate = f"{expected}{slug}"
+        if candidate != node_id and ID_RE.match(candidate):
+            node["node_id"] = candidate
 
     used_ids: set[str] = set()
     for node in nodes:
@@ -1373,6 +1390,122 @@ def _sanitize_unit_text(sections: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
+def _sanitize_unit_ids(
+    sections: list[dict[str, Any]], relations: list[dict[str, Any]]
+) -> list[str]:
+    """Coerce any unit id whose slug carries out-of-charset characters into ID_RE form.
+
+    Census-materialized ids are already valid (normalize_census_nodes), so this only moves
+    born-unit ids (Finding/Problem/config ExperimentSetup) a model emitted with uppercase or
+    punctuation, e.g. ``fnd:increasing_K_modest`` -> ``fnd:increasing_k_modest``. Every reference
+    is rewritten to the new id — relation endpoints, score-row system_id/setup_id,
+    Measure.setup_ids, and section anchors — and collisions are suffixed so ids stay unique.
+    """
+    warnings: list[str] = []
+
+    def sanitized(uid: Any) -> str | None:
+        if not isinstance(uid, str) or ":" not in uid:
+            return None
+        prefix, slug = uid.split(":", 1)
+        new_slug = _slugify_id_part(slug)
+        return f"{prefix}:{new_slug}" if new_slug else None
+
+    units = [u for s in sections for u in s.get("units", []) or [] if isinstance(u, dict)]
+    # Seed the uniqueness set with ids that already survive sanitization unchanged.
+    used = {u["id"] for u in units if isinstance(u.get("id"), str) and sanitized(u["id"]) == u["id"]}
+    remap: dict[str, str] = {}
+    for unit in units:
+        uid = unit.get("id")
+        candidate = sanitized(uid)
+        if candidate is None or candidate == uid:
+            continue
+        base, index = candidate, 2
+        while candidate in used:
+            candidate = f"{base}_{index}"
+            index += 1
+        used.add(candidate)
+        remap[uid] = candidate
+        unit["id"] = candidate
+        warnings.append(f"sanitized unit id {uid!r} -> {candidate!r}")
+
+    if remap:
+        for relation in relations:
+            if not isinstance(relation, dict):
+                continue
+            for key in ("source_id", "target_id"):
+                if relation.get(key) in remap:
+                    relation[key] = remap[relation[key]]
+        for section in sections:
+            if section.get("anchor_id") in remap:
+                section["anchor_id"] = remap[section["anchor_id"]]
+            for unit in section.get("units", []) or []:
+                if unit.get("type") != "Measure":
+                    continue
+                setup_ids = unit.get("setup_ids")
+                if isinstance(setup_ids, list):
+                    unit["setup_ids"] = [remap.get(x, x) for x in setup_ids]
+                for row in unit.get("scores", []) or []:
+                    if not isinstance(row, dict):
+                        continue
+                    for key in ("system_id", "setup_id"):
+                        if row.get(key) in remap:
+                            row[key] = remap[row[key]]
+    return warnings
+
+
+def _drop_empty_scores_measures(sections: list[dict[str, Any]]) -> list[str]:
+    """Drop Measure units with an empty/missing ``scores`` list — a measure with no rows carries
+    no data and is schema-invalid. Edges that pointed at it are pruned by the later relation
+    dangling-check. Lossy-but-safe; logged to uncertain_assignments."""
+    warnings: list[str] = []
+    for section in sections:
+        units = section.get("units")
+        if not isinstance(units, list):
+            continue
+        kept: list[dict[str, Any]] = []
+        for unit in units:
+            scores = unit.get("scores")
+            if unit.get("type") == "Measure" and not (isinstance(scores, list) and scores):
+                warnings.append(f"dropped Measure {unit.get('id')!r} with empty scores")
+            else:
+                kept.append(unit)
+        section["units"] = kept
+    return warnings
+
+
+def _clean_method_equations(sections: list[dict[str, Any]]) -> list[str]:
+    """Drop empty optional equation fields on Method units: an ``objective_function`` or a
+    ``formulas[]`` entry whose ``expression`` is blank (a stub some json_object models emit when
+    a paper has no equation). The fields are optional, so dropping them is safe and removes the
+    'missing expression' validation failure. Logged to uncertain_assignments."""
+    warnings: list[str] = []
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if unit.get("type") != "Method":
+                continue
+            objective = unit.get("objective_function")
+            if objective is not None and not (
+                isinstance(objective, dict) and (objective.get("expression") or "").strip()
+            ):
+                unit.pop("objective_function", None)
+                warnings.append(f"dropped empty objective_function on {unit.get('id')!r}")
+            formulas = unit.get("formulas")
+            if isinstance(formulas, list):
+                kept = [
+                    f for f in formulas
+                    if isinstance(f, dict) and (f.get("expression") or "").strip()
+                ]
+                if len(kept) != len(formulas):
+                    warnings.append(
+                        f"dropped {len(formulas) - len(kept)} empty formula(s) on {unit.get('id')!r}"
+                    )
+                if kept:
+                    unit["formulas"] = kept
+                else:
+                    unit.pop("formulas", None)
+    return warnings
+
+
 def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
     """Blank dangling or wrong-type per-row score references (system_id/setup_id) once the
     full unit set is known — lossy-but-safe, logged to uncertain_assignments. system_id resolves
@@ -1580,12 +1713,15 @@ def assemble_extraction(
 
     assembly_warnings: list[str] = []
     assembly_warnings.extend(_sanitize_unit_text(sections))
+    assembly_warnings.extend(_sanitize_unit_ids(sections, relations))
     assembly_warnings.extend(_dedup_experiment_setups(sections, relations))
     assembly_warnings.extend(_dedup_unit_ids(sections))
     assembly_warnings.extend(_drop_empty_sections(sections))
     assembly_warnings.extend(_normalize_provenance_markers(sections))
     assembly_warnings.extend(_repair_section_anchors(sections))
     assembly_warnings.extend(_repair_score_refs(sections))
+    assembly_warnings.extend(_drop_empty_scores_measures(sections))
+    assembly_warnings.extend(_clean_method_equations(sections))
 
     relations, warns = _dedup_relations(relations)
     assembly_warnings.extend(warns)
