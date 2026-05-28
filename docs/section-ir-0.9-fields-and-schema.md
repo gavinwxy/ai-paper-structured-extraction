@@ -412,6 +412,12 @@ score-ref blanking, relation-list cleanup, baseline-`evaluates` drop, `covers_en
 recompute). Coverage is measured against census `must` nodes; an unmaterialized must-node
 surfaces in `extraction_notes.uncovered_items`.
 
+Assembly also hardens against common model-output glitches (likewise logged): `_sanitize_unit_ids`
+coerces born-unit id slugs into the `ID_RE` charset and rewrites every reference;
+`_drop_empty_scores_measures` drops Measures with no score rows; `_clean_method_equations` drops an
+`objective_function`/`formulas[]` entry whose `expression` is blank. (Census node-id slugs are
+sanitized earlier, in `normalize_census_nodes`.)
+
 ---
 
 ## Appendix — quick reference
