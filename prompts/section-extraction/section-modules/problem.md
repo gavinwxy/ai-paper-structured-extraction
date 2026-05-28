@@ -18,11 +18,11 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 
 | relation | source → target | meaning |
 |---|---|---|
-| `motivates` | Problem → {Method, Entity} | this problem is what the node addresses / why it exists |
+| `motivates` | Problem → {Method, ExperimentSetup} | this problem is what the node addresses / why it exists |
 
-- Author a `motivates` edge from the Problem to the contribution it justifies: point `target_id` at the method whose `node_registry` role is `contribution`. When the problem is instead about a specific dataset or task, point at that Entity node.
-- Endpoints reference `node_registry` ids; never invent an id, and never point at a Problem or Claim — the target must be a Method or Entity node. Give the empty array `[]` only when no registry node maps to the problem.
-- You do **not** author the closing `resolves` edge (the finding that answers this problem). That edge is added automatically downstream, from the contribution the problem motivates and the claim that is about it.
+- Author a `motivates` edge from the Problem to the contribution it justifies: point `target_id` at the method whose `node_registry` role is `contribution`. When the problem is instead about a specific dataset or task, point at that ExperimentSetup node.
+- Endpoints reference `node_registry` ids; never invent an id, and never point at a Problem or Finding — the target must be a Method or ExperimentSetup node. Give the empty array `[]` only when no registry node maps to the problem.
+- You do **not** author the closing `resolves` edge (the finding that answers this problem). That edge is added automatically downstream, from the contribution the problem motivates and the finding that is about it.
 
 ## Extraction focus
 
@@ -33,7 +33,7 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 ## Anti-patterns
 
 - Do not emit several Problem units for one problem (no background/gap/motivation split) — that is the old over-tagged shape; collapse it into one focused statement.
-- Do not create a Claim unit for the contribution here; the contribution claim belongs in the evidence section.
+- Do not create a Finding unit for the contribution here; the contribution finding belongs in the evidence section.
 - Do not create Method units here; a system named as background belongs in the `description`. (Comparison baselines are `compared_against` Methods in the method section, and score rows in the evidence section — not here.)
 - Do not create a Problem for paper-structural remarks ("this paper is organized as follows").
 

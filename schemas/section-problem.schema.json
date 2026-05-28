@@ -90,7 +90,7 @@
                 "enum": [
                   "motivates"
                 ],
-                "description": "motivates = a Problem motivates the Method/Entity that addresses it."
+                "description": "motivates = a Problem motivates the Method/ExperimentSetup that addresses it."
               },
               "target_id": {
                 "type": "string",

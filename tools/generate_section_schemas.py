@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Generate per-section typed-array schemas plus the node-census and relation-pass schemas.
 
-section-ir-0.8: the pipeline is three stages — node census (stage A), relation pass
+section-ir-0.9: the pipeline is three stages — node census (stage A), relation pass
 (stage B), and per-section content fill (stage C). This script is the single source for
 every structured-output schema, generated from the controlled vocabularies in
 ``section_pipeline.py`` so the schemas never drift from the runtime contract.
+
+Each unit carries two classificatory axes: a generic ``type`` (the scientific-method-anchored
+scope) and a fine-grained ``role`` (the discipline-specific differentia). Problem and Measure
+have no sub-axis and carry no ``role``.
 """
 
 from __future__ import annotations
@@ -19,13 +23,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from section_pipeline import (  # noqa: E402
-    CLAIM_KINDS,
     COMPARISON_DIRECTIONS,
-    ENTITY_CLASSES,
+    EXPERIMENT_SETUP_ROLES,
+    FINDING_ROLES,
     METHOD_KINDS,
+    METHOD_ROLES,
     NODE_ROLES,
     SECTION_AUTHORS_RELATIONS,
-    SETTING_KINDS,
 )
 
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
@@ -35,41 +39,49 @@ ID_PATTERN = r"^[a-z][a-z0-9_]*:[a-z0-9_]+$"
 SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
     "problem": ["problems"],
     "method": ["methods"],
-    "evidence": ["metrics", "settings", "claims", "entities"],
+    "evidence": ["measures", "experiment_setups", "findings"],
 }
 
-# Entity classes allowed per section. Evidence may carry any class an entity node can take.
-ENTITY_CLASSES_BY_SECTION: dict[str, list[str]] = {
-    "evidence": ["dataset", "benchmark", "task"],
-}
-
+# Fields that are optional on a unit type (everything else in its property set is required).
+# method_kind is now an optional descriptive attribute (the role is the required differentia);
+# ExperimentSetup carries an optional description and cite_keys.
 OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Metric": {"comparison_direction"},
-    "Method": {"inputs", "outputs", "formulas", "objective_function"},
+    "Measure": {"comparison_direction"},
+    "Method": {"method_kind", "inputs", "outputs", "formulas", "objective_function"},
+    "ExperimentSetup": {"description"},
 }
 
 ARRAY_TYPE_NAMES: dict[str, str] = {
-    "entities": "Entity",
     "problems": "Problem",
-    "settings": "Setting",
-    "claims": "Claim",
-    "metrics": "Metric",
     "methods": "Method",
+    "experiment_setups": "ExperimentSetup",
+    "measures": "Measure",
+    "findings": "Finding",
 }
 
-# Census node roles and the relation vocabularies, with explicit ordering for stable schemas.
-# Roles are listed in search-cluster order (the_method, prior_art, testbed, yardsticks).
-ROLE_ORDER = [
+# Census node roles and the unit-level role vocabularies, with explicit ordering for stable
+# schemas. Census roles are listed in search-cluster order (the_method, prior_art, testbed,
+# yardsticks). The substrate roles (dataset/benchmark/task) are the only ExperimentSetup roles
+# the census emits; the configuration roles are born during content fill.
+NODE_ROLE_ORDER = [
     "contribution", "component",
     "builds_on", "compared_against",
     "dataset", "benchmark", "task",
     "metric",
 ]
+METHOD_ROLE_ORDER = ["contribution", "component", "builds_on", "compared_against"]
+EXPERIMENT_SETUP_ROLE_ORDER = [
+    "dataset", "benchmark", "task",
+    "data_split", "inference_protocol", "training_config", "ensembling", "population",
+]
+FINDING_ROLE_ORDER = [
+    "descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode",
+]
 SALIENCE_ORDER = ["must", "should"]
-STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates", "measured_on"]
+STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
-# problem authors only `motivates` (Problem -> the census Method/Entity it justifies);
-# evidence authors the claim-centric `about`/`supports`. The closing `resolves` (Claim ->
+# problem authors only `motivates` (Problem -> the census Method/ExperimentSetup it justifies);
+# evidence authors the Finding-centric `about`/`supports`. The closing `resolves` (Finding ->
 # Problem) is synthesized in assembly, not authored by any section, so it appears in no
 # stage-C enum. Scoping the enum per section keeps each section's contract tight — it matters
 # most for json_object models (DeepSeek), whose only constraint is the in-prompt contract.
@@ -79,27 +91,27 @@ STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
 }
 # One-line gloss per stage-C relation, joined into the schema field description.
 STAGE_C_RELATION_GLOSS: dict[str, str] = {
-    "about": "about = a Claim is about a Method/Entity/Metric",
-    "supports": "supports = a Metric or Claim supports a Claim",
-    "motivates": "motivates = a Problem motivates the Method/Entity that addresses it",
+    "about": "about = a Finding is about a Method/ExperimentSetup/Measure",
+    "supports": "supports = a Measure or Finding supports a Finding",
+    "motivates": "motivates = a Problem motivates the Method/ExperimentSetup that addresses it",
 }
 
 ENUM_ORDER: dict[str, list[str]] = {
-    "role": ROLE_ORDER,
-    "claim_kind": ["descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode"],
-    "entity_class": ["dataset", "benchmark", "task"],
+    "node_role": NODE_ROLE_ORDER,
+    "method_role": METHOD_ROLE_ORDER,
+    "experiment_setup_role": EXPERIMENT_SETUP_ROLE_ORDER,
+    "finding_role": FINDING_ROLE_ORDER,
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
-    "setting_kind": ["data_split", "inference_protocol", "training_config", "ensembling", "population"],
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
-    "role": NODE_ROLES,
-    "claim_kind": CLAIM_KINDS,
-    "entity_class": ENTITY_CLASSES,
+    "node_role": NODE_ROLES,
+    "method_role": METHOD_ROLES,
+    "experiment_setup_role": EXPERIMENT_SETUP_ROLES,
+    "finding_role": FINDING_ROLES,
     "method_kind": METHOD_KINDS,
     "comparison_direction": COMPARISON_DIRECTIONS,
-    "setting_kind": SETTING_KINDS,
 }
 
 
@@ -145,18 +157,17 @@ def string_array_schema(description: str) -> dict[str, Any]:
     }
 
 
-def metric_setting_ids_schema() -> dict[str, Any]:
-    """`setting_ids` scopes a metric to local Setting units in the evidence section.
+def measure_setup_ids_schema() -> dict[str, Any]:
+    """`setup_ids` scopes a measure to local ExperimentSetup units in the evidence section.
 
-    In 0.7 this is optional in cardinality: a deployable metric may carry scoping
-    Settings while an ablation metric may carry none, so no min/max bound is imposed.
-    The metric->method (`evaluates`) and metric->dataset (`measured_on`) edges that used
-    to live on the Metric are global relations now.
+    Optional in cardinality: a deployable measure may carry scoping setups while an ablation
+    measure may carry none, so no min/max bound is imposed. The measure->method (`evaluates`)
+    edge is a global relation; the measure->dataset binding is the per-row `setup_id`.
     """
     return {
         "type": "array",
         "items": {"type": "string"},
-        "description": "IDs of local Setting units scoping this metric; empty when none apply",
+        "description": "IDs of local ExperimentSetup units scoping this measure; empty when none apply",
     }
 
 
@@ -165,7 +176,7 @@ def scores_schema(description: str) -> dict[str, Any]:
         "type": "array",
         "items": {
             "type": "object",
-            "required": ["variant", "value", "variance", "system_id", "setting_id"],
+            "required": ["variant", "value", "variance", "system_id", "setup_id"],
             "additionalProperties": False,
             "properties": {
                 "variant": {"type": "string", "description": "System name for this score row as the paper labels it — a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"},
@@ -181,9 +192,9 @@ def scores_schema(description: str) -> dict[str, Any]:
                     "type": "string",
                     "description": "ID of the Method unit this row reports — the contribution variant or the compared-against baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture).",
                 },
-                "setting_id": {
+                "setup_id": {
                     "type": "string",
-                    "description": "ID of the local Setting unit this row was measured under (the dataset split / language pair / protocol), when one Metric spans several. Empty string when the metric's own setting_ids already scope every row.",
+                    "description": "ID of the local ExperimentSetup unit this row was measured under — the dataset/split/protocol (e.g. 'exp:wmt14_ende'). This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row.",
                 },
             },
         },
@@ -280,12 +291,19 @@ def base_unit_properties(type_name: str) -> dict[str, Any]:
 
 
 def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
-    entity_classes = ENTITY_CLASSES_BY_SECTION.get(section_type, ordered_enum("entity_class"))
     schemas: dict[str, dict[str, Any]] = {
-        "Entity": {
-            **base_unit_properties("Entity"),
-            "name": string_schema("Name of the entity"),
-            "entity_class": inline_enum_schema(entity_classes, "Classification of the entity"),
+        "ExperimentSetup": {
+            **base_unit_properties("ExperimentSetup"),
+            "role": enum_schema(
+                "experiment_setup_role",
+                "Which experimental ingredient this is — a substrate the method is tried on "
+                "(dataset/benchmark/task) or a configuration that scopes a measure "
+                "(data_split/inference_protocol/training_config/ensembling/population)",
+            ),
+            "name": string_schema("Name/label of the setup — a dataset name, a split label, a configuration name"),
+            "description": string_schema(
+                "Optional one-sentence prose describing the setup; empty string when the name suffices"
+            ),
         },
         "Problem": {
             **base_unit_properties("Problem"),
@@ -294,27 +312,24 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
                 "need the paper addresses, with the necessary background folded into the prose"
             ),
         },
-        "Setting": {
-            **base_unit_properties("Setting"),
-            "setting_kind": enum_schema(
-                "setting_kind",
-                "Which axis of the evaluation this setup constrains: data_split, "
-                "inference_protocol, training_config, ensembling, or population",
-            ),
-            "description": string_schema(
-                "Single-sentence prose statement of the operational constraint that scopes a "
-                "metric — the concrete dataset split, protocol, population, or hyperparameter"
-            ),
-        },
-        "Claim": {
-            **base_unit_properties("Claim"),
-            "statement": string_schema("The claim as a single declarative sentence"),
-            "claim_kind": enum_schema("claim_kind", "Classification of the claim"),
+        "Finding": {
+            **base_unit_properties("Finding"),
+            "role": enum_schema("finding_role", "Classification of the finding"),
+            "statement": string_schema("The finding as a single declarative sentence"),
         },
         "Method": {
             **base_unit_properties("Method"),
+            "role": enum_schema(
+                "method_role",
+                "Argumentative role: contribution (the single primary method/system), component "
+                "(a sub-method that is part_of the contribution), builds_on (prior work extended), "
+                "or compared_against (a baseline)",
+            ),
             "name": string_schema("Name of the method"),
-            "method_kind": enum_schema("method_kind", "Classification of the method"),
+            "method_kind": enum_schema(
+                "method_kind",
+                "Optional structural classification of the method; omit when unclear",
+            ),
             "description": string_schema("Prose description of the method; empty string when unknown"),
             "inputs": string_array_schema("Inputs to the method; omit when the paper does not state them"),
             "outputs": string_array_schema("Outputs of the method; omit when the paper does not state them"),
@@ -326,13 +341,13 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             ),
             "implementation_notes": string_schema("Key implementation details; empty string when none are reported"),
         },
-        "Metric": {
-            **base_unit_properties("Metric"),
-            "name": string_schema("Name of the metric"),
+        "Measure": {
+            **base_unit_properties("Measure"),
+            "name": string_schema("Name of the measure/metric"),
             "unit": string_schema("Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"),
-            "setting_ids": metric_setting_ids_schema(),
+            "setup_ids": measure_setup_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
-            "scores": scores_schema("Flat array of reported scores under this metric — one row per system, covering the method family's own variants and every compared-against baseline"),
+            "scores": scores_schema("Flat array of reported scores under this measure — one row per system, covering the method family's own variants and every compared-against baseline"),
         },
     }
     return schemas
@@ -433,10 +448,11 @@ def node_census_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Node Census Output",
         "description": (
-            "Stage A of section-ir-0.8: a flat census of every argumentatively load-bearing "
-            "node, each tagged with one granular role (its type and Entity class are derived "
-            "from the role), with no relations. Problem, Setting, and Claim are not nodes; "
-            "they are born during content extraction."
+            "Stage A of section-ir-0.9: a flat census of every argumentatively load-bearing "
+            "node, each tagged with one granular role (its type is derived from the role), with "
+            "no relations. The census emits Method nodes, the substrate ExperimentSetup nodes "
+            "(dataset/benchmark/task), and Measure nodes. Problem and Finding are not nodes, and "
+            "configuration ExperimentSetup units (splits/protocols) are born during content fill."
         ),
         "required": ["spine_summary", "nodes"],
         "additionalProperties": False,
@@ -463,11 +479,11 @@ def node_census_schema() -> dict[str, Any]:
                     "properties": {
                         "node_id": id_schema(
                             "Node id; the prefix follows from the role's type — mth: for "
-                            "contribution/component/builds_on/compared_against, ent: for "
-                            "dataset/benchmark/task, met: for metric"
+                            "contribution/component/builds_on/compared_against, exp: for "
+                            "dataset/benchmark/task, mea: for metric"
                         ),
                         "role": enum_schema(
-                            "role",
+                            "node_role",
                             "Argumentative role, in search-cluster order. the_method: "
                             "contribution (the single primary method) and component. prior_art: "
                             "builds_on and compared_against. testbed: dataset, benchmark, task. "
@@ -496,13 +512,13 @@ def node_census_schema() -> dict[str, Any]:
 
 
 def relation_pass_schema() -> dict[str, Any]:
-    """Stage B schema: structural entity<->entity edges over the full node set."""
+    """Stage B schema: structural node<->node edges over the full node set."""
     return {
         "type": "object",
         "title": "Relation Pass Output",
         "description": (
-            "Stage B of section-ir-0.8: structural edges over the full node set. Sees every "
-            "node, so cross-section composition and metric-subject binding are captured here "
+            "Stage B of section-ir-0.9: structural edges over the full node set. Sees every "
+            "node, so cross-section composition and measure-subject binding are captured here "
             "with no forward references."
         ),
         "required": ["relations"],
@@ -510,7 +526,7 @@ def relation_pass_schema() -> dict[str, Any]:
         "properties": {
             "relations": {
                 "type": "array",
-                "description": "Structural entity<->entity edges between census nodes.",
+                "description": "Structural node<->node edges between census nodes.",
                 "items": {
                     "type": "object",
                     "required": ["source_id", "relation", "target_id", "provenance"],
@@ -521,10 +537,9 @@ def relation_pass_schema() -> dict[str, Any]:
                             "type": "string",
                             "enum": STAGE_B_RELATION_ORDER,
                             "description": (
-                                "part_of = composition between Methods/Entities; "
+                                "part_of = composition between Methods/ExperimentSetups; "
                                 "compares_to = contrasted peers; "
-                                "evaluates = Metric measures a Method; "
-                                "measured_on = Metric measured on a dataset/benchmark Entity."
+                                "evaluates = a Measure measures a Method."
                             ),
                         },
                         "target_id": id_schema("Target node id"),

@@ -15,7 +15,7 @@ You receive:
 - `paper`: the full paper text
 - `spine_summary`: global contribution and argument-flow context from the census
 - `node_registry`: every census node (id, type, name, gloss, salience, and its `role`/`cluster`; `role: contribution` marks the primary method), so you can reference any node by id
-- `relations`: the global structural edges already established (part_of, compares_to, evaluates, measured_on) — already done, do not restate them
+- `relations`: the global structural edges already established (part_of, compares_to, evaluates) — already done, do not restate them
 - `section_focus`: the complete contract for the current section — its allowed unit types and their fields, the controlled vocabularies it uses, the relations it may author, a worked example, and section-specific rules
 
 `section_focus` is authoritative for everything specific to the current section. This shared prompt covers only what is common to all sections.
@@ -27,8 +27,8 @@ Output only the current section. Do not output `document`, `sections`, `relation
 ## Two jobs: materialize census nodes, and create born units
 
 A content section does two things:
-1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The method section materializes Method nodes; the evidence section materializes Metric and Entity nodes; the problem section materializes no census nodes.
-2. **Create** the born units the section is responsible for — units that are not census nodes: Problem (problem section), Claim (evidence section), Setting (evidence section).
+1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The method section materializes Method nodes; the evidence section materializes Measure nodes and the substrate ExperimentSetup nodes (dataset/benchmark/task); the problem section materializes no census nodes.
+2. **Create** the born units the section is responsible for — units that are not census nodes: Problem (problem section), Finding (evidence section), and the configuration ExperimentSetup units — data_split/inference_protocol/training_config/ensembling/population (evidence section).
 
 `section_focus` tells you which of these your section does. You may also introduce a node the census missed: give it a fresh, correctly-prefixed id and extract it as a full unit. `anchor_id` must name a unit you define in this section, and it must not be a Document.
 
@@ -43,11 +43,10 @@ A content section does two things:
 | unit type | prefix |
 |---|---|
 | Problem | `prb:` |
-| Claim | `clm:` |
+| Finding | `fnd:` |
 | Method | `mth:` |
-| Entity | `ent:` |
-| Setting | `set:` |
-| Metric | `met:` |
+| ExperimentSetup | `exp:` |
+| Measure | `mea:` |
 
 - When you materialize a census node, reuse its `node_id` exactly — do not rename it.
 - Unit IDs are globally unique; each ID is defined exactly once in its home section.
@@ -74,22 +73,22 @@ Plus the type-specific fields named in `section_focus`, directly on the unit —
 `provenance[]` is a flat list of top-level `§N` location markers from the paper, such as `["§12", "§14"]`.
 
 - Use only `§N` markers; do not invent `§N.M` subsection markers, and do not wrap them in objects or attach a kind/label.
-- Every `Claim` and every `Metric` must have non-empty `provenance`. Other units should carry provenance whenever the source can be localized.
+- Every `Finding` and every `Measure` must have non-empty `provenance`. Other units should carry provenance whenever the source can be localized.
 - Do not add `raw_text`, `locator`, or `paper_id`.
 
 ---
 
 ## Relations
 
-The structural edges (`part_of`, `compares_to`, `evaluates`, `measured_on`) are already in `relations` — do not restate them. The only edges a content section authors are these, and `section_focus` tells you which (if any) your section authors — the problem section authors `motivates`; the evidence section authors the claim-centric `about`/`supports`:
+The structural edges (`part_of`, `compares_to`, `evaluates`) are already in `relations` — do not restate them. The only edges a content section authors are these, and `section_focus` tells you which (if any) your section authors — the problem section authors `motivates`; the evidence section authors the Finding-centric `about`/`supports`:
 
 | relation | source → target | meaning |
 |---|---|---|
-| `motivates` | Problem → {Method, Entity} | the problem is what the node addresses |
-| `about` | Claim → {Method, Entity, Metric} | the Claim is about that node |
-| `supports` | {Metric, Claim} → Claim | the source is evidence for the target Claim |
+| `motivates` | Problem → {Method, ExperimentSetup} | the problem is what the node addresses |
+| `about` | Finding → {Method, ExperimentSetup, Measure} | the Finding is about that node |
+| `supports` | {Measure, Finding} → Finding | the source is evidence for the target Finding |
 
-The closing `resolves` edge (a Claim that answers the Problem) is **not** authored by any section — it is synthesized downstream from the contribution-node join.
+The closing `resolves` edge (a Finding that answers the Problem) is **not** authored by any section — it is synthesized downstream from the contribution-node join.
 
 Put these in the section's `relations[]`. Endpoints may reference any unit by id, including nodes defined in another section (the edge list is global) — but never invent an id. When a section's schema has no `relations` field, it authors none. When unsure an edge is valid, leave it out — a missing edge is recoverable downstream, an invalid one is discarded anyway.
 
@@ -130,7 +129,7 @@ Return a single JSON object:
 2. Every unit ID is lowercase and defined exactly once across the whole extraction.
 3. Knowledge units must not contain `section_type`.
 4. Every relation you author must satisfy the type matrix in `section_focus` (`about`, `supports`).
-5. Every `Claim` and `Metric` must have non-empty `provenance`.
+5. Every `Finding` and `Measure` must have non-empty `provenance`.
 6. Relation endpoints must reference IDs that exist (a node in `node_registry` or a unit you define); never create a reference-only ID.
 7. Every extracted unit must belong to this section.
 ```

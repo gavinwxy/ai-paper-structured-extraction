@@ -51,7 +51,7 @@ SECTION_ORDER = ["problem", "method", "evidence"]
 SECTION_ALLOWED_UNIT_TYPES: dict[str, set[str]] = {
     "problem": {"Problem"},
     "method": {"Method"},
-    "evidence": {"Metric", "Setting", "Claim", "Entity"},
+    "evidence": {"Measure", "ExperimentSetup", "Finding"},
 }
 # The unit type that should naturally anchor each section. Used when repairing an
 # anchor that names a non-local unit (e.g. an evidence section reaching for the
@@ -60,47 +60,49 @@ SECTION_ALLOWED_UNIT_TYPES: dict[str, set[str]] = {
 SECTION_PREFERRED_ANCHOR_TYPE: dict[str, str] = {
     "problem": "Problem",
     "method": "Method",
-    "evidence": "Metric",
+    "evidence": "Measure",
 }
-# Census node types each content section materializes into full units. Method
-# nodes become Method units in the method section; Metric and Entity nodes become
-# units in the evidence section. Problem and Claim are not census nodes — they are
-# born during content extraction (Problem in the problem section, Claim in evidence).
+# Census node types each content section materializes into full units. Method nodes
+# become Method units in the method section; Measure and the substrate-role
+# ExperimentSetup nodes (dataset/benchmark/task) become units in the evidence section.
+# Problem and Finding are not census nodes — they are born during content extraction
+# (Problem in the problem section, Finding in evidence). The configuration-role
+# ExperimentSetup units (data_split/inference_protocol/...) are likewise born in evidence.
 SECTION_MATERIALIZED_NODE_TYPES: dict[str, set[str]] = {
     "problem": set(),
     "method": {"Method"},
-    "evidence": {"Metric", "Entity"},
+    "evidence": {"Measure", "ExperimentSetup"},
 }
 # Content sections that author edges in their own `relations[]`: evidence authors the
 # claim-centric `about`/`supports`; problem authors `motivates` (Problem -> the census
-# Method/Entity it justifies). The closing `resolves` (Claim -> Problem) is NOT authored
+# Method/ExperimentSetup it justifies). The closing `resolves` (Finding -> Problem) is NOT authored
 # by any section — it crosses two parallel sections, so it is synthesized in assembly
 # (_assign_resolves). Structural edges are authored earlier by the relation pass. The
 # exact relation enum per section lives in the schema generator's STAGE_C_RELATIONS_BY_SECTION.
 SECTION_AUTHORS_RELATIONS = {"problem", "evidence"}
 TYPED_ARRAY_KEYS: dict[str, str] = {
-    "entities": "Entity",
     "problems": "Problem",
-    "settings": "Setting",
-    "claims": "Claim",
-    "metrics": "Metric",
     "methods": "Method",
+    "experiment_setups": "ExperimentSetup",
+    "measures": "Measure",
+    "findings": "Finding",
 }
 # Census node concepts. The census emits a flat list of referenceable nodes; each
 # node_id is reused verbatim as the final unit id once a content section materializes it.
-NODE_TYPES = {"Method", "Entity", "Metric"}
+NODE_TYPES = {"Method", "ExperimentSetup", "Measure"}
 NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Method": "mth:",
-    "Entity": "ent:",
-    "Metric": "met:",
+    "ExperimentSetup": "exp:",
+    "Measure": "mea:",
 }
 SALIENCE_LEVELS = {"must", "should"}
 # Census node role — the single granular tag the census emits per node. It is the
 # argumentative function the node plays, grouped into four search clusters by the guiding
 # principle "trace the method's life": the_method (mine), prior_art (others'), testbed
-# (data), yardsticks (metrics). `type`, the Entity class, and the document root are all
-# derived from `role` (see ROLE_TO_TYPE / normalize_census_nodes), so the model commits to
-# one axis instead of three half-overlapping fields (the old type/entity_class/is_root).
+# (data), yardsticks (metrics). `type` and the document root are derived from `role` (see
+# ROLE_TO_TYPE / normalize_census_nodes), and `role` is carried onto the materialized unit
+# as its fine-grained differentia (section-ir-0.9: type = generic scope, role = sub-axis),
+# so the model commits to one axis instead of several half-overlapping fields.
 NODE_ROLES = {
     "contribution",       # the_method: the paper's single primary method/system (the root)
     "component",          # the_method: a sub-method/module that is part of the contribution
@@ -118,10 +120,10 @@ ROLE_TO_TYPE: dict[str, str] = {
     "component": "Method",
     "builds_on": "Method",
     "compared_against": "Method",
-    "dataset": "Entity",
-    "benchmark": "Entity",
-    "task": "Entity",
-    "metric": "Metric",
+    "dataset": "ExperimentSetup",
+    "benchmark": "ExperimentSetup",
+    "task": "ExperimentSetup",
+    "metric": "Measure",
 }
 # role -> search cluster (carried into the registry as context for the relation pass).
 ROLE_CLUSTER: dict[str, str] = {
@@ -136,17 +138,21 @@ ROLE_CLUSTER: dict[str, str] = {
 }
 # The single document-level root method is the node whose role is `contribution`.
 CONTRIBUTION_ROLE = "contribution"
-# Entity roles double as the entity_class on materialized Entity units (identity mapping).
-ENTITY_ROLES = {role for role, type_ in ROLE_TO_TYPE.items() if type_ == "Entity"}
+# The census-discovered ExperimentSetup substrate roles (dataset/benchmark/task). These are
+# the external, citeable testbed nodes; the remaining ExperimentSetup roles (data_split/...)
+# are paper-local configuration born during content fill, not emitted by the census.
+SUBSTRATE_ROLES = {role for role, type_ in ROLE_TO_TYPE.items() if type_ == "ExperimentSetup"}
 UNIT_TYPES = {
     "Document",
-    "Entity",
-    "Method",
-    "Claim",
     "Problem",
-    "Setting",
-    "Metric",
+    "Method",
+    "ExperimentSetup",
+    "Measure",
+    "Finding",
 }
+# Archived/retired type names. The 0.8 set (Entity/Setting/Metric/Claim) was renamed and
+# merged in 0.9 (Entity ⊎ Setting → ExperimentSetup, Metric → Measure, Claim → Finding);
+# the old names are rejected so a stale prompt or model output fails loudly.
 FORBIDDEN_UNIT_TYPES = {
     "RoleBinding",
     "Relation",
@@ -155,12 +161,41 @@ FORBIDDEN_UNIT_TYPES = {
     "Proposition",
     "Category",
     "Provenance",
+    "Entity",
+    "Setting",
+    "Metric",
+    "Claim",
 }
 
-DOC_ROLES = {"research_article", "review", "meta_analysis", "methodology", "benchmark_survey"}
-# Claim kinds, scoped to AI/ML literature: `causal`/`correlational` never fire on this
-# corpus and were dropped. `descriptive` is retained for future-work findings.
-CLAIM_KINDS = {
+# --- Per-type `role` vocabularies (section-ir-0.9) ---------------------------------------
+# Every unit carries two classificatory axes: a generic `type` (the scientific-method-anchored
+# scope) and a fine-grained `role` (the discipline-specific differentia). The role vocab is
+# scoped per type below; Problem and Measure have no sub-axis and carry no `role`. Swapping
+# disciplines means swapping these role sets, never the `type` set.
+
+# Document role (was `doc_role`): the kind of document.
+DOCUMENT_ROLES = {"research_article", "review", "meta_analysis", "methodology", "benchmark_survey"}
+
+# Method role = the argumentative function the method plays (the census role, lifted onto the
+# unit). Derived from ROLE_TO_TYPE so it never drifts from the census vocabulary.
+METHOD_ROLES = {role for role, type_ in ROLE_TO_TYPE.items() if type_ == "Method"}
+
+# ExperimentSetup role = the merged Entity-class ⊎ Setting-kind axis (section-ir-0.9). The
+# substrate roles (dataset/benchmark/task) are census-discovered, external and citeable; the
+# configuration roles are paper-local and born during content fill, materialized only when they
+# scope a Measure (reachable via a score row's setup_id). Hardware / global hyperparameters that
+# scope no Measure are intentionally NOT captured ("apparatus is not a node").
+EXPERIMENT_SETUP_ROLES = SUBSTRATE_ROLES | {
+    "data_split",          # the dataset/subset/split a measure was computed on
+    "inference_protocol",  # test-time procedure: beam search params, crop/scale, single-view
+    "training_config",     # training regime that scopes a measure: optimizer/steps/schedule
+    "ensembling",          # multi-model or multi-scale combination presented as a configuration
+    "population",          # study population / cohort (e.g. a human-evaluation panel)
+}
+
+# Finding role (was `claim_kind`), scoped to AI/ML literature: `causal`/`correlational` never
+# fire on this corpus and were dropped; `descriptive` is retained for future-work findings.
+FINDING_ROLES = {
     "descriptive",
     "mechanistic",
     "comparative",
@@ -168,76 +203,68 @@ CLAIM_KINDS = {
     "ablation_finding",
     "failure_mode",
 }
-# Setting kinds (reintroduced 2026-05-27). The old `condition_kind` was dropped as monotone
-# (always evaluation_setup), but Settings are in fact heterogeneous: a metric is scoped by a
-# data split, a test-time inference protocol, a training/compute config, an ensembling regime,
-# or a study population — and these are not interchangeable (an ensemble number is not a fair
-# peer of a single-model number). `setting_kind` names that axis so consumers can separate
-# training/compute setups from evaluation splits without re-parsing the description.
-SETTING_KINDS = {
-    "data_split",          # the dataset/subset/split the metric was computed on
-    "inference_protocol",  # test-time procedure: beam search params, crop/scale, single-view
-    "training_config",     # training/compute setup: hardware, steps, fine-tuning regime
-    "ensembling",          # multi-model or multi-scale combination presented as a configuration
-    "population",          # study population / cohort (e.g. a human-evaluation panel)
+
+# `role` vocabulary per unit type (the differentia axis). Types absent here carry no `role`:
+# Problem is a single trunk; Measure is uniform.
+ROLE_VOCAB_BY_TYPE: dict[str, set[str]] = {
+    "Document": DOCUMENT_ROLES,
+    "Method": METHOD_ROLES,
+    "ExperimentSetup": EXPERIMENT_SETUP_ROLES,
+    "Finding": FINDING_ROLES,
 }
-# Entity = the data/problem substrate. `model` moved to Method (a named model is a Method)
-# and `hardware` is apparatus, not a node — both were dropped.
-ENTITY_CLASSES = {
-    "dataset",
-    "benchmark",
-    "task",
-}
-# Method kinds, scoped to AI/ML: `protocol`/`software_system` never fire on this corpus.
+
+# Method `method_kind` survives as an OPTIONAL descriptive attribute (the structural kind),
+# orthogonal to the argumentative `role`. Scoped to AI/ML: `protocol`/`software_system` never
+# fire on this corpus.
 METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function"}
 COMPARISON_DIRECTIONS = {"higher_is_better", "lower_is_better", "target", "unspecified"}
-# Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Metric
-# `value_type` (always scalar), Claim `novelty` (always original), Claim `epistemic_status`
-# (always conclusion), Claim `polarity` (dropped by request). The provenance `source_kind`
-# enum was likewise dropped (2026-05-26): provenance is now a flat list of `§N` location
-# markers, so SOURCE_KINDS no longer exists. (Setting `condition_kind` was dropped here too
-# but returns above as the multi-valued `setting_kind`.)
+# Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Measure
+# `value_type` (always scalar), Finding `novelty` (always original), `epistemic_status`
+# (always conclusion), `polarity` (dropped by request). The provenance `source_kind` enum was
+# dropped (2026-05-26): provenance is a flat list of `§N` markers. The `measured_on` relation
+# was dropped (section-ir-0.9): metric→dataset is now the score row's setup_id → ExperimentSetup.
 
-# Global relation type matrix (section-ir-0.7). Endpoints resolve to a unit defined
-# anywhere in the extraction; relations are no longer section-local.
+# Global relation type matrix (section-ir-0.9). Endpoints resolve to a unit defined
+# anywhere in the extraction; relations are no longer section-local. `measured_on` was
+# removed in 0.9 — a Measure binds to its dataset/split via the score row's setup_id →
+# ExperimentSetup, not via a global edge.
 RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
-    "part_of": ({"Method", "Entity"}, {"Method", "Entity"}),
-    "compares_to": ({"Method", "Entity", "Metric"}, {"Method", "Entity", "Metric"}),
-    "evaluates": ({"Metric"}, {"Method"}),
-    "measured_on": ({"Metric"}, {"Entity"}),
-    "about": ({"Claim"}, {"Method", "Entity", "Metric"}),
-    "supports": ({"Metric", "Claim"}, {"Claim"}),
-    "motivates": ({"Problem"}, {"Method", "Entity"}),
-    "resolves": ({"Claim"}, {"Problem"}),
+    "part_of": ({"Method", "ExperimentSetup"}, {"Method", "ExperimentSetup"}),
+    "compares_to": ({"Method", "ExperimentSetup", "Measure"}, {"Method", "ExperimentSetup", "Measure"}),
+    "evaluates": ({"Measure"}, {"Method"}),
+    "about": ({"Finding"}, {"Method", "ExperimentSetup", "Measure"}),
+    "supports": ({"Measure", "Finding"}, {"Finding"}),
+    "motivates": ({"Problem"}, {"Method", "ExperimentSetup"}),
+    "resolves": ({"Finding"}, {"Problem"}),
 }
 # Which stage authors each relation. The relation pass (stage B) owns the structural
-# entity<->entity edges over the full node set; content extraction (stage C) owns the
-# edges that require units born during content — the claim-centric `about`/`supports`,
-# and `motivates` from a born Problem to the census Method/Entity it justifies (the
+# node<->node edges over the full node set; content extraction (stage C) owns the
+# edges that require units born during content — the Finding-centric `about`/`supports`,
+# and `motivates` from a born Problem to the census Method/ExperimentSetup it justifies (the
 # Problem-born source plus the globally visible census target are both in hand in the
-# problem call, so no forward reference is needed). `resolves` (Claim -> Problem) is the
+# problem call, so no forward reference is needed). `resolves` (Finding -> Problem) is the
 # closing stroke of the discovery arc; it joins two units born in *different* parallel
 # sections, so no section can author it — assembly synthesizes it (_assign_resolves) from
 # the contribution-node join, which is globally visible.
-STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates", "measured_on"}
+STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates"}
 STAGE_C_RELATIONS = {"about", "supports", "motivates"}
 SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
 UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Document": "doc:",
     "Problem": "prb:",
-    "Claim": "clm:",
+    "Finding": "fnd:",
     "Method": "mth:",
-    "Entity": "ent:",
-    "Setting": "set:",
-    "Metric": "met:",
+    "ExperimentSetup": "exp:",
+    "Measure": "mea:",
 }
 ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Document": {"id", "type", "doc_id", "title", "doc_role", "thesis", "provenance"},
-    "Entity": {"id", "type", "name", "entity_class", "provenance"},
+    "Document": {"id", "type", "doc_id", "title", "role", "thesis", "provenance"},
+    "Problem": {"id", "type", "description", "provenance"},
     "Method": {
         "id",
         "type",
+        "role",
         "name",
         "method_kind",
         "description",
@@ -248,31 +275,41 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "implementation_notes",
         "provenance",
     },
-    "Claim": {
+    # ExperimentSetup = old Entity ⊎ Setting. `role` is the merged differentia (substrate vs
+    # configuration); `name` labels it (a dataset name, a split label); `description` is
+    # optional prose. Bibliography markers live on the census node's cite_keys (used by
+    # reconcile_reference_units via node_id), not on the unit.
+    "ExperimentSetup": {
         "id",
         "type",
-        "statement",
-        "claim_kind",
+        "role",
+        "name",
+        "description",
         "provenance",
     },
-    "Problem": {"id", "type", "description", "provenance"},
-    "Setting": {"id", "type", "setting_kind", "description", "provenance"},
-    "Metric": {
+    "Measure": {
         "id",
         "type",
         "name",
         "unit",
         "scores",
-        "setting_ids",
+        "setup_ids",
         "comparison_direction",
+        "provenance",
+    },
+    "Finding": {
+        "id",
+        "type",
+        "role",
+        "statement",
         "provenance",
     },
 }
 ALLOWED_SECTION_FIELDS = {"section_type", "anchor_id", "covers_entries", "units"}
-# Unit fields that hold a list of unit-id references (rewritten on dedup). In 0.7
-# only Metric.setting_ids remains a reference-list field; subject_id, target_ids,
-# components, and evaluated_on were promoted to global relations.
-REFERENCE_LIST_FIELDS = ("setting_ids",)
+# Unit fields that hold a list of unit-id references (rewritten on dedup). In 0.9
+# only Measure.setup_ids remains a reference-list field (it points at the section-local
+# ExperimentSetup units the measure is scoped by).
+REFERENCE_LIST_FIELDS = ("setup_ids",)
 
 
 def load_prompt(path: Path) -> tuple[str, str]:
@@ -515,17 +552,22 @@ def _flatten_typed_arrays(section_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _canonicalize_id_alias(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith("setting:"):
-        return f"set:{value.split(':', 1)[1]}"
-    # Problem ids prefix as prb:; normalize a stray ctx: the model may emit out of habit
-    # (Context was the old type name) so its edges/anchors still resolve.
-    if isinstance(value, str) and value.startswith("ctx:"):
-        return f"prb:{value.split(':', 1)[1]}"
-    return value
+    # Map retired/stray id prefixes to their section-ir-0.9 form so a model's old-habit id
+    # (a renamed 0.8 type, or the pre-0.8 Context) still resolves to the right unit/edge.
+    if not isinstance(value, str) or ":" not in value:
+        return value
+    prefix, rest = value.split(":", 1)
+    alias = {
+        "setting": "exp", "set": "exp", "ent": "exp",  # Entity ⊎ Setting -> ExperimentSetup
+        "met": "mea",                                   # Metric -> Measure
+        "clm": "fnd",                                   # Claim -> Finding
+        "ctx": "prb",                                   # Context -> Problem (pre-0.8)
+    }
+    return f"{alias[prefix]}:{rest}" if prefix in alias else value
 
 
 def _canonicalize_section_id_aliases(sections: list[dict[str, Any]]) -> None:
-    """Normalize common LLM ID prefix aliases (e.g. setting: -> set:) before validation."""
+    """Normalize common LLM ID prefix aliases (e.g. setting:/set:/ent: -> exp:) before validation."""
     for section in sections:
         section["anchor_id"] = _canonicalize_id_alias(section.get("anchor_id"))
         covers_entries = section.get("covers_entries")
@@ -593,8 +635,8 @@ def _rewrite_relation_endpoints(relations: list[dict[str, Any]], replacements: d
                 relation[key] = replacements[value]
 
 
-def _dedup_entities(sections: list[dict[str, Any]], relations: list[dict[str, Any]]) -> list[str]:
-    """Merge duplicate entities with the same name across sections of the same type."""
+def _dedup_experiment_setups(sections: list[dict[str, Any]], relations: list[dict[str, Any]]) -> list[str]:
+    """Merge duplicate ExperimentSetup units with the same name across sections of the same type."""
     seen: dict[tuple[str, str], str] = {}
     protected_ids = _covered_entry_ids(sections)
     replacements: dict[str, str] = {}
@@ -612,7 +654,7 @@ def _dedup_entities(sections: list[dict[str, Any]], relations: list[dict[str, An
             if not isinstance(unit, dict):
                 units_to_keep.append(unit)
                 continue
-            if unit.get("type") != "Entity":
+            if unit.get("type") != "ExperimentSetup":
                 units_to_keep.append(unit)
                 continue
 
@@ -630,7 +672,7 @@ def _dedup_entities(sections: list[dict[str, Any]], relations: list[dict[str, An
                 ids_to_replace[unit_id] = seen[key]
                 replacements[unit_id] = seen[key]
                 warnings.append(
-                    f"Merged duplicate Entity {unit_id} into {seen[key]} in {section_type} section"
+                    f"Merged duplicate ExperimentSetup {unit_id} into {seen[key]} in {section_type} section"
                 )
             else:
                 if isinstance(unit_id, str):
@@ -786,19 +828,14 @@ def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
-def _build_unit_type_index(
-    sections: list[dict[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Index unit type (and entity_class for Entities) by unit id across all sections."""
+def _build_unit_type_index(sections: list[dict[str, Any]]) -> dict[str, Any]:
+    """Index unit type by unit id across all sections."""
     type_by_id: dict[str, Any] = {}
-    entity_class_by_id: dict[str, Any] = {}
     for section in sections:
         for unit in section.get("units", []) or []:
             if isinstance(unit, dict) and isinstance(unit.get("id"), str):
                 type_by_id[unit["id"]] = unit.get("type")
-                if unit.get("type") == "Entity":
-                    entity_class_by_id[unit["id"]] = unit.get("entity_class")
-    return type_by_id, entity_class_by_id
+    return type_by_id
 
 
 def _dedup_relations(relations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -823,7 +860,7 @@ def _drop_dangling_relations(
     relations: list[dict[str, Any]], sections: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Drop global relations whose source or target resolves to no defined unit."""
-    type_by_id, _ = _build_unit_type_index(sections)
+    type_by_id = _build_unit_type_index(sections)
     kept: list[dict[str, Any]] = []
     warnings: list[str] = []
     for relation in relations:
@@ -847,10 +884,10 @@ def _drop_invalid_relations(
     """Drop global relations that violate the relation type matrix.
 
     The model sometimes emits relations the IR cannot represent (a `compares_to`
-    between two Claims, a `measured_on` onto a non-dataset Entity). Such edges are
+    between two Findings, an `evaluates` onto a non-Method). Such edges are
     unassemblable, so remove them with a warning instead of failing the extraction.
     """
-    type_by_id, entity_class_by_id = _build_unit_type_index(sections)
+    type_by_id = _build_unit_type_index(sections)
     kept: list[dict[str, Any]] = []
     warnings: list[str] = []
     for relation in relations:
@@ -872,12 +909,6 @@ def _drop_invalid_relations(
                 f"({src_type} -> {tgt_type})"
             )
             continue
-        if rel == "measured_on" and entity_class_by_id.get(tgt) not in {"dataset", "benchmark"}:
-            warnings.append(
-                f"Dropped relation {src} -[measured_on]-> {tgt}: "
-                "target must be a dataset/benchmark Entity"
-            )
-            continue
         kept.append(relation)
     return kept, warnings
 
@@ -888,7 +919,7 @@ def _repair_section_anchors(sections: list[dict[str, Any]]) -> list[str]:
     A section may anchor on an external id (e.g. an experiment section anchoring on
     the main `mth:` method, which lives in the method section). The anchor must be a
     local, non-Document unit. Prefer re-pointing to a local unit of the section's
-    natural anchor type (experiment -> Metric, analysis -> Claim, ...) so the repaired
+    natural anchor type (evidence -> Measure, ...) so the repaired
     anchor stays semantically meaningful, then fall back to the first local unit.
     """
     warnings: list[str] = []
@@ -944,6 +975,33 @@ def _assign_covers_entries(
         section["covers_entries"] = sorted(uid for uid in local_ids if uid in census_node_ids)
 
 
+def _assign_roles_from_census(sections: list[dict[str, Any]], census: dict[str, Any] | None) -> None:
+    """Stamp the census role onto each materialized unit (section-ir-0.9).
+
+    `role` is a first-class unit field, but for census-materialized units (Method and the
+    substrate-role ExperimentSetup nodes) the census already committed the role — so inject it
+    here authoritatively rather than trusting the content model to echo it. Born units
+    (configuration ExperimentSetup, Finding) author their own role and are left untouched.
+    Measure carries no role even though its census node's role is the degenerate "metric".
+    """
+    if not census:
+        return
+    role_by_node_id = {
+        node.get("node_id"): node.get("role")
+        for node in iter_census_nodes(census)
+        if isinstance(node.get("node_id"), str)
+    }
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict):
+                continue
+            if unit.get("type") not in ROLE_VOCAB_BY_TYPE:
+                continue
+            census_role = role_by_node_id.get(unit.get("id"))
+            if census_role:
+                unit["role"] = census_role
+
+
 def parse_sections(paper_content: str) -> dict[str, str]:
     """Split paper text into a mapping from section marker number to text block."""
     matches = list(SECTION_MARKER_RE.finditer(paper_content))
@@ -985,7 +1043,7 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
     """Repair section-obvious node-census problems before strict validation.
 
     - Derive each node's `type` from its `role` (role is the single granular tag the model
-      emits; type/Entity-class/root are coarsenings of it).
+      emits; type and document root are coarsenings of it).
     - Re-prefix a node_id whose prefix disagrees with its derived type (mth:/ent:/met:).
     - Suffix later duplicate node_ids so each is defined exactly once.
     - Ensure exactly one document-level root method (role `contribution`): promote the first
@@ -1112,8 +1170,8 @@ def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
     Carries what later stages need to reference and route a node: id, type, name, gloss,
     salience, and the granular `role` with its search `cluster`. The role lets the relation
     pass route edges (a `component` is part_of the `contribution`; a `compared_against`
-    method is compares_to it) and the content stage find the contribution method. For an
-    Entity, `role` doubles as the entity_class (dataset/benchmark/task).
+    method is compares_to it) and the content stage find the contribution method. The `role`
+    is carried straight onto the materialized unit as its fine-grained differentia.
     """
     registry: list[dict[str, Any]] = []
     for node in iter_census_nodes(census):
@@ -1128,8 +1186,6 @@ def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
             "gloss": node.get("gloss", ""),
             "salience": node.get("salience", "should"),
         }
-        if node_type == "Entity" and role in ENTITY_ROLES:
-            entry["entity_class"] = role
         registry.append(entry)
     return registry
 
@@ -1219,7 +1275,7 @@ def build_document_unit(paper_content: str, thesis: str = "") -> dict[str, Any]:
         "type": "Document",
         "doc_id": doc_id,
         "title": title,
-        "doc_role": "research_article",
+        "role": "research_article",
         "thesis": thesis,
         "provenance": [],
     }
@@ -1251,7 +1307,7 @@ def build_extraction_notes(
     must_nodes = census_must_node_ids(census)
     covered = must_nodes & materialized_ids
     notes: dict[str, Any] = {
-        "ir_version": "section-ir-0.8",
+        "ir_version": "section-ir-0.9",
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
         "uncertain_assignments": [],
         "skipped_spans": [],
@@ -1318,9 +1374,9 @@ def _sanitize_unit_text(sections: list[dict[str, Any]]) -> list[str]:
 
 
 def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
-    """Blank dangling or wrong-type per-row score references (system_id/setting_id) once the
+    """Blank dangling or wrong-type per-row score references (system_id/setup_id) once the
     full unit set is known — lossy-but-safe, logged to uncertain_assignments. system_id resolves
-    globally (Methods live in the method section); setting_id resolves to a section-local Setting."""
+    globally (Methods live in the method section); setup_id resolves to a section-local ExperimentSetup."""
     warnings: list[str] = []
     unit_index = {
         unit["id"]: unit
@@ -1333,7 +1389,7 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
             unit.get("id") for unit in section.get("units", []) or [] if isinstance(unit, dict)
         }
         for unit in section.get("units", []) or []:
-            if not isinstance(unit, dict) or unit.get("type") != "Metric":
+            if not isinstance(unit, dict) or unit.get("type") != "Measure":
                 continue
             for index, score in enumerate(unit.get("scores", []) or []):
                 if not isinstance(score, dict):
@@ -1343,30 +1399,30 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
                     system_id not in unit_index or unit_index[system_id].get("type") != "Method"
                 ):
                     warnings.append(
-                        f"Metric {unit.get('id')} scores[{index}] system_id {system_id!r} "
+                        f"Measure {unit.get('id')} scores[{index}] system_id {system_id!r} "
                         "did not resolve to a Method; blanked"
                     )
                     score["system_id"] = ""
-                setting_id = score.get("setting_id")
-                if setting_id and (
-                    setting_id not in local_ids
-                    or unit_index.get(setting_id, {}).get("type") != "Setting"
+                setup_id = score.get("setup_id")
+                if setup_id and (
+                    setup_id not in local_ids
+                    or unit_index.get(setup_id, {}).get("type") != "ExperimentSetup"
                 ):
                     warnings.append(
-                        f"Metric {unit.get('id')} scores[{index}] setting_id {setting_id!r} "
-                        "is not a local Setting; blanked"
+                        f"Measure {unit.get('id')} scores[{index}] setup_id {setup_id!r} "
+                        "is not a local ExperimentSetup; blanked"
                     )
-                    score["setting_id"] = ""
+                    score["setup_id"] = ""
     return warnings
 
 
 def _drop_baseline_evaluates(
     relations: list[dict[str, Any]], census: dict[str, Any] | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Drop `evaluates` edges pointing at a `compared_against` baseline. By policy a Metric
+    """Drop `evaluates` edges pointing at a `compared_against` baseline. By policy a Measure
     `evaluates` only the method family it measures (contribution/component); a baseline is linked
     structurally by `compares_to` and quantitatively by a score row (system_id), never evaluated —
-    so the metric's primary subject stays recoverable instead of diluted across every system row."""
+    so the measure's primary subject stays recoverable instead of diluted across every system row."""
     if not census:
         return relations, []
     role_by_id = {
@@ -1397,15 +1453,15 @@ def _assign_resolves(
     relations: list[dict[str, Any]],
     census: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """Synthesize the closing `resolves` edges of the discovery arc: Claim -> Problem.
+    """Synthesize the closing `resolves` edges of the discovery arc: Finding -> Problem.
 
-    `resolves` is a born->born edge across two *parallel* content sections (the headline Claim
+    `resolves` is a born->born edge across two *parallel* content sections (the headline Finding
     in evidence, the Problem in the problem section), so neither section can author it without a
     forward reference into the other's freshly-invented ids. But both ends attach to the same
-    globally-visible census `contribution` node — the Problem `motivates` it, the headline Claim
+    globally-visible census `contribution` node — the Problem `motivates` it, the headline Finding
     is `about` it — so assembly derives the edge deterministically once every section is in hand:
 
-        Problem --motivates--> [contribution] <--about-- Claim   =>   Claim --resolves--> Problem
+        Problem --motivates--> [contribution] <--about-- Finding   =>   Finding --resolves--> Problem
 
     Returns new relation dicts to append; downstream `_dedup_relations` removes any duplicates.
     """
@@ -1464,14 +1520,14 @@ def _assign_resolves(
             or rel.get("target_id") not in contribution_ids
         ):
             continue
-        claim_id = rel.get("source_id")
-        if unit_type.get(claim_id) != "Claim" or claim_id in seen:
+        finding_id = rel.get("source_id")
+        if unit_type.get(finding_id) != "Finding" or finding_id in seen:
             continue
-        seen.add(claim_id)
-        prov = rel.get("provenance") or unit_prov.get(problem_id) or unit_prov.get(claim_id) or []
+        seen.add(finding_id)
+        prov = rel.get("provenance") or unit_prov.get(problem_id) or unit_prov.get(finding_id) or []
         new_relations.append(
             {
-                "source_id": claim_id,
+                "source_id": finding_id,
                 "relation": "resolves",
                 "target_id": problem_id,
                 "provenance": list(prov),
@@ -1520,10 +1576,11 @@ def assemble_extraction(
 
     _canonicalize_section_id_aliases(sections)
     _canonicalize_relation_aliases(relations)
+    _assign_roles_from_census(sections, census)
 
     assembly_warnings: list[str] = []
     assembly_warnings.extend(_sanitize_unit_text(sections))
-    assembly_warnings.extend(_dedup_entities(sections, relations))
+    assembly_warnings.extend(_dedup_experiment_setups(sections, relations))
     assembly_warnings.extend(_dedup_unit_ids(sections))
     assembly_warnings.extend(_drop_empty_sections(sections))
     assembly_warnings.extend(_normalize_provenance_markers(sections))
@@ -1540,7 +1597,7 @@ def assemble_extraction(
     assembly_warnings.extend(warns)
 
     # Synthesize the closing `resolves` edge(s) from the surviving contribution-node join,
-    # then dedup so a re-run can't double it. These are valid by construction (Claim->Problem).
+    # then dedup so a re-run can't double it. These are valid by construction (Finding->Problem).
     synthesized = _assign_resolves(sections, relations, census)
     if synthesized:
         relations.extend(synthesized)
@@ -1775,7 +1832,7 @@ def reconcile_reference_units(
     extraction: dict[str, Any],
     census: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Link each reference to the spine Method/Entity unit(s) it contributes.
+    """Link each reference to the spine Method/ExperimentSetup unit(s) it contributes.
 
     The references pass runs before section extraction, so it never knows the final unit IDs
     and always emits `provides_unit_ids: []`. Once the spine exists, fill it with a two-tier
@@ -1787,7 +1844,7 @@ def reconcile_reference_units(
        paper's own citation, so it catches names the spine spells differently (reference "GNMT"
        -> unit "GNMT + RL" cited as [31]).
     2. **Name** (fallback, fuzzy): when no citation key matches, fall back to a unique
-       normalized match of `provides_name` against Method/Entity unit names (the original
+       normalized match of `provides_name` against Method/ExperimentSetup unit names (the original
        behavior). Conservative: an ambiguous (multi-unit) or unmatched name stays `[]`.
 
     Mutates `references` in place and returns warnings for the audit trail.
@@ -1799,14 +1856,14 @@ def reconcile_reference_units(
     if not isinstance(ref_list, list):
         return warnings
 
-    # Index materialized Method/Entity units by id and by normalized name.
+    # Index materialized Method/ExperimentSetup units by id and by normalized name.
     type_by_id: dict[str, Any] = {}
     name_to_ids: dict[str, list[str]] = {}
     for section in extraction.get("sections", []) or []:
         if not isinstance(section, dict):
             continue
         for unit in section.get("units", []) or []:
-            if not isinstance(unit, dict) or unit.get("type") not in {"Method", "Entity"}:
+            if not isinstance(unit, dict) or unit.get("type") not in {"Method", "ExperimentSetup"}:
                 continue
             uid = unit.get("id")
             if not isinstance(uid, str):
@@ -2143,7 +2200,7 @@ def _validate_provenance(unit: dict[str, Any], issues: list[str]) -> None:
         issues.append(f"Unit {uid} provenance must be a list")
         return
 
-    if unit.get("type") in {"Claim", "Metric"} and not provenance:
+    if unit.get("type") in {"Finding", "Measure"} and not provenance:
         issues.append(f"{unit.get('type')} {uid} must have non-empty provenance")
 
     for index, marker in enumerate(provenance):
@@ -2188,24 +2245,30 @@ def _validate_unit_fields(
     uid = unit.get("id", "<missing-id>")
     utype = unit.get("type")
 
+    # `role` is the fine-grained differentia carried on every unit type that has one
+    # (Document/Method/ExperimentSetup/Finding). Problem and Measure carry no role.
+    role = unit.get("role")
+    role_vocab = ROLE_VOCAB_BY_TYPE.get(utype)
+    if role_vocab is not None:
+        if not role:
+            issues.append(f"{utype} {uid} missing role")
+        elif role not in role_vocab:
+            issues.append(f"{utype} {uid} has invalid role: {role}")
+
     if utype == "Document":
-        for key in ("doc_id", "title", "doc_role"):
+        for key in ("doc_id", "title"):
             if not unit.get(key):
                 issues.append(f"Document {uid} missing {key}")
-        if unit.get("doc_role") not in DOC_ROLES:
-            issues.append(f"Document {uid} has invalid doc_role: {unit.get('doc_role')}")
-    elif utype == "Entity":
-        for key in ("name", "entity_class"):
-            if not unit.get(key):
-                issues.append(f"Entity {uid} missing {key}")
-        if unit.get("entity_class") not in ENTITY_CLASSES:
-            issues.append(f"Entity {uid} has invalid entity_class: {unit.get('entity_class')}")
+    elif utype == "ExperimentSetup":
+        if not unit.get("name"):
+            issues.append(f"ExperimentSetup {uid} missing name")
     elif utype == "Method":
-        for key in ("name", "method_kind"):
-            if not unit.get(key):
-                issues.append(f"Method {uid} missing {key}")
-        if unit.get("method_kind") not in METHOD_KINDS:
-            issues.append(f"Method {uid} has invalid method_kind: {unit.get('method_kind')}")
+        if not unit.get("name"):
+            issues.append(f"Method {uid} missing name")
+        # method_kind is an OPTIONAL descriptive attribute (orthogonal to role); validate when present.
+        method_kind = unit.get("method_kind")
+        if method_kind is not None and method_kind not in METHOD_KINDS:
+            issues.append(f"Method {uid} has invalid method_kind: {method_kind}")
         # inputs/outputs/formulas/objective_function are optional; validate shape only when present.
         formulas = unit.get("formulas")
         if formulas is not None:
@@ -2231,83 +2294,74 @@ def _validate_unit_fields(
                 _validate_formula_symbols(
                     uid, "objective_function", objective.get("symbols"), issues
                 )
-    elif utype == "Claim":
-        for key in ("statement", "claim_kind"):
-            if not unit.get(key):
-                issues.append(f"Claim {uid} missing {key}")
-        if unit.get("claim_kind") not in CLAIM_KINDS:
-            issues.append(f"Claim {uid} has invalid claim_kind: {unit.get('claim_kind')}")
+    elif utype == "Finding":
+        if not unit.get("statement"):
+            issues.append(f"Finding {uid} missing statement")
     elif utype == "Problem":
         if not unit.get("description"):
             issues.append(f"Problem {uid} missing description")
-    elif utype == "Setting":
-        if not unit.get("description"):
-            issues.append(f"Setting {uid} missing description")
-        if not unit.get("setting_kind"):
-            issues.append(f"Setting {uid} missing setting_kind")
-        elif unit.get("setting_kind") not in SETTING_KINDS:
-            issues.append(f"Setting {uid} has invalid setting_kind: {unit.get('setting_kind')}")
-    elif utype == "Metric":
+    elif utype == "Measure":
         for key in ("name", "unit"):
             if not unit.get(key):
-                issues.append(f"Metric {uid} missing {key}")
+                issues.append(f"Measure {uid} missing {key}")
         scores = unit.get("scores")
         if not isinstance(scores, list) or not scores:
-            issues.append(f"Metric {uid} scores must be a non-empty list")
+            issues.append(f"Measure {uid} scores must be a non-empty list")
         else:
             for index, score in enumerate(scores):
                 if not isinstance(score, dict):
-                    issues.append(f"Metric {uid} scores[{index}] must be an object")
+                    issues.append(f"Measure {uid} scores[{index}] must be an object")
                     continue
                 if not score.get("variant"):
-                    issues.append(f"Metric {uid} scores[{index}] missing variant")
+                    issues.append(f"Measure {uid} scores[{index}] missing variant")
                 if score.get("value") is None:
-                    issues.append(f"Metric {uid} scores[{index}] missing value")
+                    issues.append(f"Measure {uid} scores[{index}] missing value")
                 elif not isinstance(score.get("value"), str):
-                    issues.append(f"Metric {uid} scores[{index}] value must be a string")
+                    issues.append(f"Measure {uid} scores[{index}] value must be a string")
                 if not isinstance(score.get("variance"), str):
-                    issues.append(f"Metric {uid} scores[{index}] variance must be a string")
-                # Per-row references (0.7, 2026-05-27): a row may name the Method it reports
-                # (system_id, global) and the local Setting it was measured under (setting_id).
-                # Both are optional — "" means "not pinned" — but when non-empty they must resolve.
+                    issues.append(f"Measure {uid} scores[{index}] variance must be a string")
+                # Per-row references: a row may name the Method it reports (system_id, global)
+                # and the local ExperimentSetup it was measured under (setup_id). In 0.9 the
+                # setup_id also carries the dataset/split — it is how a Measure binds to its
+                # data, replacing the removed `measured_on` edge. Both are optional ("" means
+                # "not pinned") but when non-empty must resolve.
                 system_id = score.get("system_id")
                 if system_id:
                     system_unit = unit_index.get(system_id)
                     if system_unit is None:
-                        issues.append(f"Metric {uid} scores[{index}] has unknown system_id: {system_id}")
+                        issues.append(f"Measure {uid} scores[{index}] has unknown system_id: {system_id}")
                     elif system_unit.get("type") != "Method":
-                        issues.append(f"Metric {uid} scores[{index}] system_id {system_id} must point to a Method")
-                row_setting_id = score.get("setting_id")
-                if row_setting_id:
-                    row_setting_unit = unit_index.get(row_setting_id)
-                    if row_setting_unit is None:
-                        issues.append(f"Metric {uid} scores[{index}] has unknown setting_id: {row_setting_id}")
-                    elif row_setting_id not in local_ids:
-                        issues.append(f"Metric {uid} scores[{index}] setting_id must be section-local: {row_setting_id}")
-                    elif row_setting_unit.get("type") != "Setting":
-                        issues.append(f"Metric {uid} scores[{index}] setting_id {row_setting_id} must point to a local Setting")
-        # setting_ids scope a metric to local Settings. In 0.7 it is optional: a
-        # deployable metric may carry scoping Settings, an ablation metric may carry
-        # none. The metric->method and metric->dataset edges are global relations now.
-        setting_ids = unit.get("setting_ids")
-        if setting_ids is None:
-            issues.append(f"Metric {uid} missing setting_ids")
-        elif not isinstance(setting_ids, list):
-            issues.append(f"Metric {uid} setting_ids must be a list")
+                        issues.append(f"Measure {uid} scores[{index}] system_id {system_id} must point to a Method")
+                row_setup_id = score.get("setup_id")
+                if row_setup_id:
+                    row_setup_unit = unit_index.get(row_setup_id)
+                    if row_setup_unit is None:
+                        issues.append(f"Measure {uid} scores[{index}] has unknown setup_id: {row_setup_id}")
+                    elif row_setup_id not in local_ids:
+                        issues.append(f"Measure {uid} scores[{index}] setup_id must be section-local: {row_setup_id}")
+                    elif row_setup_unit.get("type") != "ExperimentSetup":
+                        issues.append(f"Measure {uid} scores[{index}] setup_id {row_setup_id} must point to a local ExperimentSetup")
+        # setup_ids scope a measure to local ExperimentSetup units. It is optional: a deployable
+        # measure is normally scoped by one setup, an ablation measure may carry none.
+        setup_ids = unit.get("setup_ids")
+        if setup_ids is None:
+            issues.append(f"Measure {uid} missing setup_ids")
+        elif not isinstance(setup_ids, list):
+            issues.append(f"Measure {uid} setup_ids must be a list")
         else:
-            for setting_id in setting_ids:
-                setting_unit = unit_index.get(setting_id)
-                if setting_unit is None:
-                    issues.append(f"Metric {uid} has unknown setting_id: {setting_id}")
-                elif setting_id not in local_ids:
-                    issues.append(f"Metric {uid} setting_id must be section-local: {setting_id}")
-                elif setting_unit.get("type") != "Setting":
+            for setup_id in setup_ids:
+                setup_unit = unit_index.get(setup_id)
+                if setup_unit is None:
+                    issues.append(f"Measure {uid} has unknown setup_id: {setup_id}")
+                elif setup_id not in local_ids:
+                    issues.append(f"Measure {uid} setup_id must be section-local: {setup_id}")
+                elif setup_unit.get("type") != "ExperimentSetup":
                     issues.append(
-                        f"Metric {uid} setting_id {setting_id} must point to a local Setting"
+                        f"Measure {uid} setup_id {setup_id} must point to a local ExperimentSetup"
                     )
         comparison_direction = unit.get("comparison_direction")
         if "comparison_direction" in unit and comparison_direction not in COMPARISON_DIRECTIONS:
-            issues.append(f"Metric {uid} has invalid comparison_direction: {comparison_direction}")
+            issues.append(f"Measure {uid} has invalid comparison_direction: {comparison_direction}")
 
 
 def _validate_relation(
@@ -2345,15 +2399,6 @@ def _validate_relation(
         issues.append(
             f"relation {source_id} -[{rel}]-> {target_id} has invalid target type: "
             f"{target_unit.get('type')}"
-        )
-    if (
-        rel == "measured_on"
-        and target_unit is not None
-        and target_unit.get("entity_class") not in {"dataset", "benchmark"}
-    ):
-        issues.append(
-            f"relation {source_id} -[measured_on]-> {target_id} target must be a "
-            "dataset/benchmark Entity"
         )
 
 
@@ -2515,12 +2560,12 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
         if isinstance(relation, dict) and relation.get("relation") in ARGUMENTATIVE_INCOMING
     }
     for uid, unit in unit_index.items():
-        if unit.get("type") == "Claim":
+        if unit.get("type") == "Finding":
             if (
                 unit_sections.get(uid) != "evidence"
                 and uid not in incoming_argumentative
             ):
-                issues.append(f"Claim {uid} lacks an incoming argumentative (supports) relation")
+                issues.append(f"Finding {uid} lacks an incoming argumentative (supports) relation")
 
     notes = extraction.get("extraction_notes")
     if not isinstance(notes, dict):
@@ -2540,7 +2585,7 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
                 issues.append(f"extraction_notes missing {key}")
         if notes.get("input_mode") != "node_census_pipeline":
             issues.append(f"extraction_notes has invalid input_mode: {notes.get('input_mode')}")
-        if notes.get("ir_version") != "section-ir-0.8":
+        if notes.get("ir_version") != "section-ir-0.9":
             issues.append(f"extraction_notes has invalid ir_version: {notes.get('ir_version')}")
         sections_used = notes.get("sections_used", [])
         if isinstance(sections_used, list):

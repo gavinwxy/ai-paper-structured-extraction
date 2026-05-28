@@ -36,8 +36,8 @@
               "id",
               "type",
               "provenance",
+              "role",
               "name",
-              "method_kind",
               "description",
               "implementation_notes"
             ],
@@ -62,6 +62,16 @@
                   "type": "string"
                 }
               },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "contribution",
+                  "component",
+                  "builds_on",
+                  "compared_against"
+                ],
+                "description": "Argumentative role: contribution (the single primary method/system), component (a sub-method that is part_of the contribution), builds_on (prior work extended), or compared_against (a baseline)"
+              },
               "name": {
                 "type": "string",
                 "description": "Name of the method"
@@ -74,7 +84,7 @@
                   "training_strategy",
                   "objective_function"
                 ],
-                "description": "Classification of the method"
+                "description": "Optional structural classification of the method; omit when unclear"
               },
               "description": {
                 "type": "string",

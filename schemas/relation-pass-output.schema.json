@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Relation Pass Output",
-  "description": "Stage B of section-ir-0.8: structural edges over the full node set. Sees every node, so cross-section composition and metric-subject binding are captured here with no forward references.",
+  "description": "Stage B of section-ir-0.9: structural edges over the full node set. Sees every node, so cross-section composition and measure-subject binding are captured here with no forward references.",
   "required": [
     "relations"
   ],
@@ -9,7 +9,7 @@
   "properties": {
     "relations": {
       "type": "array",
-      "description": "Structural entity<->entity edges between census nodes.",
+      "description": "Structural node<->node edges between census nodes.",
       "items": {
         "type": "object",
         "required": [
@@ -30,10 +30,9 @@
             "enum": [
               "part_of",
               "compares_to",
-              "evaluates",
-              "measured_on"
+              "evaluates"
             ],
-            "description": "part_of = composition between Methods/Entities; compares_to = contrasted peers; evaluates = Metric measures a Method; measured_on = Metric measured on a dataset/benchmark Entity."
+            "description": "part_of = composition between Methods/ExperimentSetups; compares_to = contrasted peers; evaluates = a Measure measures a Method."
           },
           "target_id": {
             "type": "string",

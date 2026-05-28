@@ -1,4 +1,4 @@
-"""Per-paper async extraction pipeline (section-ir-0.8) with intermediate saves.
+"""Per-paper async extraction pipeline (section-ir-0.9) with intermediate saves.
 
 Three stages: node census (A) -> relation pass (B) -> per-section content fill (C),
 then deterministic assembly and validation.
@@ -361,7 +361,7 @@ async def _run_all_content_sections(
     llm: LLMClient,
     paper_dir: Path,
 ) -> list[dict[str, Any]]:
-    """Run all four content sections (stage C) concurrently and save each result."""
+    """Run all three content sections (stage C) concurrently and save each result."""
     system_prompt, _ = load_prompt(SECTION_EXTRACTION_PROMPT_PATH)
     spine_summary = census.get("spine_summary") if isinstance(census.get("spine_summary"), dict) else None
 

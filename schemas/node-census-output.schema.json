@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Node Census Output",
-  "description": "Stage A of section-ir-0.8: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type and Entity class are derived from the role), with no relations. Problem, Setting, and Claim are not nodes; they are born during content extraction.",
+  "description": "Stage A of section-ir-0.9: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), and Measure nodes. Problem and Finding are not nodes, and configuration ExperimentSetup units (splits/protocols) are born during content fill.",
   "required": [
     "spine_summary",
     "nodes"
@@ -46,7 +46,7 @@
           "node_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, ent: for dataset/benchmark/task, met: for metric"
+            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, exp: for dataset/benchmark/task, mea: for metric"
           },
           "role": {
             "type": "string",

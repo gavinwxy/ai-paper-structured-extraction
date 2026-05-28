@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Evidence Section Output",
-  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: metrics, settings, claims, entities. Valid unit types: Metric, Setting, Claim, Entity. Authors relations.",
+  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: measures, experiment_setups, findings. Valid unit types: Measure, ExperimentSetup, Finding. Authors relations.",
   "required": [
     "section"
   ],
@@ -12,10 +12,9 @@
       "required": [
         "section_type",
         "anchor_id",
-        "metrics",
-        "settings",
-        "claims",
-        "entities",
+        "measures",
+        "experiment_setups",
+        "findings",
         "relations"
       ],
       "additionalProperties": false,
@@ -31,9 +30,9 @@
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
         },
-        "metrics": {
+        "measures": {
           "type": "array",
-          "description": "Metric units extracted for this section",
+          "description": "Measure units extracted for this section",
           "items": {
             "type": "object",
             "required": [
@@ -42,7 +41,7 @@
               "provenance",
               "name",
               "unit",
-              "setting_ids",
+              "setup_ids",
               "scores"
             ],
             "additionalProperties": false,
@@ -55,7 +54,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Metric"
+                  "Measure"
                 ],
                 "description": "Unit type discriminator"
               },
@@ -68,18 +67,18 @@
               },
               "name": {
                 "type": "string",
-                "description": "Name of the metric"
+                "description": "Name of the measure/metric"
               },
               "unit": {
                 "type": "string",
                 "description": "Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"
               },
-              "setting_ids": {
+              "setup_ids": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "IDs of local Setting units scoping this metric; empty when none apply"
+                "description": "IDs of local ExperimentSetup units scoping this measure; empty when none apply"
               },
               "comparison_direction": {
                 "type": "string",
@@ -100,7 +99,7 @@
                     "value",
                     "variance",
                     "system_id",
-                    "setting_id"
+                    "setup_id"
                   ],
                   "additionalProperties": false,
                   "properties": {
@@ -120,28 +119,28 @@
                       "type": "string",
                       "description": "ID of the Method unit this row reports \u2014 the contribution variant or the compared-against baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture)."
                     },
-                    "setting_id": {
+                    "setup_id": {
                       "type": "string",
-                      "description": "ID of the local Setting unit this row was measured under (the dataset split / language pair / protocol), when one Metric spans several. Empty string when the metric's own setting_ids already scope every row."
+                      "description": "ID of the local ExperimentSetup unit this row was measured under \u2014 the dataset/split/protocol (e.g. 'exp:wmt14_ende'). This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row."
                     }
                   }
                 },
-                "description": "Flat array of reported scores under this metric \u2014 one row per system, covering the method family's own variants and every compared-against baseline"
+                "description": "Flat array of reported scores under this measure \u2014 one row per system, covering the method family's own variants and every compared-against baseline"
               }
             }
           }
         },
-        "settings": {
+        "experiment_setups": {
           "type": "array",
-          "description": "Setting units extracted for this section",
+          "description": "ExperimentSetup units extracted for this section",
           "items": {
             "type": "object",
             "required": [
               "id",
               "type",
               "provenance",
-              "setting_kind",
-              "description"
+              "role",
+              "name"
             ],
             "additionalProperties": false,
             "properties": {
@@ -153,7 +152,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Setting"
+                  "ExperimentSetup"
                 ],
                 "description": "Unit type discriminator"
               },
@@ -164,35 +163,42 @@
                   "type": "string"
                 }
               },
-              "setting_kind": {
+              "role": {
                 "type": "string",
                 "enum": [
+                  "dataset",
+                  "benchmark",
+                  "task",
                   "data_split",
                   "inference_protocol",
                   "training_config",
                   "ensembling",
                   "population"
                 ],
-                "description": "Which axis of the evaluation this setup constrains: data_split, inference_protocol, training_config, ensembling, or population"
+                "description": "Which experimental ingredient this is \u2014 a substrate the method is tried on (dataset/benchmark/task) or a configuration that scopes a measure (data_split/inference_protocol/training_config/ensembling/population)"
+              },
+              "name": {
+                "type": "string",
+                "description": "Name/label of the setup \u2014 a dataset name, a split label, a configuration name"
               },
               "description": {
                 "type": "string",
-                "description": "Single-sentence prose statement of the operational constraint that scopes a metric \u2014 the concrete dataset split, protocol, population, or hyperparameter"
+                "description": "Optional one-sentence prose describing the setup; empty string when the name suffices"
               }
             }
           }
         },
-        "claims": {
+        "findings": {
           "type": "array",
-          "description": "Claim units extracted for this section",
+          "description": "Finding units extracted for this section",
           "items": {
             "type": "object",
             "required": [
               "id",
               "type",
               "provenance",
-              "statement",
-              "claim_kind"
+              "role",
+              "statement"
             ],
             "additionalProperties": false,
             "properties": {
@@ -204,7 +210,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Claim"
+                  "Finding"
                 ],
                 "description": "Unit type discriminator"
               },
@@ -215,11 +221,7 @@
                   "type": "string"
                 }
               },
-              "statement": {
-                "type": "string",
-                "description": "The claim as a single declarative sentence"
-              },
-              "claim_kind": {
+              "role": {
                 "type": "string",
                 "enum": [
                   "descriptive",
@@ -229,56 +231,11 @@
                   "ablation_finding",
                   "failure_mode"
                 ],
-                "description": "Classification of the claim"
-              }
-            }
-          }
-        },
-        "entities": {
-          "type": "array",
-          "description": "Entity units extracted for this section",
-          "items": {
-            "type": "object",
-            "required": [
-              "id",
-              "type",
-              "provenance",
-              "name",
-              "entity_class"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "id": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-                "description": "Unit identifier in lowercase prefix:descriptor format"
+                "description": "Classification of the finding"
               },
-              "type": {
+              "statement": {
                 "type": "string",
-                "enum": [
-                  "Entity"
-                ],
-                "description": "Unit type discriminator"
-              },
-              "provenance": {
-                "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "name": {
-                "type": "string",
-                "description": "Name of the entity"
-              },
-              "entity_class": {
-                "type": "string",
-                "enum": [
-                  "dataset",
-                  "benchmark",
-                  "task"
-                ],
-                "description": "Classification of the entity"
+                "description": "The finding as a single declarative sentence"
               }
             }
           }
@@ -307,7 +264,7 @@
                   "about",
                   "supports"
                 ],
-                "description": "about = a Claim is about a Method/Entity/Metric; supports = a Metric or Claim supports a Claim."
+                "description": "about = a Finding is about a Method/ExperimentSetup/Measure; supports = a Measure or Finding supports a Finding."
               },
               "target_id": {
                 "type": "string",

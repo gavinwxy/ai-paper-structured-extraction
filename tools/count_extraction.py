@@ -31,8 +31,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-UNIT_TYPES = ["Method", "Entity", "Metric", "Claim", "Problem", "Setting"]
-FIELD_EDGES = ["subject_id", "target_ids", "evaluated_on", "context_ids", "setting_ids"]
+UNIT_TYPES = ["Method", "ExperimentSetup", "Measure", "Finding", "Problem"]
+FIELD_EDGES = ["subject_id", "target_ids", "evaluated_on", "context_ids", "setup_ids"]
 
 
 def iter_extraction_files(arg: str) -> list[Path]:
@@ -118,7 +118,7 @@ def summarize(arg: str) -> None:
         k = f"unit:{utype}"
         if agg[k]:
             print(f"            {utype:10s} {agg[k]:5d}  ({per(k)}/paper)")
-    rel_types = ["part_of", "compares_to", "evaluates", "measured_on", "about", "supports"]
+    rel_types = ["part_of", "compares_to", "evaluates", "about", "supports", "motivates", "resolves"]
     if agg["relations"]:
         print(f"  RELATIONS (top-level) total={agg['relations']:5d}  per-paper={per('relations')}"
               f"   [" + " ".join(f"{rt}={agg[f'rel:{rt}']}" for rt in rel_types if agg[f'rel:{rt}']) + "]")

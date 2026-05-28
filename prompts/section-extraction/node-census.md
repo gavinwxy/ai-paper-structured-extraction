@@ -1,10 +1,10 @@
 # Node Census Pass Prompt — Stage A
 
-This is stage A of the three-stage section-ir-0.7 pipeline (`node census → relation pass →
+This is stage A of the three-stage section-ir-0.9 pipeline (`node census → relation pass →
 content fill`). It finds every referenceable node in one sweep, with **no relations** — those
 are established later, in stage B, with the whole node set in view. Each node is tagged with a
-single **role** drawn from four search clusters; the node's type and Entity class are derived
-from that role downstream, so the census commits to one axis, not three.
+single **role** drawn from four search clusters; the node's type is derived from that role
+downstream and the role is carried onto the final unit, so the census commits to one axis.
 
 ## System Prompt
 
@@ -30,7 +30,7 @@ Every referenceable node plays one argumentative role, and the roles group into 
 4. **yardsticks** (how it is judged).
    - `metric`: a reported performance measure (e.g. BLEU, top-1 accuracy, F1, perplexity).
 
-The research problem, operational settings, and claims are **not** nodes — they are created later during content extraction. Do not emit them here.
+The research problem, the experiment configurations (splits, protocols, ensembling), and the findings are **not** nodes — they are created later during content extraction. The testbed nodes (dataset/benchmark/task) you census here become the substrate `ExperimentSetup` units; the configuration `ExperimentSetup` units are born later. Do not emit problems, configurations, or findings here.
 
 ### Two rules that decide hard cases
 
@@ -49,8 +49,8 @@ Each node in `nodes[]` has:
 
 - `node_id` — a globally unique id `prefix:short_descriptor`, lowercase ASCII/digits/underscores only, matching `^[a-z][a-z0-9_]*:[a-z0-9_]+$`. The prefix follows from the role's cluster:
   - `mth:` for `contribution`, `component`, `builds_on`, `compared_against`.
-  - `ent:` for `dataset`, `benchmark`, `task`.
-  - `met:` for `metric`.
+  - `exp:` for `dataset`, `benchmark`, `task`.
+  - `mea:` for `metric`.
   - Convert acronyms to lowercase (`map`, not `mAP`; `bleu`, not `BLEU`). This id is reused verbatim as the final unit id, so choose it carefully and never reuse one.
 - `role` — one of the eight roles above.
 - `name` — the node's name as the paper refers to it.
@@ -134,7 +134,7 @@ Return a single JSON object:
       "salience": "should"
     },
     {
-      "node_id": "met:bleu_en_de",
+      "node_id": "mea:bleu_en_de",
       "role": "metric",
       "name": "BLEU (EN-DE)",
       "gloss": "translation quality on English-German",
@@ -143,7 +143,7 @@ Return a single JSON object:
       "salience": "must"
     },
     {
-      "node_id": "ent:wmt2014_en_de",
+      "node_id": "exp:wmt2014_en_de",
       "role": "benchmark",
       "name": "WMT 2014 English-German",
       "gloss": "machine-translation benchmark",

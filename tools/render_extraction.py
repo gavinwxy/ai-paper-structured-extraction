@@ -28,12 +28,11 @@ SECTION_LABELS = {
     "evidence": "Evidence (Experiments & Analysis)",
 }
 TYPE_SHAPES = {
-    "Claim": "diamond",
-    "Metric": "square",
+    "Finding": "diamond",
+    "Measure": "square",
     "Method": "hexagon",
-    "Entity": "dot",
+    "ExperimentSetup": "dot",
     "Problem": "star",
-    "Setting": "triangleDown",
     "Document": "database",
 }
 RESOURCE_ICONS = {
@@ -146,7 +145,7 @@ def collect_all_links(data: dict) -> list[dict]:
 
 
 def build_metric_subjects(data: dict) -> dict[str, list[str]]:
-    """Map each Metric id to every Method it evaluates (global `evaluates` relations)."""
+    """Map each Measure id to every Method it evaluates (global `evaluates` relations)."""
     subjects: dict[str, list[str]] = {}
     for lk in data.get("relations", []):
         if isinstance(lk, dict) and lk.get("relation") == "evaluates":
@@ -156,14 +155,35 @@ def build_metric_subjects(data: dict) -> dict[str, list[str]]:
     return subjects
 
 
-def build_metric_datasets(data: dict) -> dict[str, list[str]]:
-    """Map each Metric id to the dataset/benchmark Entities it was measured on (`measured_on`)."""
+def build_metric_datasets(data: dict, unit_index: dict[str, dict]) -> dict[str, list[str]]:
+    """Map each Measure id to the ExperimentSetup units it was measured on.
+
+    section-ir-0.9 removed the `measured_on` global edge: a Measure binds to the
+    dataset/split it ran on through each score row's `setup_id` (and/or its
+    `setup_ids`), each resolving to an ExperimentSetup unit. We collect those
+    setup ids per Measure and keep the same return shape (measure id -> list of
+    ExperimentSetup ids) so downstream rendering is unchanged.
+    """
     out: dict[str, list[str]] = {}
-    for lk in data.get("relations", []):
-        if isinstance(lk, dict) and lk.get("relation") == "measured_on":
-            src, tgt = lk.get("source_id"), lk.get("target_id")
-            if isinstance(src, str) and isinstance(tgt, str) and tgt not in out.get(src, []):
-                out.setdefault(src, []).append(tgt)
+    for section in data.get("sections", []):
+        for u in section.get("units", []):
+            if not isinstance(u, dict) or u.get("type") != "Measure":
+                continue
+            mid = u.get("id", "")
+            if not mid:
+                continue
+            setup_ids: list[str] = []
+            for s in u.get("scores", []) or []:
+                if isinstance(s, dict):
+                    sid = s.get("setup_id")
+                    if isinstance(sid, str) and sid:
+                        setup_ids.append(sid)
+            for sid in u.get("setup_ids", []) or []:
+                if isinstance(sid, str) and sid:
+                    setup_ids.append(sid)
+            for sid in setup_ids:
+                if sid not in out.get(mid, []) and sid in unit_index:
+                    out.setdefault(mid, []).append(sid)
     return out
 
 
@@ -466,12 +486,12 @@ def render_scores(
     unit_index: dict | None = None,
     baseline_ids: set[str] | None = None,
 ) -> str:
-    """Render a Metric's scores[] as a comparison table. Baseline rows are tagged from each row's
+    """Render a Measure's scores[] as a comparison table. Baseline rows are tagged from each row's
     `system_id` when present (a robust join), falling back to a fuzzy variant-name match; a per-row
-    `setting_id` is surfaced as its own column when any row carries one."""
+    `setup_id` is surfaced as its own column when any row carries one."""
     unit_index = unit_index or {}
     baseline_ids = baseline_ids or set()
-    show_setting = any(isinstance(s, dict) and s.get("setting_id") for s in (scores or []))
+    show_setup = any(isinstance(s, dict) and s.get("setup_id") for s in (scores or []))
     rows = ""
     for s in (scores or []):
         if not isinstance(s, dict):
@@ -486,25 +506,25 @@ def render_scores(
         tag = " <span class='base-tag'>baseline</span>" if is_base else ""
         sys_html = f" <span class='score-sys'>{escape(sys_id)}</span>" if sys_id else ""
         var = str(s.get("variance", "") or "")
-        set_cell = ""
-        if show_setting:
-            set_id = str(s.get("setting_id", "") or "")
-            set_label = ""
-            if set_id:
-                su = unit_index.get(set_id, {})
-                set_label = su.get("description") or su.get("name") or set_id
-                set_label = set_label[:40] + ("…" if len(set_label) > 40 else "")
-            set_cell = f"<td class='score-set'>{escape(set_label) if set_label else '&mdash;'}</td>"
+        setup_cell = ""
+        if show_setup:
+            setup_id = str(s.get("setup_id", "") or "")
+            setup_label = ""
+            if setup_id:
+                su = unit_index.get(setup_id, {})
+                setup_label = su.get("description") or su.get("name") or setup_id
+                setup_label = setup_label[:40] + ("…" if len(setup_label) > 40 else "")
+            setup_cell = f"<td class='score-set'>{escape(setup_label) if setup_label else '&mdash;'}</td>"
         rows += (
             f"<tr class='score-row{' baseline-row' if is_base else ''}'>"
             f"<td>{escape(variant)}{tag}{sys_html}</td>"
             f"<td class='score-val'>{escape(str(s.get('value', '')))}</td>"
             f"<td class='score-var'>{escape(var) if var else '&mdash;'}</td>"
-            f"{set_cell}</tr>"
+            f"{setup_cell}</tr>"
         )
     if not rows:
         return ""
-    set_head = "<th>Setting</th>" if show_setting else ""
+    set_head = "<th>Setup</th>" if show_setup else ""
     return (
         "<table class='score-table'><thead><tr><th>System</th><th>Value</th><th>&plusmn;</th>"
         f"{set_head}</tr></thead>"
@@ -513,10 +533,10 @@ def render_scores(
 
 
 META_FIELDS = {"id", "type", "provenance"}
-TAG_FIELDS = ("method_kind", "entity_class", "claim_kind", "setting_kind", "comparison_direction", "unit")
+TAG_FIELDS = ("role", "method_kind", "comparison_direction", "unit")
 PROSE_FIELDS = ("description", "implementation_notes")
 # Fields rendered by dedicated logic (or consumed as the card label); never echoed as leftover.
-RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setting_ids", "statement", "name"}
+RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setup_ids", "statement", "name"}
 
 
 def render_unit_card(
@@ -586,16 +606,16 @@ def render_unit_card(
         rich += render_chips("Outputs", unit.get("outputs"))
         rich += render_formulas(unit.get("formulas"))
         rich += render_objective(unit.get("objective_function"))
-    elif utype == "Metric":
+    elif utype == "Measure":
         scores_html = render_scores(unit.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
         if scores_html:
             rich += f"<div class='field-group'><div class='field-label'>Scores</div>{scores_html}</div>"
-        if unit.get("setting_ids"):
-            setting_names = [
+        if unit.get("setup_ids"):
+            setup_names = [
                 (unit_index.get(s, {}).get("description") or unit_index.get(s, {}).get("name") or s)
-                for s in unit["setting_ids"]
+                for s in unit["setup_ids"]
             ]
-            rich += render_chips("Settings", setting_names)
+            rich += render_chips("Setups", setup_names)
 
     handled = META_FIELDS | RICH_FIELDS | set(TAG_FIELDS) | set(PROSE_FIELDS) | used_label_fields
     leftover = {k: v for k, v in unit.items() if k not in handled and v not in (None, "", [], {})}
@@ -629,14 +649,14 @@ def render_metric_table(
     baseline_keys: set[str],
     baseline_ids: set[str] | None = None,
 ) -> str:
-    """Render each Metric as a block: name + unit/direction + evaluated method + dataset, then a
+    """Render each Measure as a block: name + unit/direction + evaluated method + dataset, then a
     full scores comparison table (baseline rows tagged)."""
     baseline_ids = baseline_ids or set()
     metrics: list[dict] = []
     seen: set[str] = set()
     for section in sections:
         for u in section.get("units", []):
-            if u.get("type") == "Metric" and u.get("id") not in seen:
+            if u.get("type") == "Measure" and u.get("id") not in seen:
                 seen.add(u.get("id"))
                 metrics.append(u)
     if not metrics:
@@ -825,8 +845,8 @@ def render_section_card(
 
     count = len(items)
 
-    # In evidence, Metrics are shown as comparison blocks rather than cards.
-    card_items = [(u, a) for (u, a) in items if not (section_type == "evidence" and u.get("type") == "Metric")]
+    # In evidence, Measures are shown as comparison blocks rather than cards.
+    card_items = [(u, a) for (u, a) in items if not (section_type == "evidence" and u.get("type") == "Measure")]
 
     # In method, order contribution -> components -> other -> baselines.
     if section_type == "method":
@@ -892,7 +912,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     unit_section = build_unit_section_map(data)
     all_links = collect_all_links(data)
     subject_by_metric = build_metric_subjects(data)
-    dataset_by_metric = build_metric_datasets(data)
+    dataset_by_metric = build_metric_datasets(data, unit_index)
     method_roles = classify_methods(data, unit_index)
     baseline_keys = {
         _norm(unit_index.get(uid, {}).get("name", ""))
@@ -1061,7 +1081,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .payload-key {{ color: #94a3b8; white-space: nowrap; font-family: monospace; width: 110px; }}
 .payload-table pre {{ margin: 0; font-size: 0.72rem; white-space: pre-wrap; color: #cbd5e1; }}
 
-/* Metric blocks */
+/* Measure blocks */
 .metrics-wrap {{ margin: 8px 0 4px; display: flex; flex-direction: column; gap: 10px; }}
 .metric-block {{ background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; }}
 .metric-block-head {{ display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }}
