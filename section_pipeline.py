@@ -646,10 +646,21 @@ def _rewrite_relation_endpoints(relations: list[dict[str, Any]], replacements: d
                 relation[key] = replacements[value]
 
 
-def _dedup_experiment_setups(sections: list[dict[str, Any]], relations: list[dict[str, Any]]) -> list[str]:
-    """Merge duplicate ExperimentSetup units with the same name across sections of the same type."""
+def _dedup_experiment_setups(
+    sections: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    protected_ids: set[str] | None = None,
+) -> list[str]:
+    """Merge duplicate ExperimentSetup units with the same name across sections of the same type.
+
+    `protected_ids` (the census node ids) are never merged away: a census-materialized
+    ExperimentSetup is authoritative and deliberately distinct, so merging it would silently drop
+    one node, which then reads as uncovered while a `should` node still passes validation. The
+    `_covered_entry_ids` union is empty here (covers_entries is assigned later in assembly), so the
+    census ids passed in are the real protection — born configuration setups still dedup normally.
+    """
     seen: dict[tuple[str, str], str] = {}
-    protected_ids = _covered_entry_ids(sections)
+    protected = set(protected_ids or ()) | _covered_entry_ids(sections)
     replacements: dict[str, str] = {}
     warnings: list[str] = []
 
@@ -677,7 +688,7 @@ def _dedup_experiment_setups(sections: list[dict[str, Any]], relations: list[dic
             key = (str(section_type), name)
             unit_id = unit.get("id")
             if key in seen and isinstance(unit_id, str):
-                if unit_id in protected_ids:
+                if unit_id in protected:
                     units_to_keep.append(unit)
                     continue
                 ids_to_replace[unit_id] = seen[key]
@@ -801,7 +812,9 @@ def _drop_empty_sections(sections: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
-def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
+def _normalize_provenance_markers(
+    sections: list[dict[str, Any]], relations: list[dict[str, Any]] | None = None
+) -> list[str]:
     """Truncate fine-grained subsection markers (e.g. §4.3, §C.1) to their top-level parent.
 
     Paper input carries only top-level section/appendix markers, so a `§4.3` or `§C.1`
@@ -810,9 +823,28 @@ def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
     covers both numeric body sections (§4.3 -> §4) and lettered appendices (§C.1 -> §C).
     Table/figure references (`§Table 3`) have no clean parent and are left untouched so they
     still surface as genuine provenance violations.
+
+    Applied to both unit provenance and (when given) global relation provenance, so a relation's
+    markers are repaired the same way units' are before relation-provenance validation runs.
     """
     warnings: list[str] = []
     seen: set[str] = set()
+
+    def _collapse(provenance: list[Any]) -> list[Any]:
+        rewritten: list[Any] = []
+        for marker in provenance:
+            if isinstance(marker, str):
+                match = SUBSECTION_MARKER_RE.match(marker.strip())
+                if match:
+                    new_marker = f"§{match.group(1)}"
+                    if marker not in seen:
+                        seen.add(marker)
+                        warnings.append(f"Normalized provenance marker {marker} to {new_marker}")
+                    rewritten.append(new_marker)
+                    continue
+            rewritten.append(marker)
+        return rewritten
+
     for section in sections:
         units = section.get("units", [])
         if not isinstance(units, list):
@@ -821,21 +853,16 @@ def _normalize_provenance_markers(sections: list[dict[str, Any]]) -> list[str]:
             if not isinstance(unit, dict):
                 continue
             provenance = unit.get("provenance")
-            if not isinstance(provenance, list):
-                continue
-            rewritten: list[Any] = []
-            for marker in provenance:
-                if isinstance(marker, str):
-                    match = SUBSECTION_MARKER_RE.match(marker.strip())
-                    if match:
-                        new_marker = f"§{match.group(1)}"
-                        if marker not in seen:
-                            seen.add(marker)
-                            warnings.append(f"Normalized provenance marker {marker} to {new_marker}")
-                        rewritten.append(new_marker)
-                        continue
-                rewritten.append(marker)
-            unit["provenance"] = rewritten
+            if isinstance(provenance, list):
+                unit["provenance"] = _collapse(provenance)
+
+    for relation in relations or []:
+        if not isinstance(relation, dict):
+            continue
+        provenance = relation.get("provenance")
+        if isinstance(provenance, list):
+            relation["provenance"] = _collapse(provenance)
+
     return warnings
 
 
@@ -1169,6 +1196,21 @@ def validate_census(census: dict[str, Any]) -> list[str]:
             or any(not isinstance(key, str) for key in cite_keys)
         ):
             issues.append(f"Census node {label} cite_keys must be a list of strings")
+        # name/gloss/source_scope are schema-required on every node. Strict decoding enforces them
+        # in json_schema mode, but json_object (DeepSeek) mode treats the schema as prompt guidance
+        # only, so the stage-A contract must check them here. `name` is the reconcile join key and
+        # the materialized unit's name, so an empty one is a hard defect.
+        name = node.get("name")
+        if not isinstance(name, str) or not name.strip():
+            issues.append(f"Census node {label} must have a non-empty name")
+        gloss = node.get("gloss")
+        if not isinstance(gloss, str) or not gloss.strip():
+            issues.append(f"Census node {label} must have a non-empty gloss")
+        source_scope = node.get("source_scope")
+        if not isinstance(source_scope, list) or any(
+            not isinstance(marker, str) for marker in source_scope
+        ):
+            issues.append(f"Census node {label} source_scope must be a list of strings")
         if node_type == "Method":
             method_count += 1
             if role == CONTRIBUTION_ROLE:
@@ -1254,7 +1296,7 @@ Extract ONLY the {section_type} section, following `section_focus`:
 - Materialize the census nodes this section owns into full units, reusing each `node_id` verbatim as the unit `id`, and create the born units this section is responsible for.
 - Place each unit in the typed array matching its type, with only the fields its contract names.
 - Reference any node in `node_registry` by id; the structural `relations` are already established — do not restate them.
-- Emit only the claim-centric edges (`about`, `supports`) your section authors, in `relations`.
+- Emit only the edges your `section_focus` authorizes this section to author (problem: `motivates`; evidence: `about`/`supports`; method: none), in `relations`.
 - Use the full paper as source context; extract only this section's role.
 
 Output a single JSON object with key: section.""".strip()
@@ -1753,13 +1795,18 @@ def assemble_extraction(
     assembly_warnings: list[str] = []
     assembly_warnings.extend(_sanitize_unit_text(sections))
     assembly_warnings.extend(_sanitize_unit_ids(sections, relations))
-    assembly_warnings.extend(_dedup_experiment_setups(sections, relations))
+    assembly_warnings.extend(
+        _dedup_experiment_setups(sections, relations, all_census_node_ids(census))
+    )
     assembly_warnings.extend(_dedup_unit_ids(sections))
+    # Drop dataless Measures before section/anchor repair: a section emptied by the drop is then
+    # caught by _drop_empty_sections, and a section that anchored on the dropped measure is
+    # re-pointed by _repair_section_anchors instead of being left with a dangling anchor_id.
+    assembly_warnings.extend(_drop_empty_scores_measures(sections))
     assembly_warnings.extend(_drop_empty_sections(sections))
-    assembly_warnings.extend(_normalize_provenance_markers(sections))
+    assembly_warnings.extend(_normalize_provenance_markers(sections, relations))
     assembly_warnings.extend(_repair_section_anchors(sections))
     assembly_warnings.extend(_repair_score_refs(sections))
-    assembly_warnings.extend(_drop_empty_scores_measures(sections))
     assembly_warnings.extend(_clean_method_equations(sections))
     assembly_warnings.extend(_strip_baseline_method_fields(sections, census))
 
@@ -2559,6 +2606,21 @@ def _validate_relation(
         issues.append(f"relation has unknown source_id: {source_id}")
     if target_unit is None:
         issues.append(f"relation has unknown target_id: {target_id}")
+
+    # provenance is schema-required on every relation (an array of §N markers). Strict decoding
+    # enforces it in json_schema mode, but json_object (DeepSeek) mode treats the schema as prompt
+    # guidance only, so the runtime contract must check it here. An empty list is allowed (matching
+    # the schema, which sets no minItems, and the synthesized `resolves` edge's provenance fallback).
+    provenance = relation.get("provenance")
+    if not isinstance(provenance, list):
+        issues.append(f"relation {source_id} -[{rel}]-> {target_id} provenance must be a list")
+    else:
+        for index, marker in enumerate(provenance):
+            if not isinstance(marker, str) or not PROVENANCE_SOURCE_RE.match(marker):
+                issues.append(
+                    f"relation {source_id} -[{rel}]-> {target_id} provenance[{index}] "
+                    f"'{marker}' must be a §N location marker"
+                )
 
     matrix = RELATION_MATRIX.get(rel)
     if matrix is None:
