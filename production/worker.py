@@ -162,6 +162,10 @@ async def _run_paper_pipeline(
         )
         if references is not None:
             warnings.extend(reconcile_reference_units(references, extraction, census))
+            # reconcile_reference_units mutates `references` in place to fill provides_unit_ids;
+            # the Phase-1 save (03_references.json above) predates the spine, so re-persist the
+            # linked version now — otherwise the on-disk references always show empty links.
+            save_json(paper_dir / "03_references.json", references)
         save_json(paper_dir / "06_extraction.json", extraction)
 
         # Validate

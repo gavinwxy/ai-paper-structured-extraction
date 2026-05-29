@@ -273,18 +273,21 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "formulas",
         "objective_function",
         "implementation_notes",
+        "cite_keys",
         "provenance",
     },
     # ExperimentSetup = old Entity ⊎ Setting. `role` is the merged differentia (substrate vs
     # configuration); `name` labels it (a dataset name, a split label); `description` is
-    # optional prose. Bibliography markers live on the census node's cite_keys (used by
-    # reconcile_reference_units via node_id), not on the unit.
+    # optional prose. `cite_keys` (the in-text bibliography marker(s)) is copied from the census
+    # node onto the unit by _assign_roles_from_census — present only on externally-cited substrate
+    # nodes (dataset/benchmark), absent on born configuration roles.
     "ExperimentSetup": {
         "id",
         "type",
         "role",
         "name",
         "description",
+        "cite_keys",
         "provenance",
     },
     "Measure": {
@@ -1014,18 +1017,26 @@ def _assign_covers_entries(
 
 
 def _assign_roles_from_census(sections: list[dict[str, Any]], census: dict[str, Any] | None) -> None:
-    """Stamp the census role onto each materialized unit (section-ir-0.9).
+    """Stamp census-committed attributes (role, cite_keys) onto each materialized unit (0.9).
 
     `role` is a first-class unit field, but for census-materialized units (Method and the
     substrate-role ExperimentSetup nodes) the census already committed the role — so inject it
     here authoritatively rather than trusting the content model to echo it. Born units
     (configuration ExperimentSetup, Finding) author their own role and are left untouched.
     Measure carries no role even though its census node's role is the degenerate "metric".
+
+    `cite_keys` (the in-text bibliography marker(s) the node was cited as) likewise lives only on
+    the census node. Copy it onto the materialized Method/ExperimentSetup unit (node_id == unit_id)
+    so a downstream consumer reading the assembled extraction alone can join a unit back to the
+    bibliography — and across papers, a baseline to the paper that introduced it — without the
+    census in hand. Non-empty only for prior-art/testbed nodes (builds_on/compared_against/
+    dataset/benchmark); the contribution, components, tasks, and measures carry [], which is left
+    off the unit rather than stamped as an empty list.
     """
     if not census:
         return
-    role_by_node_id = {
-        node.get("node_id"): node.get("role")
+    node_by_id = {
+        node["node_id"]: node
         for node in iter_census_nodes(census)
         if isinstance(node.get("node_id"), str)
     }
@@ -1033,11 +1044,20 @@ def _assign_roles_from_census(sections: list[dict[str, Any]], census: dict[str, 
         for unit in section.get("units", []) or []:
             if not isinstance(unit, dict):
                 continue
-            if unit.get("type") not in ROLE_VOCAB_BY_TYPE:
+            node = node_by_id.get(unit.get("id"))
+            if node is None:
                 continue
-            census_role = role_by_node_id.get(unit.get("id"))
-            if census_role:
-                unit["role"] = census_role
+            if unit.get("type") in ROLE_VOCAB_BY_TYPE:
+                census_role = node.get("role")
+                if census_role:
+                    unit["role"] = census_role
+            # Only prior-art/testbed nodes legitimately carry cite_keys, and only Method/
+            # ExperimentSetup whitelist the field. A Measure census node is spec'd to carry [],
+            # but a model sometimes emits a stray marker on a cited metric ("boundary F1 [12]");
+            # guarding by unit type keeps that out of the Measure unit (which would fail validation).
+            cite_keys = node.get("cite_keys")
+            if unit.get("type") in {"Method", "ExperimentSetup"} and isinstance(cite_keys, list) and cite_keys:
+                unit["cite_keys"] = list(cite_keys)
 
 
 def parse_sections(paper_content: str) -> dict[str, str]:

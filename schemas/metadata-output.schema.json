@@ -1,12 +1,20 @@
 {
   "type": "object",
   "title": "Paper Metadata Output",
-  "required": ["title", "authors", "resources"],
+  "required": ["title", "authors", "year", "venue", "resources"],
   "additionalProperties": false,
   "properties": {
     "title": {
       "type": "string",
       "description": "Full paper title"
+    },
+    "year": {
+      "type": ["integer", "null"],
+      "description": "Publication year as a 4-digit integer (e.g. 2024). Use null if the year is not stated anywhere in the paper text."
+    },
+    "venue": {
+      "type": ["string", "null"],
+      "description": "Publication venue exactly as written — conference or journal, with year if given (e.g. 'CVPR 2024', 'NeurIPS', 'IEEE TPAMI'). Use null if no venue is stated in the paper text."
     },
     "authors": {
       "type": "array",
