@@ -1506,6 +1506,45 @@ def _clean_method_equations(sections: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
+BASELINE_METHOD_BANNED_FIELDS = ("inputs", "outputs", "formulas", "objective_function")
+
+
+def _strip_baseline_method_fields(
+    sections: list[dict[str, Any]], census: dict[str, Any] | None
+) -> list[str]:
+    """For Method units the census tagged ``compared_against``, drop the heavy optional fields the
+    method-section contract bans on baselines: ``objective_function``, ``formulas``, ``inputs``,
+    ``outputs``. Baselines exist as structural anchors for ``compares_to`` + score-row ``system_id``;
+    reconstructing technical detail invites hallucination (e.g. fabricated objective_functions on
+    black-box baselines) and inflates output tokens. Lossy-but-safe; logged."""
+    if not census:
+        return []
+    baseline_ids = {
+        node.get("node_id")
+        for node in (census.get("nodes") or [])
+        if isinstance(node, dict) and node.get("role") == "compared_against"
+    }
+    baseline_ids.discard(None)
+    if not baseline_ids:
+        return []
+    warnings: list[str] = []
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict):
+                continue
+            if unit.get("type") != "Method" or unit.get("id") not in baseline_ids:
+                continue
+            for field in BASELINE_METHOD_BANNED_FIELDS:
+                if field in unit:
+                    if unit[field] not in (None, "", [], {}):
+                        warnings.append(
+                            f"stripped {field} on baseline Method {unit.get('id')!r} "
+                            "(census role=compared_against)"
+                        )
+                    unit.pop(field, None)
+    return warnings
+
+
 def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
     """Blank dangling or wrong-type per-row score references (system_id/setup_id) once the
     full unit set is known — lossy-but-safe, logged to uncertain_assignments. system_id resolves
@@ -1722,6 +1761,7 @@ def assemble_extraction(
     assembly_warnings.extend(_repair_score_refs(sections))
     assembly_warnings.extend(_drop_empty_scores_measures(sections))
     assembly_warnings.extend(_clean_method_equations(sections))
+    assembly_warnings.extend(_strip_baseline_method_fields(sections, census))
 
     relations, warns = _dedup_relations(relations)
     assembly_warnings.extend(warns)
