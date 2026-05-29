@@ -1,39 +1,63 @@
 #!/usr/bin/env python3
-"""Render section-IR extraction into an interactive HTML page.
+"""Render a section-IR (0.9) extraction into a single self-contained HTML page.
 
-Supports three input modes:
-  1. Single extraction JSON:  python render_extraction.py paper4_extraction.json
-  2. With sidecars:           python render_extraction.py paper4_extraction.json --metadata m.json --references r.json
-  3. Production output dir:   python render_extraction.py ./output/paper4/
+The page is organised around the scientific-discovery throughline the IR encodes:
+
+    problem  --motivates-->  method (contribution)  <--about--  finding  --resolves-->  problem
+
+Layout (no external dependencies, no CDN):
+  * a sticky section nav,
+  * a compact **discovery-arc** strip tracing problem -> contribution -> headline
+    finding -> resolves (built from the real `motivates` / `about` / `resolves` edges),
+  * the three sections (problem / method / evidence), each unit rendered as a card
+    that shows **its own relations inline** as clickable pills (part_of, evaluates,
+    compares_with, about, supports, motivates, resolves), and
+  * a references appendix.
+
+Interactivity (vanilla JS, embedded):
+  * click any node (or relation pill / arc chip) to highlight every unit it links to,
+  * collapsible sections, expandable unit detail, Esc to clear the highlight.
+
+Input modes:
+  1. Single extraction JSON:  python render_extraction.py 06_extraction.json
+  2. With sidecars:           python render_extraction.py x_extraction.json --metadata m.json --references r.json
+  3. Production output dir:    python render_extraction.py ./output/paper4/
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
+import webbrowser
+from collections import defaultdict
 from html import escape
 from pathlib import Path
 from typing import Any
 
 SECTION_ORDER = ["problem", "method", "evidence"]
 SECTION_COLORS = {
-    "problem": "#6b7280",
+    "problem": "#f59e0b",
     "method": "#3b82f6",
     "evidence": "#22c55e",
 }
 SECTION_LABELS = {
-    "problem": "Research Problem",
+    "problem": "Problem",
     "method": "Method",
-    "evidence": "Evidence (Experiments & Analysis)",
+    "evidence": "Evidence",
 }
-TYPE_SHAPES = {
-    "Finding": "diamond",
-    "Measure": "square",
-    "Method": "hexagon",
-    "ExperimentSetup": "dot",
-    "Problem": "star",
-    "Document": "database",
+SECTION_SUBTITLES = {
+    "problem": "the research question",
+    "method": "the technical apparatus",
+    "evidence": "what was measured & what it means",
+}
+# Per-type badge colours (orthogonal to the section accent).
+TYPE_COLORS = {
+    "Problem": "#f59e0b",
+    "Method": "#3b82f6",
+    "ExperimentSetup": "#a855f7",
+    "Measure": "#14b8a6",
+    "Finding": "#22c55e",
+    "Document": "#64748b",
 }
 RESOURCE_ICONS = {
     "code": "&#128187;",
@@ -41,6 +65,36 @@ RESOURCE_ICONS = {
     "data": "&#128202;",
     "demo": "&#127912;",
     "model": "&#129302;",
+}
+
+# Human phrasing for each relation, from the source's view (out) and the target's view (in).
+REL_OUT = {
+    "part_of": "part of",
+    "compares_to": "compared with",
+    "evaluates": "evaluates",
+    "about": "about",
+    "supports": "supports",
+    "motivates": "motivates",
+    "resolves": "resolves",
+}
+REL_IN = {
+    "part_of": "includes",
+    "compares_to": "compared with",
+    "evaluates": "evaluated by",
+    "about": "discussed by",
+    "supports": "supported by",
+    "motivates": "motivated by",
+    "resolves": "resolved by",
+}
+# Accent colour per relation family (structural / evaluative / evidential / arc).
+REL_COLOR = {
+    "part_of": "#64748b",
+    "compares_to": "#64748b",
+    "evaluates": "#14b8a6",
+    "about": "#22c55e",
+    "supports": "#22c55e",
+    "motivates": "#f59e0b",
+    "resolves": "#f59e0b",
 }
 
 
@@ -80,7 +134,7 @@ def _load_from_directory(dir_path: Path) -> dict[str, Any]:
     """Load from a production output directory structure."""
     extraction_path = dir_path / "06_extraction.json"
     if not extraction_path.exists():
-        candidates = list(dir_path.glob("*_extraction.json"))
+        candidates = list(dir_path.glob("*_extraction.json")) + list(dir_path.glob("*extraction*.json"))
         if candidates:
             extraction_path = candidates[0]
         else:
@@ -110,42 +164,64 @@ def _load_from_directory(dir_path: Path) -> dict[str, Any]:
 # --- Index helpers ---
 
 def build_unit_index(data: dict) -> dict[str, dict]:
+    """id -> unit for every section unit. The Document is deliberately excluded: it is
+    not rendered as a card, so any edge that touches it stays non-clickable (a dangling
+    pill) instead of becoming a link that scrolls to nothing."""
     idx: dict[str, dict] = {}
-    doc = data.get("document")
-    if doc:
-        idx[doc["id"]] = doc
     for section in data.get("sections", []):
-        anchor = section.get("anchor")
-        if anchor:
-            idx[anchor["id"]] = anchor
         for u in section.get("units", []):
-            idx[u["id"]] = u
+            if isinstance(u, dict) and u.get("id"):
+                idx[u["id"]] = u
     return idx
 
 
 def build_unit_section_map(data: dict) -> dict[str, str]:
+    """id -> section_type, used to colour cross-section relation pills."""
     unit_section: dict[str, str] = {}
     for section in data.get("sections", []):
         st = section.get("section_type", "problem")
-        anchor_id = section.get("anchor_id")
-        if anchor_id:
-            unit_section.setdefault(anchor_id, st)
-        legacy_anchor = section.get("anchor")
-        if legacy_anchor:
-            unit_section.setdefault(legacy_anchor.get("id", ""), st)
         for unit in section.get("units", []):
-            unit_section.setdefault(unit.get("id", ""), st)
+            if isinstance(unit, dict) and unit.get("id"):
+                unit_section.setdefault(unit["id"], st)
     return unit_section
 
 
+def build_edge_index(data: dict, unit_index: dict) -> tuple[dict, dict, dict]:
+    """Build adjacency from the global `relations[]`:
+      out_edges[id] = [(relation, target_id), ...]   (this unit is the source)
+      in_edges[id]  = [(relation, source_id), ...]   (this unit is the target)
+      neighbors[id] = set of connected ids that actually exist as units (for highlight)
+    """
+    out_edges: dict[str, list] = defaultdict(list)
+    in_edges: dict[str, list] = defaultdict(list)
+    neighbors: dict[str, set] = defaultdict(set)
+    seen: set[tuple] = set()
+    for e in data.get("relations", []):
+        if not isinstance(e, dict):
+            continue
+        rel = e.get("relation")
+        s, t = e.get("source_id"), e.get("target_id")
+        if not rel or not isinstance(s, str) or not isinstance(t, str):
+            continue
+        key = (rel, s, t)
+        if key in seen:
+            continue
+        seen.add(key)
+        out_edges[s].append((rel, t))
+        in_edges[t].append((rel, s))
+        if t in unit_index:
+            neighbors[s].add(t)
+        if s in unit_index:
+            neighbors[t].add(s)
+    return out_edges, in_edges, neighbors
+
+
 def collect_all_links(data: dict) -> list[dict]:
-    """Return the global relation edge list (section-ir-0.7 top-level `relations`)."""
-    relations = data.get("relations", [])
-    return [lk for lk in relations if isinstance(lk, dict)]
+    return [lk for lk in data.get("relations", []) if isinstance(lk, dict)]
 
 
 def build_metric_subjects(data: dict) -> dict[str, list[str]]:
-    """Map each Measure id to every Method it evaluates (global `evaluates` relations)."""
+    """Measure id -> every Method it `evaluates`."""
     subjects: dict[str, list[str]] = {}
     for lk in data.get("relations", []):
         if isinstance(lk, dict) and lk.get("relation") == "evaluates":
@@ -156,14 +232,7 @@ def build_metric_subjects(data: dict) -> dict[str, list[str]]:
 
 
 def build_metric_datasets(data: dict, unit_index: dict[str, dict]) -> dict[str, list[str]]:
-    """Map each Measure id to the ExperimentSetup units it was measured on.
-
-    section-ir-0.9 removed the `measured_on` global edge: a Measure binds to the
-    dataset/split it ran on through each score row's `setup_id` (and/or its
-    `setup_ids`), each resolving to an ExperimentSetup unit. We collect those
-    setup ids per Measure and keep the same return shape (measure id -> list of
-    ExperimentSetup ids) so downstream rendering is unchanged.
-    """
+    """Measure id -> ExperimentSetup units it ran on (via score-row `setup_id` / `setup_ids`)."""
     out: dict[str, list[str]] = {}
     for section in data.get("sections", []):
         for u in section.get("units", []):
@@ -174,31 +243,28 @@ def build_metric_datasets(data: dict, unit_index: dict[str, dict]) -> dict[str, 
                 continue
             setup_ids: list[str] = []
             for s in u.get("scores", []) or []:
-                if isinstance(s, dict):
-                    sid = s.get("setup_id")
-                    if isinstance(sid, str) and sid:
-                        setup_ids.append(sid)
+                if isinstance(s, dict) and isinstance(s.get("setup_id"), str) and s["setup_id"]:
+                    setup_ids.append(s["setup_id"])
             for sid in u.get("setup_ids", []) or []:
                 if isinstance(sid, str) and sid:
                     setup_ids.append(sid)
             for sid in setup_ids:
-                if sid not in out.get(mid, []) and sid in unit_index:
+                if sid in unit_index and sid not in out.get(mid, []):
                     out.setdefault(mid, []).append(sid)
     return out
 
 
-# Method-role rank → render order (contribution first, baselines last)
-METHOD_ROLE_RANK = {"contribution": 0, "component": 1, "other": 2, "baseline": 3}
-METHOD_ROLE_LABELS = {"contribution": "CONTRIBUTION", "component": "COMPONENT", "baseline": "BASELINE"}
+# Method-role render order (contribution first, baselines last). Accepts both the 0.9
+# unit role names and the legacy edge-derived names.
+METHOD_ROLE_RANK = {
+    "contribution": 0, "component": 1, "builds_on": 2, "other": 2,
+    "compared_against": 3, "baseline": 3,
+}
 
 
 def classify_methods(data: dict, unit_index: dict[str, dict]) -> dict[str, str]:
-    """Derive each Method's role from the global edges (units no longer carry `role`):
-      - contribution: the `part_of` root (a target that is never a source); else the method anchor.
-      - component:    a `part_of` source.
-      - baseline:     an endpoint of a `compares_to` edge that is not the contribution.
-      - other:        a Method with no structural edge (e.g. a standalone optimizer).
-    """
+    """Best-effort Method role: prefer the unit's own 0.9 `role`, else derive from edges
+    (contribution = part_of root; component = part_of source; baseline = compares_to endpoint)."""
     methods = {uid for uid, u in unit_index.items() if u.get("type") == "Method"}
     part_src: set[str] = set()
     part_tgt: set[str] = set()
@@ -211,30 +277,41 @@ def classify_methods(data: dict, unit_index: dict[str, dict]) -> dict[str, str]:
         elif rel == "compares_to":
             compares.update((s, t))
 
-    roots = [m for m in methods if m in part_tgt and m not in part_src]
-    contribution = roots[0] if roots else None
-    if contribution is None:
-        for s in data.get("sections", []):
-            if s.get("section_type") == "method" and s.get("anchor_id") in methods:
-                contribution = s.get("anchor_id")
-                break
-
     roles: dict[str, str] = {}
+    derived_contribution = None
+    roots = [m for m in methods if m in part_tgt and m not in part_src]
+    if roots:
+        derived_contribution = roots[0]
+
     for m in methods:
-        if m == contribution:
+        own = (unit_index.get(m) or {}).get("role")
+        if own:
+            roles[m] = own
+        elif m == derived_contribution:
             roles[m] = "contribution"
         elif m in part_src:
             roles[m] = "component"
         elif m in compares:
-            roles[m] = "baseline"
+            roles[m] = "compared_against"
         else:
             roles[m] = "other"
+    # Guarantee a single contribution for arc/ordering even if none was tagged.
+    if methods and not any(r == "contribution" for r in roles.values()):
+        roles[derived_contribution or next(iter(methods))] = "contribution"
     return roles
 
 
 def _norm(s: str) -> str:
-    """Lowercase alphanumeric-only key for fuzzy name matching."""
     return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+def _unit_label(unit: dict | None, limit: int = 70) -> str:
+    """Concise human label for a unit: name > statement > description > id."""
+    if not unit:
+        return ""
+    s = unit.get("name") or unit.get("statement") or unit.get("description") or unit.get("id") or ""
+    s = str(s).strip()
+    return (s[: limit - 1] + "…") if len(s) > limit else s
 
 
 def group_sections_by_type(data: dict) -> dict[str, list[dict]]:
@@ -245,193 +322,25 @@ def group_sections_by_type(data: dict) -> dict[str, list[dict]]:
     return groups
 
 
-# --- Graph builders ---
-
-def build_spine_graph(
-    data: dict,
-    unit_index: dict[str, dict],
-    unit_section: dict[str, str],
-    all_links: list[dict],
-) -> tuple[list[dict], list[dict]]:
-    """Build the overview spine graph — anchor nodes connected by argumentative flow."""
-    # Collect anchors grouped by section type (preserving order within same type)
-    anchors_by_section: dict[str, list[str]] = {st: [] for st in SECTION_ORDER}
-    for section in data.get("sections", []):
-        st = section.get("section_type", "problem")
-        aid = section.get("anchor_id")
-        if aid and aid not in anchors_by_section.get(st, []):
-            anchors_by_section.setdefault(st, []).append(aid)
-        legacy = section.get("anchor")
-        if legacy:
-            lid = legacy.get("id", "")
-            if lid and lid not in anchors_by_section.get(st, []):
-                anchors_by_section.setdefault(st, []).append(lid)
-
-    anchor_ids: set[str] = set()
-    for ids in anchors_by_section.values():
-        anchor_ids.update(ids)
-
-    section_type_order = {st: i for i, st in enumerate(SECTION_ORDER)}
-
-    nodes = []
-    for aid in anchor_ids:
-        unit = unit_index.get(aid)
-        if not unit or unit.get("type") == "Document":
-            continue
-        st = unit_section.get(aid, "problem")
-        label = unit.get("name") or unit.get("statement") or unit.get("description") or aid
-        if len(label) > 50:
-            label = label[:47] + "..."
-        nodes.append({
-            "id": aid,
-            "label": label,
-            "color": SECTION_COLORS.get(st, "#999"),
-            "shape": TYPE_SHAPES.get(unit.get("type", ""), "dot"),
-            "title": f"{unit.get('type', '')} | {SECTION_LABELS.get(st, st)}",
-            "level": section_type_order.get(st, 2),
-            "size": 22,
-        })
-
-    edges = []
-    edge_set: set[tuple[str, str]] = set()
-
-    # Structural flow edges: connect last anchor of each section to first anchor of next
-    ordered_sections = [st for st in SECTION_ORDER if anchors_by_section.get(st)]
-    for i in range(len(ordered_sections) - 1):
-        src_section = ordered_sections[i]
-        tgt_section = ordered_sections[i + 1]
-        src_anchors = anchors_by_section[src_section]
-        tgt_anchors = anchors_by_section[tgt_section]
-        # Connect all anchors of current section to all anchors of next section
-        # (for most papers this is 1-to-1 or 1-to-2)
-        for src_id in src_anchors:
-            for tgt_id in tgt_anchors:
-                if (src_id, tgt_id) not in edge_set:
-                    edge_set.add((src_id, tgt_id))
-                    edges.append({
-                        "from": src_id,
-                        "to": tgt_id,
-                        "arrows": "to",
-                        "dashes": True,
-                        "width": 1.5,
-                        "color": {"color": "#475569", "opacity": 0.6},
-                    })
-
-    # Within same section type: connect anchors if multiple exist
-    for st, aids in anchors_by_section.items():
-        for i in range(len(aids) - 1):
-            if (aids[i], aids[i + 1]) not in edge_set:
-                edge_set.add((aids[i], aids[i + 1]))
-                edges.append({
-                    "from": aids[i],
-                    "to": aids[i + 1],
-                    "arrows": "to",
-                    "color": {"color": SECTION_COLORS.get(st, "#666"), "opacity": 0.7},
-                })
-
-    # Explicit links between anchor nodes (override dashed with solid)
-    for lk in all_links:
-        src, tgt = lk.get("source_id", ""), lk.get("target_id", "")
-        if src in anchor_ids and tgt in anchor_ids and (src, tgt) not in edge_set:
-            edge_set.add((src, tgt))
-            edges.append({
-                "from": src,
-                "to": tgt,
-                "label": lk.get("relation", ""),
-                "arrows": "to",
-                "color": {"color": "#94a3b8", "opacity": 0.9},
-            })
-
-    return nodes, edges
-
-
-def build_section_graph(
-    section_type: str,
-    sections: list[dict],
-    unit_index: dict[str, dict],
-    all_links: list[dict],
-) -> tuple[list[dict], list[dict]] | None:
-    """Build a local graph for a section group. Returns None if too trivial.
-
-    Edges are the global relations whose endpoints both fall inside this section group.
-    """
-    local_ids: set[str] = set()
-
-    for section in sections:
-        aid = section.get("anchor_id")
-        if aid:
-            local_ids.add(aid)
-        for u in section.get("units", []):
-            local_ids.add(u.get("id", ""))
-
-    links = [
-        lk
-        for lk in all_links
-        if lk.get("source_id") in local_ids and lk.get("target_id") in local_ids
-    ]
-
-    if len(local_ids) < 3 or len(links) < 1:
-        return None
-
-    color = SECTION_COLORS.get(section_type, "#999")
-    nodes = []
-    for uid in local_ids:
-        unit = unit_index.get(uid)
-        if not unit:
-            continue
-        utype = unit.get("type", "")
-        label = unit.get("name") or unit.get("statement") or unit.get("description") or uid
-        if len(label) > 35:
-            label = label[:32] + "..."
-        is_anchor = any(s.get("anchor_id") == uid for s in sections)
-        nodes.append({
-            "id": uid,
-            "label": label,
-            "color": color if not is_anchor else "#f59e0b",
-            "shape": TYPE_SHAPES.get(utype, "dot"),
-            "title": f"{utype}: {uid}",
-            "size": 18 if is_anchor else 14,
-            "borderWidth": 2 if is_anchor else 1,
-        })
-
-    edges = []
-    for lk in links:
-        src, tgt = lk.get("source_id", ""), lk.get("target_id", "")
-        if src in local_ids and tgt in local_ids:
-            edges.append({
-                "from": src,
-                "to": tgt,
-                "label": lk.get("relation", ""),
-                "arrows": "to",
-                "color": {"color": "#64748b", "opacity": 0.8},
-            })
-
-    return nodes, edges
-
-
-# --- HTML renderers ---
+# --- Small renderers (provenance, formulas, scores, chips) ---
 
 def render_provenance(prov_list: list) -> str:
-    if not prov_list:
-        return ""
     parts = [
-        f'<span class="prov-badge">{escape(marker)}</span>'
-        for marker in prov_list
-        if isinstance(marker, str)
+        f'<span class="prov">{escape(m)}</span>'
+        for m in (prov_list or []) if isinstance(m, str) and m
     ]
     return " ".join(parts)
 
 
 def render_payload_table(payload: dict) -> str:
-    """Fallback for unrecognized leftover fields (keeps the renderer forward-compatible)."""
     rows = ""
     for k, v in payload.items():
         if isinstance(v, (dict, list)):
             val_html = f"<pre>{escape(json.dumps(v, ensure_ascii=False, indent=1))}</pre>"
         else:
             val_html = escape(str(v))
-        rows += f"<tr><td class='payload-key'>{escape(k)}</td><td>{val_html}</td></tr>"
-    return f"<table class='payload-table'>{rows}</table>" if rows else ""
+        rows += f"<tr><td class='pk'>{escape(k)}</td><td>{val_html}</td></tr>"
+    return f"<table class='payload'>{rows}</table>" if rows else ""
 
 
 def render_symbols(symbols: list | None) -> str:
@@ -441,15 +350,15 @@ def render_symbols(symbols: list | None) -> str:
         for s in (symbols or [])
         if isinstance(s, dict) and s.get("symbol")
     )
-    return f"<table class='symbol-table'>{rows}</table>" if rows else ""
+    return f"<table class='symbols'>{rows}</table>" if rows else ""
 
 
 def render_formula_block(name: str, expr: str, desc: str, symbols: list | None) -> str:
-    name_html = f"<div class='formula-name'>{escape(name)}</div>" if name else ""
-    desc_html = f"<div class='formula-desc'>{escape(desc)}</div>" if desc else ""
+    name_html = f"<div class='f-name'>{escape(name)}</div>" if name else ""
+    desc_html = f"<div class='f-desc'>{escape(desc)}</div>" if desc else ""
     return (
-        f"<div class='formula-block'>{name_html}"
-        f"<div class='formula-expr'>{escape(expr)}</div>{desc_html}"
+        f"<div class='formula'>{name_html}"
+        f"<div class='f-expr'>{escape(expr)}</div>{desc_html}"
         f"{render_symbols(symbols)}</div>"
     )
 
@@ -460,23 +369,19 @@ def render_formulas(formulas: list | None) -> str:
         for f in (formulas or [])
         if isinstance(f, dict) and f.get("expression")
     )
-    return f"<div class='field-group'><div class='field-label'>Formulas</div>{blocks}</div>" if blocks else ""
+    return f"<div class='fg'><div class='fl'>Formulas</div>{blocks}</div>" if blocks else ""
 
 
 def render_objective(obj: dict | None) -> str:
     if not isinstance(obj, dict) or not obj.get("expression"):
         return ""
     block = render_formula_block("", obj["expression"], obj.get("description", ""), obj.get("symbols", []))
-    return f"<div class='field-group'><div class='field-label'>Objective</div>{block}</div>"
+    return f"<div class='fg'><div class='fl'>Objective</div>{block}</div>"
 
 
 def render_chips(label: str, items: list | None) -> str:
-    chips = "".join(f"<span class='chip'>{escape(str(i))}</span>" for i in (items or []))
-    return (
-        f"<div class='field-group'><div class='field-label'>{escape(label)}</div>"
-        f"<div class='chips'>{chips}</div></div>"
-        if chips else ""
-    )
+    chips = "".join(f"<span class='chip'>{escape(str(i))}</span>" for i in (items or []) if str(i).strip())
+    return f"<div class='fg'><div class='fl'>{escape(label)}</div><div class='chips'>{chips}</div></div>" if chips else ""
 
 
 def render_scores(
@@ -486,9 +391,9 @@ def render_scores(
     unit_index: dict | None = None,
     baseline_ids: set[str] | None = None,
 ) -> str:
-    """Render a Measure's scores[] as a comparison table. Baseline rows are tagged from each row's
-    `system_id` when present (a robust join), falling back to a fuzzy variant-name match; a per-row
-    `setup_id` is surfaced as its own column when any row carries one."""
+    """Render a Measure's scores[] as a comparison table. A row's system is tagged as a
+    baseline from its `system_id` (robust) or a fuzzy variant-name match; a per-row
+    `setup_id` becomes its own column when any row carries one."""
     unit_index = unit_index or {}
     baseline_ids = baseline_ids or set()
     show_setup = any(isinstance(s, dict) and s.get("setup_id") for s in (scores or []))
@@ -503,8 +408,12 @@ def render_scores(
         else:
             nv = _norm(variant)
             is_base = bool(nv) and any(nv in b or b in nv for b in baseline_keys)
-        tag = " <span class='base-tag'>baseline</span>" if is_base else ""
-        sys_html = f" <span class='score-sys'>{escape(sys_id)}</span>" if sys_id else ""
+        tag = " <span class='basetag'>baseline</span>" if is_base else ""
+        sys_html = (
+            f" <a class='score-sys' data-peer='{escape(sys_id)}'>{escape(sys_id)}</a>"
+            if sys_id and sys_id in unit_index else
+            (f" <span class='score-sys'>{escape(sys_id)}</span>" if sys_id else "")
+        )
         var = str(s.get("variance", "") or "")
         setup_cell = ""
         if show_setup:
@@ -526,80 +435,116 @@ def render_scores(
         return ""
     set_head = "<th>Setup</th>" if show_setup else ""
     return (
-        "<table class='score-table'><thead><tr><th>System</th><th>Value</th><th>&plusmn;</th>"
-        f"{set_head}</tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
+        "<table class='scores'><thead><tr><th>System</th><th>Value</th><th>&plusmn;</th>"
+        f"{set_head}</tr></thead><tbody>{rows}</tbody></table>"
     )
 
 
-META_FIELDS = {"id", "type", "provenance"}
-TAG_FIELDS = ("role", "method_kind", "comparison_direction", "unit")
+# --- Relation pills (the contextual "logic flow" on every card) ---
+
+def _rel_pill(rel: str, peer_id: str, direction: str, unit_index: dict, unit_section: dict) -> str:
+    peer = unit_index.get(peer_id)
+    name = _unit_label(peer, 46) or peer_id
+    verb = (REL_OUT if direction == "out" else REL_IN).get(rel, rel)
+    arrow = "&rarr;" if direction == "out" else "&larr;"
+    color = REL_COLOR.get(rel, "#64748b")
+    sec = unit_section.get(peer_id, "")
+    inner = (
+        f"<span class='rel-arrow'>{arrow}</span>"
+        f"<span class='rel-verb'>{escape(verb)}</span> "
+        f"<span class='rel-peer'>{escape(name)}</span>"
+    )
+    if peer is not None:
+        return (
+            f"<a class='rel sec-{sec}' style='border-left-color:{color}' "
+            f"data-peer='{escape(peer_id)}'>{inner}</a>"
+        )
+    return f"<span class='rel rel-dangling' style='border-left-color:{color}'>{inner}</span>"
+
+
+# Order edges by argumentative priority so the flow reads top-down on each card.
+_REL_PRIORITY = {
+    "motivates": 0, "part_of": 1, "compares_to": 2, "evaluates": 3,
+    "about": 4, "supports": 5, "resolves": 6,
+}
+
+
+def render_unit_relations(uid: str, out_edges: dict, in_edges: dict, unit_index: dict, unit_section: dict) -> str:
+    edges = [("out", rel, t) for (rel, t) in out_edges.get(uid, [])]
+    edges += [("in", rel, s) for (rel, s) in in_edges.get(uid, [])]
+    if not edges:
+        return ""
+    edges.sort(key=lambda e: _REL_PRIORITY.get(e[1], 9))
+    pills = "".join(_rel_pill(rel, peer, d, unit_index, unit_section) for (d, rel, peer) in edges)
+    return f"<div class='rels'>{pills}</div>"
+
+
+# --- Unit cards ---
+
+META_FIELDS = {"id", "type", "provenance", "role"}
+TAG_FIELDS = ("method_kind", "comparison_direction", "unit")
 PROSE_FIELDS = ("description", "implementation_notes")
-# Fields rendered by dedicated logic (or consumed as the card label); never echoed as leftover.
 RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setup_ids", "statement", "name"}
+
+
+def _role_badge(unit: dict, roles_final: dict) -> str:
+    uid, utype = unit.get("id", ""), unit.get("type", "")
+    role = unit.get("role") or (roles_final.get(uid) if utype == "Method" else None)
+    if not role or role == "other":
+        return ""
+    cls = f"role role-{escape(str(role))}"
+    star = "&#9733; " if role == "contribution" else ""
+    return f"<span class='{cls}'>{star}{escape(str(role).replace('_', ' '))}</span>"
 
 
 def render_unit_card(
     unit: dict,
     unit_index: dict,
     *,
-    is_anchor: bool = False,
-    section_type: str = "problem",
-    method_roles: dict[str, str] | None = None,
-    baseline_keys: set[str] | None = None,
-    baseline_ids: set[str] | None = None,
-    cite_by_unit: dict[str, list[str]] | None = None,
+    section_type: str,
+    out_edges: dict,
+    in_edges: dict,
+    neighbors: dict,
+    unit_section: dict,
+    roles_final: dict,
+    baseline_keys: set[str],
+    baseline_ids: set[str],
+    cite_by_unit: dict,
 ) -> str:
-    method_roles = method_roles or {}
-    baseline_keys = baseline_keys or set()
-    baseline_ids = baseline_ids or set()
-    cite_by_unit = cite_by_unit or {}
     uid = unit.get("id", "?")
     utype = unit.get("type", "?")
-    color = SECTION_COLORS.get(section_type, "#999")
+    tcolor = TYPE_COLORS.get(utype, "#64748b")
     prov_html = render_provenance(unit.get("provenance", []))
-    anchor_cls = " anchor-unit" if is_anchor else ""
 
-    # Label: prefer statement, then name; description is the label only when neither exists.
     label, label_field = "", ""
     for cand in ("statement", "name", "description"):
         if unit.get(cand):
             label, label_field = unit[cand], cand
             break
-    if not label:
-        label = unit.get("summary") or ""
     used_label_fields = {label_field} if label_field else set()
-    disp_label = label[:160] + "..." if isinstance(label, str) and len(label) > 160 else label
+    disp_label = label[:200] + "…" if isinstance(label, str) and len(label) > 200 else label
 
-    role = method_roles.get(uid) if utype == "Method" else None
-    role_badge = (
-        f"<span class='role-badge role-{role}'>{METHOD_ROLE_LABELS[role]}</span>"
-        if role in METHOD_ROLE_LABELS else ""
-    )
-
+    role_badge = _role_badge(unit, roles_final)
     tag_html = "".join(f"<span class='tag'>{escape(str(unit[f]))}</span>" for f in TAG_FIELDS if unit.get(f))
     tags_html = f"<div class='tags'>{tag_html}</div>" if tag_html else ""
 
-    # Citation badge(s): the bibliography reference id(s) this unit was linked to via the
-    # census cite_keys join. Clicking jumps to the references panel.
     cite_ids = cite_by_unit.get(uid, [])
     cite_html = ""
     if cite_ids:
         chips = "".join(
-            f"<a class='cite-badge' href='#references' title='Cited as reference {escape(str(r))}'>[{escape(str(r))}]</a>"
+            f"<a class='cite-badge' title='Cited as reference {escape(str(r))}'>[{escape(str(r))}]</a>"
             for r in cite_ids
         )
         cite_html = f"<span class='cite-badges'>{chips}</span>"
 
-    # Expandable detail: prose, then type-specific rich blocks, then any leftover fields.
+    # Detail (collapsed): prose, type-specific rich blocks, then leftover fields.
     prose = ""
     for f in PROSE_FIELDS:
         if unit.get(f) and f not in used_label_fields:
             prose += (
-                f"<div class='field-group'><div class='field-label'>{escape(f.replace('_', ' '))}</div>"
-                f"<div class='field-prose'>{escape(str(unit[f]))}</div></div>"
+                f"<div class='fg'><div class='fl'>{escape(f.replace('_', ' '))}</div>"
+                f"<div class='prose'>{escape(str(unit[f]))}</div></div>"
             )
-
     rich = ""
     if utype == "Method":
         rich += render_chips("Inputs", unit.get("inputs"))
@@ -609,142 +554,278 @@ def render_unit_card(
     elif utype == "Measure":
         scores_html = render_scores(unit.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
         if scores_html:
-            rich += f"<div class='field-group'><div class='field-label'>Scores</div>{scores_html}</div>"
+            rich += f"<div class='fg'><div class='fl'>Scores</div>{scores_html}</div>"
         if unit.get("setup_ids"):
-            setup_names = [
-                (unit_index.get(s, {}).get("description") or unit_index.get(s, {}).get("name") or s)
-                for s in unit["setup_ids"]
-            ]
-            rich += render_chips("Setups", setup_names)
+            names = [(unit_index.get(s, {}).get("description") or unit_index.get(s, {}).get("name") or s)
+                     for s in unit["setup_ids"]]
+            rich += render_chips("Setups", names)
 
     handled = META_FIELDS | RICH_FIELDS | set(TAG_FIELDS) | set(PROSE_FIELDS) | used_label_fields
     leftover = {k: v for k, v in unit.items() if k not in handled and v not in (None, "", [], {})}
-    leftover_html = render_payload_table(leftover)
+    detail_html = prose + rich + render_payload_table(leftover)
+    detail = f"<div class='u-detail'>{detail_html}</div>" if detail_html.strip() else ""
 
-    detail_html = prose + rich + leftover_html
+    rels_html = render_unit_relations(uid, out_edges, in_edges, unit_index, unit_section)
+    data_rel = " ".join(sorted(neighbors.get(uid, set())))
+    chevron = "<span class='u-chevron'>&#9656;</span>" if detail else ""
 
     return f"""
-    <div class="unit-card{anchor_cls}" data-unit-id="{escape(uid)}">
-      <div class="unit-header" onclick="this.parentElement.classList.toggle('expanded')">
-        <span class="unit-type-badge" style="background:{color}">{escape(utype)}</span>
+    <div class="unit" id="u-{escape(uid)}" data-uid="{escape(uid)}" data-rel="{escape(data_rel)}">
+      <div class="u-head">
+        <span class="u-badge" style="background:{tcolor}">{escape(utype)}</span>
         {role_badge}
-        <span class="unit-id">{escape(uid)}</span>
+        <span class="u-id">{escape(uid)}</span>
         {cite_html}
-        {'<span class="anchor-badge">ANCHOR</span>' if is_anchor else ''}
-        <span class="unit-chevron">&#9654;</span>
+        {chevron}
       </div>
-      <div class="unit-label">{escape(disp_label)}</div>
+      <div class="u-label">{escape(disp_label)}</div>
       {tags_html}
-      <div class="unit-prov">{prov_html}</div>
-      <div class="unit-detail">{detail_html}</div>
+      {f'<div class="u-prov">{prov_html}</div>' if prov_html else ''}
+      {rels_html}
+      {detail}
     </div>"""
 
 
-def render_metric_table(
-    sections: list[dict],
+def render_metric_block(
+    m: dict,
     unit_index: dict,
-    subject_by_metric: dict[str, list[str]],
-    dataset_by_metric: dict[str, list[str]],
-    method_roles: dict[str, str],
+    subject_by_metric: dict,
+    dataset_by_metric: dict,
+    roles_final: dict,
     baseline_keys: set[str],
-    baseline_ids: set[str] | None = None,
+    baseline_ids: set[str],
+    out_edges: dict,
+    in_edges: dict,
+    neighbors: dict,
+    unit_section: dict,
 ) -> str:
-    """Render each Measure as a block: name + unit/direction + evaluated method + dataset, then a
-    full scores comparison table (baseline rows tagged)."""
-    baseline_ids = baseline_ids or set()
-    metrics: list[dict] = []
-    seen: set[str] = set()
-    for section in sections:
-        for u in section.get("units", []):
-            if u.get("type") == "Measure" and u.get("id") not in seen:
-                seen.add(u.get("id"))
-                metrics.append(u)
-    if not metrics:
-        return ""
+    """A Measure rendered as a comparison block — itself an addressable, focusable node."""
+    mid = m.get("id", "")
+    subj_ids = subject_by_metric.get(mid, [])
+    head = next((s for s in subj_ids if roles_final.get(s) == "contribution"), subj_ids[0] if subj_ids else "")
+    ds_ids = dataset_by_metric.get(mid, [])
 
     def name_of(uid: str) -> str:
         u = unit_index.get(uid, {})
         return u.get("name") or u.get("statement") or uid
 
-    blocks = ""
-    for m in metrics:
-        mid = m.get("id", "")
-        subj_ids = subject_by_metric.get(mid, [])
-        head = next(
-            (s for s in subj_ids if method_roles.get(s) == "contribution"),
-            subj_ids[0] if subj_ids else "",
-        )
-        ds_names = [name_of(d) for d in dataset_by_metric.get(mid, [])]
-        direction = m.get("comparison_direction", "")
-        dir_icon = {"higher_is_better": "&#9650;", "lower_is_better": "&#9660;"}.get(direction, "")
-        scores_html = render_scores(m.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
+    scores_html = render_scores(m.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
+    meta_bits = ""
+    if head:
+        meta_bits += f"<span class='m-meta'>evaluates <b>{escape(str(name_of(head)))}</b></span>"
+    if ds_ids:
+        meta_bits += f"<span class='m-meta'>on {escape(', '.join(name_of(d) for d in ds_ids))}</span>"
+    prov_html = render_provenance(m.get("provenance", []))
+    rels_html = render_unit_relations(mid, out_edges, in_edges, unit_index, unit_section)
+    data_rel = " ".join(sorted(neighbors.get(mid, set())))
 
-        meta_bits = ""
-        if head:
-            meta_bits += f"<span class='metric-meta'>evaluates <b>{escape(str(name_of(head)))}</b></span>"
-        if ds_names:
-            meta_bits += f"<span class='metric-meta'>on {escape(', '.join(str(d) for d in ds_names))}</span>"
+    return f"""
+    <div class="unit metric-block" id="u-{escape(mid)}" data-uid="{escape(mid)}" data-rel="{escape(data_rel)}">
+      <div class="m-head">
+        <span class="u-badge" style="background:{TYPE_COLORS['Measure']}">Measure</span>
+        <span class="m-name">{escape(m.get('name', ''))}</span>
+        <span class="m-unit">{escape(str(m.get('unit', '')))}</span>
+        {meta_bits}
+      </div>
+      {scores_html}
+      {f'<div class="u-prov">{prov_html}</div>' if prov_html else ''}
+      {rels_html}
+    </div>"""
 
-        blocks += f"""
-        <div class="metric-block">
-          <div class="metric-block-head">
-            <span class="metric-name">{escape(m.get('name', ''))}</span>
-            <span class="metric-unit">{escape(str(m.get('unit', '')))} {dir_icon}</span>
-            {meta_bits}
-          </div>
-          {scores_html}
-        </div>"""
 
-    return f'<div class="metrics-wrap">{blocks}</div>'
+# --- Discovery arc (replaces the old Argumentative Spine view) ---
+
+def _arc_chip(unit: dict, kind: str, mark: str = "") -> str:
+    return (
+        f"<span class='arc-chip arc-{kind}' data-peer='{escape(unit.get('id', ''))}'>"
+        f"{mark}{escape(_unit_label(unit, 52))}</span>"
+    )
+
+
+def render_discovery_arc(data: dict, unit_index: dict, roles_final: dict, edges: list[dict]) -> str:
+    problems = [
+        u for s in data.get("sections", []) if s.get("section_type") == "problem"
+        for u in s.get("units", []) if u.get("type") == "Problem"
+    ]
+    problem = problems[0] if problems else None
+
+    contrib_id = next((uid for uid, r in roles_final.items() if r == "contribution"), None)
+    contrib = unit_index.get(contrib_id) if contrib_id else None
+
+    # Headline finding: source of a `resolves` edge, else a Finding `about` the contribution.
+    headline_id, resolved = None, False
+    problem_id = problem.get("id") if problem else None
+    for e in edges:
+        if e.get("relation") == "resolves":
+            headline_id = e.get("source_id")
+            problem_id = problem_id or e.get("target_id")
+            resolved = True
+            break
+    if not headline_id and contrib_id:
+        for e in edges:
+            if e.get("relation") == "about" and e.get("target_id") == contrib_id:
+                src = unit_index.get(e.get("source_id"))
+                if src and src.get("type") == "Finding":
+                    headline_id = e.get("source_id")
+                    break
+    headline = unit_index.get(headline_id) if headline_id else None
+    if problem is None and problem_id:
+        problem = unit_index.get(problem_id)
+
+    if not problem and not contrib:
+        return ""
+
+    parts = []
+    if problem:
+        parts.append(_arc_chip(problem, "problem"))
+    if contrib:
+        if parts:
+            parts.append("<span class='arc-conn'>motivates &rarr;</span>")
+        parts.append(_arc_chip(contrib, "method", "&#9733; "))
+    if headline:
+        parts.append("<span class='arc-conn'>answers &rarr;</span>")
+        parts.append(_arc_chip(headline, "finding"))
+    close = (
+        "<span class='arc-close'>&#8617; resolves &#10003;</span>"
+        if (resolved and headline and problem) else ""
+    )
+    track = "".join(parts)
+    return f"""
+    <div class="arc">
+      <div class="arc-title">Discovery throughline</div>
+      <div class="arc-track">{track}{close}</div>
+      <div class="arc-legend">&rarr; outgoing &middot; &larr; incoming &middot; click any node to trace its links &middot; Esc clears</div>
+    </div>"""
+
+
+# --- Section + page chrome ---
+
+def section_render_order(grouped: dict) -> list[str]:
+    """Canonical three first, then any other section types present (forward/backward compat)."""
+    order = [st for st in SECTION_ORDER if grouped.get(st)]
+    order += sorted(t for t in grouped if t not in SECTION_ORDER and grouped.get(t))
+    return order
+
+
+def render_nav(grouped: dict, has_refs: bool) -> str:
+    links = ""
+    for st in section_render_order(grouped):
+        cnt = sum(len(s.get("units", [])) for s in grouped.get(st, []))
+        if cnt:
+            color = SECTION_COLORS.get(st, "#64748b")
+            label = SECTION_LABELS.get(st, st.replace("_", " ").title())
+            links += (
+                f'<a class="nav-link" href="#sec-{st}">'
+                f'<span class="nav-dot" style="background:{color}"></span>'
+                f'{escape(label)} <b>{cnt}</b></a>'
+            )
+    if has_refs:
+        links += '<a class="nav-link" href="#references">References</a>'
+    return f'<nav class="topnav"><span class="nav-brand">section-IR</span>{links}</nav>'
+
+
+def render_section(
+    section_type: str,
+    sections: list[dict],
+    unit_index: dict,
+    *,
+    out_edges: dict,
+    in_edges: dict,
+    neighbors: dict,
+    unit_section: dict,
+    roles_final: dict,
+    baseline_keys: set[str],
+    baseline_ids: set[str],
+    subject_by_metric: dict,
+    dataset_by_metric: dict,
+    cite_by_unit: dict,
+) -> str:
+    color = SECTION_COLORS.get(section_type, "#64748b")
+    label = SECTION_LABELS.get(section_type, section_type.replace("_", " ").title())
+    subtitle = SECTION_SUBTITLES.get(section_type, "")
+
+    # Dedup units across sections of the same type.
+    seen: set[str] = set()
+    units: list[dict] = []
+    for section in sections:
+        for u in section.get("units", []):
+            if isinstance(u, dict) and u.get("id") not in seen:
+                seen.add(u.get("id"))
+                units.append(u)
+
+    count = len(units)
+    common = dict(
+        out_edges=out_edges, in_edges=in_edges, neighbors=neighbors, unit_section=unit_section,
+        roles_final=roles_final, baseline_keys=baseline_keys, baseline_ids=baseline_ids,
+        cite_by_unit=cite_by_unit,
+    )
+
+    body = ""
+    if section_type == "evidence":
+        # Measures as comparison blocks first, then findings/other as cards.
+        measures = [u for u in units if u.get("type") == "Measure"]
+        others = [u for u in units if u.get("type") != "Measure"]
+        for m in measures:
+            body += render_metric_block(
+                m, unit_index, subject_by_metric, dataset_by_metric, roles_final,
+                baseline_keys, baseline_ids, out_edges, in_edges, neighbors, unit_section,
+            )
+        for u in others:
+            body += render_unit_card(u, unit_index, section_type=section_type, **common)
+    else:
+        ordered = units
+        if section_type == "method":
+            ordered = sorted(units, key=lambda u: METHOD_ROLE_RANK.get(roles_final.get(u.get("id"), "other"), 2))
+        for u in ordered:
+            body += render_unit_card(u, unit_index, section_type=section_type, **common)
+
+    return f"""
+    <section class="sec" id="sec-{section_type}" style="--accent:{color}">
+      <div class="sec-head">
+        <span class="sec-dot" style="background:{color}"></span>
+        <span class="sec-title">{escape(label)}</span>
+        <span class="sec-sub">{escape(subtitle)}</span>
+        <span class="sec-count">{count}</span>
+        <span class="sec-chevron">&#9660;</span>
+      </div>
+      <div class="sec-body">{body or '<div class="empty">No units.</div>'}</div>
+    </section>"""
 
 
 def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
-    title = ""
-    authors_html = ""
-    resources_html = ""
-
+    title = (metadata or {}).get("title") or doc.get("title", "Untitled")
+    authors_html = resources_html = ""
     if metadata:
-        title = metadata.get("title", "") or doc.get("title", "Untitled")
         authors = metadata.get("authors", [])
         if authors:
-            author_parts = []
+            parts = []
             for a in authors:
                 name = a.get("name", "")
                 affils = a.get("affiliations", [])
-                if affils:
-                    author_parts.append(f"{escape(name)} <span class='affil'>({escape(', '.join(affils))})</span>")
-                else:
-                    author_parts.append(escape(name))
-            authors_html = f'<div class="authors">{" &middot; ".join(author_parts)}</div>'
-
+                parts.append(
+                    f"{escape(name)} <span class='affil'>({escape(', '.join(affils))})</span>"
+                    if affils else escape(name)
+                )
+            authors_html = f'<div class="authors">{" &middot; ".join(parts)}</div>'
         resources = metadata.get("resources", [])
-        if resources:
-            res_parts = []
-            for r in resources:
-                rtype = r.get("type", "paper")
-                url = r.get("url", "")
-                icon = RESOURCE_ICONS.get(rtype, "&#128279;")
-                if url:
-                    res_parts.append(f'<a href="{escape(url)}" class="resource-link" target="_blank">{icon} {escape(rtype)}</a>')
-            if res_parts:
-                resources_html = f'<div class="resources">{" ".join(res_parts)}</div>'
-    else:
-        title = doc.get("title", "Untitled")
+        res_parts = []
+        for r in resources:
+            url = r.get("url", "")
+            if url:
+                icon = RESOURCE_ICONS.get(r.get("type", "paper"), "&#128279;")
+                res_parts.append(f'<a href="{escape(url)}" class="res" target="_blank">{icon} {escape(r.get("type", "link"))}</a>')
+        if res_parts:
+            resources_html = f'<div class="resources">{" ".join(res_parts)}</div>'
 
     thesis = (doc.get("thesis") or "").strip()
-    thesis_html = (
-        f'<div class="thesis"><span class="thesis-label">Thesis</span> {escape(thesis)}</div>'
-        if thesis
-        else ""
-    )
-
+    thesis_html = f'<div class="thesis"><span class="thesis-l">Thesis</span> {escape(thesis)}</div>' if thesis else ""
     return f"""
-    <div class="paper-header">
+    <header class="paper-header">
       <h1>{escape(title)}</h1>
       {authors_html}
       {thesis_html}
       {resources_html}
-    </div>"""
+    </header>"""
 
 
 def render_references_panel(references: dict | None, unit_index: dict | None = None) -> str:
@@ -754,154 +835,50 @@ def render_references_panel(references: dict | None, unit_index: dict | None = N
     if not refs:
         return ""
     unit_index = unit_index or {}
-
-    rows = ""
-    linked_count = 0
+    rows, linked = "", 0
     for r in refs:
         rid = r.get("id", "")
         authors = r.get("authors", [])
-        if len(authors) > 3:
-            author_str = f"{authors[0]} et al."
-        elif authors:
-            author_str = ", ".join(authors)
-        else:
-            author_str = ""
+        author_str = f"{authors[0]} et al." if len(authors) > 3 else ", ".join(authors)
         title = r.get("title", "")
         venue = r.get("venue", "")
         year = r.get("year", "")
         year_str = f", {year}" if year else ""
         venue_str = f" &mdash; {escape(venue)}{escape(str(year_str))}" if venue else ""
-
-        # Spine links (filled by reconcile_reference_units): which method/evidence unit(s)
-        # this reference contributes. Clicking a badge scrolls to that unit card.
         relation = r.get("relation") or {}
         unit_ids = relation.get("provides_unit_ids") or []
         roles = relation.get("roles") or []
-        entry_cls = "ref-entry central" if relation.get("salience") == "central" else "ref-entry"
+        entry_cls = "ref central" if relation.get("salience") == "central" else "ref"
         link_html = ""
         if unit_ids:
-            linked_count += 1
-            badges = "".join(
-                f"<a class='ref-link' data-target='{escape(str(uid))}'>"
-                f"{escape((unit_index.get(uid) or {}).get('name') or str(uid))}</a>"
-                for uid in unit_ids
-            )
-            link_html = f"<div class='ref-links'>&rarr; {badges}</div>"
+            linked += 1
+            parts = []
+            for uid in unit_ids:
+                name = escape((unit_index.get(uid) or {}).get("name") or str(uid))
+                if uid in unit_index:  # only clickable when the target is actually on the page
+                    parts.append(f"<a class='ref-link' data-peer='{escape(str(uid))}'>{name}</a>")
+                else:
+                    parts.append(f"<span class='ref-link rel-dangling'>{name}</span>")
+            link_html = f"<div class='ref-links'>&rarr; {''.join(parts)}</div>"
         roles_html = f"<span class='ref-roles'>{escape(', '.join(roles))}</span>" if roles else ""
-
         rows += (
             f'<div class="{entry_cls}">'
             f'<span class="ref-id">[{escape(str(rid))}]</span> {escape(author_str)} '
             f'<span class="ref-title">&ldquo;{escape(title)}&rdquo;</span>{venue_str}{roles_html}'
             f'{link_html}</div>\n'
         )
-
-    header_extra = f" &middot; {linked_count} linked to spine" if linked_count else ""
+    extra = f" &middot; {linked} linked to units" if linked else ""
     return f"""
-    <div class="references-section" id="references">
-      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
-        <span class="section-title">References ({len(refs)}){header_extra}</span>
-        <span class="section-chevron">&#9660;</span>
+    <section class="sec collapsed refs-sec" id="references">
+      <div class="sec-head">
+        <span class="sec-title">References ({len(refs)}){extra}</span>
+        <span class="sec-chevron">&#9660;</span>
       </div>
-      <div class="section-body">
-        {rows}
-      </div>
-    </div>"""
+      <div class="sec-body">{rows}</div>
+    </section>"""
 
 
-def render_section_card(
-    section_type: str,
-    sections: list[dict],
-    unit_index: dict,
-    unit_section: dict[str, str],
-    graph_id: str,
-    all_links: list[dict],
-    subject_by_metric: dict[str, list[str]],
-    dataset_by_metric: dict[str, list[str]],
-    method_roles: dict[str, str],
-    baseline_keys: set[str],
-    baseline_ids: set[str] | None = None,
-    cite_by_unit: dict[str, list[str]] | None = None,
-) -> str:
-    baseline_ids = baseline_ids or set()
-    cite_by_unit = cite_by_unit or {}
-    color = SECTION_COLORS[section_type]
-    label = SECTION_LABELS[section_type]
-
-    # Gather units once, de-duplicated, tracking which are section anchors.
-    seen_ids: set[str] = set()
-    items: list[tuple[dict, bool]] = []
-    for section in sections:
-        anchor_id = section.get("anchor_id")
-        anchor = unit_index.get(anchor_id) if anchor_id else section.get("anchor")
-        if anchor and anchor.get("id") not in seen_ids:
-            seen_ids.add(anchor.get("id"))
-            items.append((anchor, True))
-        for u in section.get("units", []):
-            if u.get("id") in seen_ids:
-                continue
-            seen_ids.add(u.get("id"))
-            items.append((u, False))
-
-    count = len(items)
-
-    # In evidence, Measures are shown as comparison blocks rather than cards.
-    card_items = [(u, a) for (u, a) in items if not (section_type == "evidence" and u.get("type") == "Measure")]
-
-    # In method, order contribution -> components -> other -> baselines.
-    if section_type == "method":
-        card_items.sort(key=lambda ia: METHOD_ROLE_RANK.get(method_roles.get(ia[0].get("id"), "other"), 2))
-
-    units_html = "".join(
-        render_unit_card(
-            u, unit_index, is_anchor=a, section_type=section_type,
-            method_roles=method_roles, baseline_keys=baseline_keys, baseline_ids=baseline_ids,
-            cite_by_unit=cite_by_unit,
-        )
-        for (u, a) in card_items
-    )
-
-    metric_html = (
-        render_metric_table(sections, unit_index, subject_by_metric, dataset_by_metric, method_roles, baseline_keys, baseline_ids)
-        if section_type == "evidence" else ""
-    )
-
-    graph_data = build_section_graph(section_type, sections, unit_index, all_links)
-    has_graph = graph_data is not None
-
-    if has_graph:
-        content_html = f"""
-        <div class="section-content-grid">
-          <div class="section-units">
-            {metric_html}
-            {units_html}
-          </div>
-          <div class="section-graph-panel">
-            <div class="section-graph" id="{graph_id}"></div>
-          </div>
-        </div>"""
-    else:
-        content_html = f"""
-        <div class="section-units-full">
-          {metric_html}
-          {units_html}
-        </div>"""
-
-    return f"""
-    <div class="section-card" id="section-{section_type}">
-      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')" style="border-left: 4px solid {color}">
-        <span class="section-color-dot" style="background:{color}"></span>
-        <span class="section-title">{escape(label)}</span>
-        <span class="section-count">{count} units in {len(sections)} section(s)</span>
-        <span class="section-chevron">&#9660;</span>
-      </div>
-      <div class="section-body">
-        {content_html}
-      </div>
-    </div>"""
-
-
-# --- Main render ---
+# --- Page assembly ---
 
 def render_html(pipeline_data: dict[str, Any]) -> str:
     data = pipeline_data["extraction"]
@@ -910,409 +887,321 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
 
     unit_index = build_unit_index(data)
     unit_section = build_unit_section_map(data)
+    out_edges, in_edges, neighbors = build_edge_index(data, unit_index)
     all_links = collect_all_links(data)
     subject_by_metric = build_metric_subjects(data)
     dataset_by_metric = build_metric_datasets(data, unit_index)
-    method_roles = classify_methods(data, unit_index)
-    baseline_keys = {
-        _norm(unit_index.get(uid, {}).get("name", ""))
-        for uid, role in method_roles.items() if role == "baseline"
-    }
-    baseline_keys.discard("")
-    baseline_ids = {uid for uid, role in method_roles.items() if role == "baseline"}
+    roles_final = classify_methods(data, unit_index)
 
-    # Invert reference->unit links (relation.provides_unit_ids) into unit_id -> [reference id]
-    # so each method/evidence unit card can show the bibliography marker it was cited as.
-    cite_by_unit: dict[str, list[str]] = {}
+    baseline_ids = {
+        uid for uid, u in unit_index.items()
+        if u.get("type") == "Method" and (u.get("role") == "compared_against" or roles_final.get(uid) in ("compared_against", "baseline"))
+    }
+    baseline_keys = {_norm(unit_index.get(uid, {}).get("name", "")) for uid in baseline_ids}
+    baseline_keys.discard("")
+
+    # reference -> units it provides, inverted to unit -> [reference ids] for cite badges.
+    cite_by_unit: dict[str, list[str]] = defaultdict(list)
     if isinstance(references, dict):
         for ref in references.get("references", []) or []:
             if not isinstance(ref, dict):
                 continue
             rid = ref.get("id")
-            relation = ref.get("relation") or {}
-            for uid in relation.get("provides_unit_ids", []) or []:
-                if isinstance(uid, str) and isinstance(rid, str):
-                    bucket = cite_by_unit.setdefault(uid, [])
-                    if rid not in bucket:
-                        bucket.append(rid)
+            for uid in (ref.get("relation") or {}).get("provides_unit_ids", []) or []:
+                if isinstance(uid, str) and isinstance(rid, str) and rid not in cite_by_unit[uid]:
+                    cite_by_unit[uid].append(rid)
 
     grouped = group_sections_by_type(data)
-
     doc = data.get("document", {})
     notes = data.get("extraction_notes", {})
     ir_version = notes.get("ir_version", "")
 
-    # Stats
-    total_units = sum(1 for uid, u in unit_index.items() if u.get("type") != "Document")
+    total_units = sum(1 for u in unit_index.values() if u.get("type") != "Document")
     total_sections = len(data.get("sections", []))
     total_links = len(all_links)
     plan_coverage = notes.get("plan_coverage", {})
-    cov_value = f"{plan_coverage.get('must_covered', 0)}/{plan_coverage.get('must_total', 0)}" if isinstance(plan_coverage, dict) else "n/a"
+    cov_value = (
+        f"{plan_coverage.get('must_covered', 0)}/{plan_coverage.get('must_total', 0)}"
+        if isinstance(plan_coverage, dict) and plan_coverage else "n/a"
+    )
 
-    sections_used = notes.get("sections_used") or [s.get("section_type") for s in data.get("sections", [])]
-    coverage_dots = ""
-    for st in SECTION_ORDER:
-        active = st in sections_used
-        c = SECTION_COLORS[st]
-        opacity = "1" if active else "0.2"
-        coverage_dots += f'<span class="cov-dot" style="background:{c}; opacity:{opacity}" title="{st}"></span>'
-
-    # Metadata panel
     header_html = render_metadata_panel(metadata, doc)
+    nav_html = render_nav(grouped, has_refs=bool(isinstance(references, dict) and references.get("references")))
+    arc_html = render_discovery_arc(data, unit_index, roles_final, all_links)
 
-    # Spine graph
-    spine_nodes, spine_edges = build_spine_graph(data, unit_index, unit_section, all_links)
+    section_html = ""
+    for st in section_render_order(grouped):
+        secs = grouped.get(st, [])
+        if not secs:
+            continue
+        section_html += render_section(
+            st, secs, unit_index,
+            out_edges=out_edges, in_edges=in_edges, neighbors=neighbors, unit_section=unit_section,
+            roles_final=roles_final, baseline_keys=baseline_keys, baseline_ids=baseline_ids,
+            subject_by_metric=subject_by_metric, dataset_by_metric=dataset_by_metric,
+            cite_by_unit=cite_by_unit,
+        )
 
-    # Section cards with per-section graphs
-    section_cards = ""
-    section_graphs_js = ""
-    for st in SECTION_ORDER:
-        sections_for_type = grouped.get(st, [])
-        graph_id = f"graph-{st}"
-        if sections_for_type:
-            section_cards += render_section_card(
-                st, sections_for_type, unit_index, unit_section, graph_id, all_links,
-                subject_by_metric, dataset_by_metric, method_roles, baseline_keys, baseline_ids,
-                cite_by_unit=cite_by_unit,
-            )
-            graph_data = build_section_graph(st, sections_for_type, unit_index, all_links)
-            if graph_data:
-                sg_nodes, sg_edges = graph_data
-                section_graphs_js += f"""
-                initSectionGraph('{graph_id}', {json.dumps(sg_nodes, ensure_ascii=False)}, {json.dumps(sg_edges, ensure_ascii=False)});
-                """
-        else:
-            color = SECTION_COLORS[st]
-            label = SECTION_LABELS[st]
-            section_cards += f"""
-            <div class="section-card empty-section" id="section-{st}">
-              <div class="section-header" style="border-left: 4px solid {color}; opacity: 0.4">
-                <span class="section-color-dot" style="background:{color}"></span>
-                <span class="section-title">{escape(label)}</span>
-                <span class="section-count">No data</span>
-              </div>
-            </div>"""
-
-    # References panel
     references_html = render_references_panel(references, unit_index)
 
-    # Notes
     notes_html = ""
     for ua in notes.get("uncertain_assignments", []):
-        notes_html += f"<li class='note-item'>{escape(str(ua))}</li>"
+        notes_html += f"<li>{escape(str(ua))}</li>"
     for item in notes.get("uncovered_items", []):
-        notes_html += f"<li class='note-item'>uncovered {escape(item.get('item_id', ''))}: {escape(item.get('reason', ''))}</li>"
+        if isinstance(item, dict):
+            notes_html += f"<li>uncovered {escape(str(item.get('item_id', '')))}: {escape(str(item.get('reason', '')))}</li>"
+        else:
+            notes_html += f"<li>uncovered {escape(str(item))}</li>"
+    notes_block = f'<section class="notes"><h2>Extraction notes</h2><ul>{notes_html}</ul></section>' if notes_html else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{escape(doc.get('title', 'Extraction'))} — Section-IR View</title>
-<style>
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.6; }}
-.container {{ max-width: 1400px; margin: 0 auto; padding: 24px; }}
-
-/* Header */
-.paper-header {{ margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #1e293b; }}
-.paper-header h1 {{ font-size: 1.6rem; font-weight: 700; margin-bottom: 8px; color: #f8fafc; }}
-.authors {{ font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; line-height: 1.8; }}
-.affil {{ font-size: 0.75rem; color: #64748b; }}
-.thesis {{ font-size: 0.9rem; color: #cbd5e1; margin: 8px 0; padding-left: 10px; border-left: 3px solid #3b82f6; line-height: 1.5; }}
-.thesis-label {{ font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #3b82f6; margin-right: 6px; }}
-.resources {{ display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }}
-.resource-link {{ font-size: 0.8rem; color: #3b82f6; text-decoration: none; padding: 3px 10px; background: #1e293b; border-radius: 4px; border: 1px solid #334155; }}
-.resource-link:hover {{ background: #334155; }}
-
-/* Stats */
-.stats {{ display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }}
-.stat {{ background: #1e293b; border-radius: 8px; padding: 10px 14px; min-width: 100px; }}
-.stat-value {{ font-size: 1.15rem; font-weight: 700; color: #f1f5f9; }}
-.stat-label {{ font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }}
-.coverage {{ display: flex; gap: 5px; align-items: center; margin-top: 4px; }}
-.cov-dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
-.meta-tag {{ font-size: 0.75rem; color: #64748b; margin-top: 6px; }}
-
-/* Spine graph */
-.spine-section {{ background: #1e293b; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }}
-.spine-section h2 {{ padding: 12px 18px; font-size: 0.9rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #334155; }}
-#spine-graph {{ width: 100%; height: 260px; }}
-.spine-legend {{ display: flex; gap: 14px; padding: 8px 18px; flex-wrap: wrap; border-top: 1px solid #334155; }}
-.legend-item {{ display: flex; align-items: center; gap: 5px; font-size: 0.72rem; color: #94a3b8; }}
-.legend-dot {{ width: 9px; height: 9px; border-radius: 50%; }}
-
-/* Section cards */
-.section-card {{ background: #1e293b; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }}
-.section-header {{ padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 10px; user-select: none; }}
-.section-header:hover {{ background: #283548; }}
-.section-color-dot {{ width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }}
-.section-title {{ font-weight: 600; font-size: 0.95rem; flex: 1; }}
-.section-count {{ font-size: 0.72rem; color: #94a3b8; }}
-.section-chevron {{ font-size: 0.7rem; color: #64748b; transition: transform 0.2s; }}
-.section-card.collapsed .section-body {{ display: none; }}
-.section-card.collapsed .section-chevron {{ transform: rotate(-90deg); }}
-.section-body {{ padding: 0 16px 16px; }}
-
-/* Section grid layout */
-.section-content-grid {{ display: grid; grid-template-columns: 1fr 320px; gap: 16px; }}
-@media (max-width: 900px) {{ .section-content-grid {{ grid-template-columns: 1fr; }} }}
-.section-units, .section-units-full {{ }}
-.section-graph-panel {{ position: sticky; top: 16px; align-self: start; }}
-.section-graph {{ width: 100%; height: 280px; background: #0f172a; border-radius: 6px; border: 1px solid #334155; }}
-
-/* Unit cards */
-.unit-card {{ background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; margin-top: 8px; transition: border-color 0.15s; }}
-.unit-card:hover {{ border-color: #64748b; }}
-.unit-card.anchor-unit {{ border-left: 3px solid #f59e0b; }}
-.unit-card.highlighted {{ border-color: #f59e0b; box-shadow: 0 0 12px rgba(245,158,11,0.25); }}
-.unit-header {{ display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }}
-.unit-type-badge {{ font-size: 0.6rem; padding: 2px 5px; border-radius: 3px; color: #fff; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }}
-.unit-id {{ font-size: 0.72rem; color: #64748b; font-family: monospace; }}
-.anchor-badge {{ font-size: 0.58rem; background: #f59e0b; color: #000; padding: 1px 5px; border-radius: 3px; font-weight: 700; }}
-.unit-chevron {{ margin-left: auto; font-size: 0.6rem; color: #475569; transition: transform 0.15s; }}
-.unit-card.expanded .unit-chevron {{ transform: rotate(90deg); }}
-.unit-label {{ font-size: 0.85rem; margin-top: 5px; color: #cbd5e1; }}
-.unit-prov {{ margin-top: 4px; }}
-.prov-badge {{ font-size: 0.62rem; background: #334155; color: #94a3b8; padding: 1px 5px; border-radius: 3px; margin-right: 3px; }}
-.unit-detail {{ display: none; margin-top: 8px; }}
-.unit-card.expanded .unit-detail {{ display: block; }}
-.payload-table {{ width: 100%; font-size: 0.78rem; border-collapse: collapse; }}
-.payload-table td {{ padding: 3px 7px; border-bottom: 1px solid #1e293b; vertical-align: top; }}
-.payload-key {{ color: #94a3b8; white-space: nowrap; font-family: monospace; width: 110px; }}
-.payload-table pre {{ margin: 0; font-size: 0.72rem; white-space: pre-wrap; color: #cbd5e1; }}
-
-/* Measure blocks */
-.metrics-wrap {{ margin: 8px 0 4px; display: flex; flex-direction: column; gap: 10px; }}
-.metric-block {{ background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; }}
-.metric-block-head {{ display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }}
-.metric-name {{ font-weight: 600; font-size: 0.9rem; color: #f1f5f9; }}
-.metric-unit {{ font-size: 0.72rem; color: #22c55e; font-weight: 700; font-variant-numeric: tabular-nums; }}
-.metric-meta {{ font-size: 0.72rem; color: #94a3b8; }}
-.metric-meta b {{ color: #cbd5e1; font-weight: 600; }}
-
-/* Score / comparison tables */
-.score-table {{ width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }}
-.score-table th {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid #334155; color: #64748b; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.04em; }}
-.score-table td {{ padding: 4px 8px; border-bottom: 1px solid #1e293b; }}
-.score-val {{ font-weight: 700; color: #22c55e; font-variant-numeric: tabular-nums; }}
-.score-var {{ color: #64748b; font-variant-numeric: tabular-nums; }}
-.score-row.baseline-row td {{ color: #94a3b8; }}
-.score-row.baseline-row .score-val {{ color: #64748b; font-weight: 600; }}
-.base-tag {{ font-size: 0.56rem; background: #334155; color: #94a3b8; padding: 1px 5px; border-radius: 3px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.04em; }}
-.score-sys {{ font-size: 0.62rem; color: #64748b; font-family: ui-monospace, monospace; margin-left: 4px; }}
-.score-set {{ color: #94a3b8; font-size: 0.72rem; }}
-
-/* Field groups (formulas, chips, prose) */
-.field-group {{ margin-top: 8px; }}
-.field-label {{ font-size: 0.62rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }}
-.field-prose {{ font-size: 0.8rem; color: #cbd5e1; }}
-.chips {{ display: flex; gap: 5px; flex-wrap: wrap; }}
-.chip {{ font-size: 0.72rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 2px 8px; border-radius: 10px; }}
-
-/* Formula blocks */
-.formula-block {{ background: #0b1220; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }}
-.formula-name {{ font-size: 0.68rem; color: #94a3b8; margin-bottom: 4px; }}
-.formula-expr {{ font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: 0.82rem; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; }}
-.formula-desc {{ font-size: 0.74rem; color: #94a3b8; margin-top: 4px; }}
-.symbol-table {{ margin-top: 6px; border-collapse: collapse; font-size: 0.74rem; }}
-.symbol-table td {{ padding: 2px 8px 2px 0; vertical-align: top; color: #cbd5e1; }}
-.symbol-table .sym {{ font-family: 'SF Mono', Consolas, monospace; color: #93c5fd; white-space: nowrap; }}
-
-/* Tags & role badges */
-.tags {{ display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }}
-.tag {{ font-size: 0.62rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; padding: 1px 7px; border-radius: 3px; }}
-.role-badge {{ font-size: 0.56rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em; }}
-.role-contribution {{ background: #f59e0b; color: #000; }}
-.role-component {{ background: #1d4ed8; color: #dbeafe; }}
-.role-baseline {{ background: #334155; color: #94a3b8; }}
-
-/* References */
-.references-section {{ background: #1e293b; border-radius: 8px; margin-top: 20px; overflow: hidden; }}
-.references-section .section-header {{ padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 10px; user-select: none; }}
-.references-section .section-header:hover {{ background: #283548; }}
-.references-section.collapsed .section-body {{ display: none; }}
-.references-section.collapsed .section-chevron {{ transform: rotate(-90deg); }}
-.references-section .section-body {{ padding: 8px 16px 16px; max-height: 400px; overflow-y: auto; }}
-.ref-entry {{ font-size: 0.78rem; color: #94a3b8; padding: 4px 0; border-bottom: 1px solid #0f172a; }}
-.ref-id {{ color: #64748b; font-family: monospace; font-size: 0.7rem; margin-right: 6px; }}
-.ref-title {{ color: #cbd5e1; }}
-.ref-entry.central {{ border-left: 2px solid #fbbf24; padding-left: 8px; }}
-.ref-roles {{ color: #475569; font-size: 0.68rem; margin-left: 6px; }}
-.ref-links {{ margin-top: 3px; }}
-.ref-link {{ color: #60a5fa; font-size: 0.72rem; text-decoration: none; margin-right: 8px; cursor: pointer; }}
-.ref-link::before {{ content: "\\1F517 "; }}
-.ref-link:hover {{ text-decoration: underline; }}
-
-/* Citation badge on unit cards (links to references panel) */
-.cite-badges {{ display: inline-flex; gap: 3px; margin-left: 4px; }}
-.cite-badge {{ color: #fbbf24; background: #422006; font-family: monospace; font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; text-decoration: none; }}
-.cite-badge:hover {{ background: #713f12; }}
-
-/* Notes */
-.notes-section {{ margin-top: 20px; background: #1e293b; border-radius: 8px; padding: 14px 16px; }}
-.notes-section h2 {{ font-size: 0.85rem; margin-bottom: 8px; color: #94a3b8; }}
-.notes-section li {{ font-size: 0.78rem; color: #64748b; margin-bottom: 3px; padding-left: 6px; list-style: none; }}
-.note-item::before {{ content: "\\2022  "; color: #475569; }}
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape(doc.get('title', 'Extraction'))} &mdash; section-IR</title>
+<style>{CSS}</style>
 </head>
 <body>
+{nav_html}
 <div class="container">
   {header_html}
-
   <div class="stats">
-    <div class="stat"><div class="stat-value">{total_sections}</div><div class="stat-label">Sections</div></div>
-    <div class="stat"><div class="stat-value">{total_units}</div><div class="stat-label">Units</div></div>
-    <div class="stat"><div class="stat-value">{total_links}</div><div class="stat-label">Relations</div></div>
-    <div class="stat"><div class="stat-value">{escape(cov_value)}</div><div class="stat-label">Must Coverage</div></div>
-    <div class="stat">
-      <div class="coverage">{coverage_dots}</div>
-      <div class="stat-label">Section Coverage</div>
-    </div>
+    <div class="stat"><div class="sv">{total_sections}</div><div class="sl">sections</div></div>
+    <div class="stat"><div class="sv">{total_units}</div><div class="sl">units</div></div>
+    <div class="stat"><div class="sv">{total_links}</div><div class="sl">relations</div></div>
+    <div class="stat"><div class="sv">{escape(cov_value)}</div><div class="sl">must coverage</div></div>
+    <div class="stat ir">{escape(ir_version)}</div>
   </div>
-  <div class="meta-tag">{escape(ir_version)}</div>
-
-  <div class="spine-section">
-    <h2>Argumentative Spine</h2>
-    <div id="spine-graph"></div>
-    <div class="spine-legend">
-      {''.join(f'<span class="legend-item"><span class="legend-dot" style="background:{c}"></span>{SECTION_LABELS[s]}</span>' for s, c in SECTION_COLORS.items())}
-    </div>
-  </div>
-
-  {section_cards}
-
+  {arc_html}
+  {section_html}
   {references_html}
-
-  {'<div class="notes-section"><h2>Extraction Notes</h2><ul>' + notes_html + '</ul></div>' if notes_html else ''}
+  {notes_block}
 </div>
-
-<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
-<script>
-// Spine graph
-const spineNodes = {json.dumps(spine_nodes, ensure_ascii=False)};
-const spineEdges = {json.dumps(spine_edges, ensure_ascii=False)};
-
-const spineContainer = document.getElementById('spine-graph');
-if (spineContainer && spineNodes.length > 0) {{
-  const spineData = {{
-    nodes: new vis.DataSet(spineNodes),
-    edges: new vis.DataSet(spineEdges)
-  }};
-  const spineOptions = {{
-    layout: {{
-      hierarchical: {{
-        direction: 'LR',
-        sortMethod: 'directed',
-        levelSeparation: 200,
-        nodeSpacing: 80,
-      }}
-    }},
-    physics: false,
-    nodes: {{
-      font: {{ color: '#cbd5e1', size: 12, face: '-apple-system, sans-serif', multi: true }},
-      borderWidth: 1,
-      borderWidthSelected: 2,
-    }},
-    edges: {{
-      font: {{ color: '#64748b', size: 9, strokeWidth: 0, face: '-apple-system, sans-serif' }},
-      width: 1.5,
-      smooth: {{ type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 }}
-    }},
-    interaction: {{ hover: true, zoomView: true, dragView: true }}
-  }};
-  const spineNetwork = new vis.Network(spineContainer, spineData, spineOptions);
-  spineNetwork.on('click', function(params) {{
-    if (params.nodes.length > 0) {{
-      const el = document.querySelector(`[data-unit-id="${{params.nodes[0]}}"]`);
-      if (el) {{
-        el.classList.add('highlighted', 'expanded');
-        el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-        setTimeout(() => el.classList.remove('highlighted'), 3000);
-      }}
-    }}
-  }});
-}}
-
-// Section graphs
-function initSectionGraph(containerId, nodes, edges) {{
-  const container = document.getElementById(containerId);
-  if (!container || nodes.length === 0) return;
-  const data = {{
-    nodes: new vis.DataSet(nodes),
-    edges: new vis.DataSet(edges)
-  }};
-  const options = {{
-    physics: {{
-      solver: 'forceAtlas2Based',
-      forceAtlas2Based: {{ gravitationalConstant: -30, centralGravity: 0.01, springLength: 100, springConstant: 0.03, damping: 0.5 }},
-      stabilization: {{ iterations: 150 }}
-    }},
-    nodes: {{
-      font: {{ color: '#cbd5e1', size: 10, face: '-apple-system, sans-serif' }},
-      borderWidth: 1,
-    }},
-    edges: {{
-      font: {{ color: '#64748b', size: 8, strokeWidth: 0 }},
-      width: 1,
-      smooth: {{ type: 'cubicBezier', roundness: 0.3 }}
-    }},
-    interaction: {{ hover: true, zoomView: true, dragView: true }}
-  }};
-  const network = new vis.Network(container, data, options);
-  network.on('click', function(params) {{
-    document.querySelectorAll('.unit-card.highlighted').forEach(el => el.classList.remove('highlighted'));
-    if (params.nodes.length > 0) {{
-      const el = document.querySelector(`[data-unit-id="${{params.nodes[0]}}"]`);
-      if (el) {{
-        el.classList.add('highlighted', 'expanded');
-        el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-        setTimeout(() => el.classList.remove('highlighted'), 3000);
-      }}
-    }}
-  }});
-}}
-
-{section_graphs_js}
-
-// Collapse references by default
-document.querySelectorAll('.references-section').forEach(el => el.classList.add('collapsed'));
-
-// Reference <-> unit navigation: a reference's spine link scrolls to that unit card;
-// a unit's citation badge opens the references panel.
-document.querySelectorAll('.ref-link').forEach(el => {{
-  el.addEventListener('click', function() {{
-    document.querySelectorAll('.unit-card.highlighted').forEach(c => c.classList.remove('highlighted'));
-    const target = document.querySelector('[data-unit-id="' + el.dataset.target + '"]');
-    if (target) {{
-      const section = target.closest('.section-card');
-      if (section) section.classList.remove('collapsed');
-      target.classList.add('highlighted', 'expanded');
-      target.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-      setTimeout(() => target.classList.remove('highlighted'), 3000);
-    }}
-  }});
-}});
-document.querySelectorAll('.cite-badge').forEach(el => {{
-  el.addEventListener('click', function() {{
-    const refs = document.getElementById('references');
-    if (refs) refs.classList.remove('collapsed');
-  }});
-}});
-</script>
+<script>{JS_CODE}</script>
 </body>
 </html>"""
 
 
+# --- Styles & behaviour (no external dependencies) ---
+
+CSS = """
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0b1220; color:#e2e8f0; line-height:1.55; }
+a { color:inherit; text-decoration:none; }
+.container { max-width:1080px; margin:0 auto; padding:20px 24px 60px; }
+
+/* Sticky nav */
+.topnav { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  background:rgba(11,18,32,.92); backdrop-filter:blur(8px); border-bottom:1px solid #1e293b; padding:9px 24px; }
+.nav-brand { font-weight:700; font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; color:#64748b; margin-right:10px; }
+.nav-link { font-size:.82rem; color:#cbd5e1; padding:4px 10px; border-radius:6px; display:inline-flex; align-items:center; gap:6px; }
+.nav-link:hover { background:#1e293b; }
+.nav-link b { color:#f8fafc; }
+.nav-dot { width:8px; height:8px; border-radius:50%; }
+
+/* Header */
+.paper-header { margin:18px 0 14px; padding-bottom:14px; border-bottom:1px solid #1e293b; }
+.paper-header h1 { font-size:1.5rem; font-weight:700; color:#f8fafc; }
+.authors { font-size:.84rem; color:#94a3b8; margin-top:6px; }
+.affil { font-size:.74rem; color:#64748b; }
+.thesis { font-size:.92rem; color:#dbeafe; margin-top:10px; padding:8px 12px; border-left:3px solid #3b82f6; background:#0f1b30; border-radius:0 6px 6px 0; }
+.thesis-l { font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#60a5fa; margin-right:6px; }
+.resources { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.res { font-size:.78rem; color:#93c5fd; padding:3px 10px; background:#1e293b; border-radius:5px; }
+.res:hover { background:#334155; }
+
+/* Stats */
+.stats { display:flex; gap:10px; margin:14px 0 4px; flex-wrap:wrap; align-items:stretch; }
+.stat { background:#111c30; border:1px solid #1e293b; border-radius:8px; padding:8px 14px; min-width:84px; }
+.sv { font-size:1.05rem; font-weight:700; color:#f1f5f9; }
+.sl { font-size:.66rem; color:#94a3b8; text-transform:uppercase; letter-spacing:.05em; }
+.stat.ir { display:flex; align-items:center; color:#64748b; font-size:.72rem; font-family:ui-monospace,monospace; }
+
+/* Discovery arc */
+.arc { background:linear-gradient(180deg,#101d33,#0d1729); border:1px solid #1e293b; border-radius:10px; padding:14px 16px; margin:18px 0 22px; }
+.arc-title { font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; color:#64748b; font-weight:700; margin-bottom:10px; }
+.arc-track { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.arc-chip { font-size:.84rem; font-weight:600; padding:7px 12px; border-radius:8px; cursor:pointer; border:1px solid transparent; max-width:340px; }
+.arc-chip:hover { filter:brightness(1.15); }
+.arc-problem { background:#3a2a0c; color:#fcd34d; border-color:#a16207; }
+.arc-method  { background:#10243f; color:#93c5fd; border-color:#1d4ed8; }
+.arc-finding { background:#0f2e1c; color:#86efac; border-color:#15803d; }
+.arc-conn { font-size:.72rem; color:#64748b; white-space:nowrap; }
+.arc-close { font-size:.74rem; color:#fcd34d; font-weight:600; margin-left:2px; }
+.arc-legend { font-size:.7rem; color:#475569; margin-top:11px; }
+
+/* Sections */
+.sec { background:#0f1829; border:1px solid #1e293b; border-radius:10px; margin-bottom:14px; overflow:hidden; }
+.sec-head { display:flex; align-items:center; gap:10px; padding:13px 16px; cursor:pointer; user-select:none; border-left:4px solid var(--accent,#334155); }
+.sec-head:hover { background:#13203a; }
+.sec-dot { width:11px; height:11px; border-radius:50%; }
+.sec-title { font-weight:700; font-size:1rem; color:#f8fafc; }
+.sec-sub { font-size:.76rem; color:#64748b; flex:1; }
+.sec-count { font-size:.74rem; color:#94a3b8; background:#1e293b; border-radius:10px; padding:1px 9px; }
+.sec-chevron { font-size:.66rem; color:#64748b; transition:transform .18s; }
+.sec.collapsed .sec-body { display:none; }
+.sec.collapsed .sec-chevron { transform:rotate(-90deg); }
+.sec-body { padding:8px 16px 16px; }
+.empty { color:#475569; font-size:.82rem; padding:8px 0; }
+
+/* Unit cards (also used for Measure blocks) */
+.unit { background:#0b1424; border:1px solid #25324a; border-radius:8px; padding:11px 13px; margin-top:9px;
+  transition:opacity .15s, box-shadow .15s, border-color .15s; }
+.unit:hover { border-color:#3b4a66; }
+body.focusing .unit:not(.focus):not(.related) { opacity:.26; }
+.unit.focus { border-color:#f59e0b; box-shadow:0 0 0 2px rgba(245,158,11,.55); }
+.unit.related { border-color:#38bdf8; box-shadow:0 0 0 1px rgba(56,189,248,.5); }
+.u-head { display:flex; align-items:center; gap:8px; cursor:pointer; }
+.u-badge { font-size:.58rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:#fff; padding:2px 6px; border-radius:4px; }
+.role { font-size:.56rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:2px 6px; border-radius:4px; background:#334155; color:#cbd5e1; }
+.role-contribution { background:#f59e0b; color:#1a1300; }
+.role-component { background:#1d4ed8; color:#dbeafe; }
+.role-compared_against, .role-builds_on { background:#334155; color:#94a3b8; }
+.u-id { font-size:.7rem; color:#5b6b85; font-family:ui-monospace,monospace; }
+.u-chevron { margin-left:auto; font-size:.62rem; color:#475569; transition:transform .15s; }
+.unit.open .u-chevron { transform:rotate(90deg); }
+.u-label { font-size:.9rem; color:#e2e8f0; margin-top:6px; }
+.u-prov { margin-top:5px; }
+.prov { font-size:.62rem; background:#1e293b; color:#94a3b8; padding:1px 6px; border-radius:3px; margin-right:3px; }
+.tags { display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; }
+.tag { font-size:.62rem; background:#1e293b; color:#94a3b8; border:1px solid #2c3a52; padding:1px 7px; border-radius:3px; }
+
+/* Relation pills (the contextual logic flow) */
+.rels { display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
+.rel { font-size:.72rem; background:#101a2e; border:1px solid #25324a; border-left:3px solid #64748b;
+  padding:3px 9px; border-radius:5px; cursor:pointer; color:#cbd5e1; display:inline-flex; align-items:center; gap:5px; }
+.rel:hover { background:#16233c; border-color:#3b4a66; }
+.rel-dangling { cursor:default; opacity:.6; }
+.rel-arrow { color:#64748b; font-weight:700; }
+.rel-verb { color:#94a3b8; }
+.rel-peer { color:#e2e8f0; font-weight:500; }
+.rel.sec-problem .rel-peer { color:#fcd34d; }
+.rel.sec-method .rel-peer { color:#93c5fd; }
+.rel.sec-evidence .rel-peer { color:#86efac; }
+
+/* Unit detail (collapsed) */
+.u-detail { display:none; margin-top:9px; padding-top:9px; border-top:1px dashed #25324a; }
+.unit.open .u-detail { display:block; }
+.fg { margin-top:8px; }
+.fl { font-size:.62rem; color:#64748b; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+.prose { font-size:.82rem; color:#cbd5e1; }
+.chips { display:flex; gap:5px; flex-wrap:wrap; }
+.chip { font-size:.72rem; background:#1e293b; color:#cbd5e1; border:1px solid #2c3a52; padding:2px 8px; border-radius:10px; }
+.payload { width:100%; font-size:.76rem; border-collapse:collapse; }
+.payload td { padding:3px 7px; border-bottom:1px solid #16233c; vertical-align:top; }
+.pk { color:#94a3b8; font-family:ui-monospace,monospace; width:120px; }
+.payload pre { margin:0; font-size:.7rem; white-space:pre-wrap; color:#cbd5e1; }
+
+/* Formulas */
+.formula { background:#0a1322; border:1px solid #25324a; border-radius:6px; padding:8px 10px; margin-bottom:6px; }
+.f-name { font-size:.66rem; color:#94a3b8; margin-bottom:4px; }
+.f-expr { font-family:'SF Mono','Fira Code',Consolas,monospace; font-size:.82rem; color:#e2e8f0; white-space:pre-wrap; word-break:break-word; }
+.f-desc { font-size:.74rem; color:#94a3b8; margin-top:4px; }
+.symbols { margin-top:6px; border-collapse:collapse; font-size:.74rem; }
+.symbols td { padding:2px 8px 2px 0; vertical-align:top; color:#cbd5e1; }
+.symbols .sym { font-family:'SF Mono',Consolas,monospace; color:#93c5fd; white-space:nowrap; }
+
+/* Measure blocks */
+.metric-block .m-head { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+.m-name { font-weight:700; font-size:.92rem; color:#f1f5f9; }
+.m-unit { font-size:.72rem; color:#2dd4bf; font-weight:700; font-variant-numeric:tabular-nums; }
+.m-meta { font-size:.72rem; color:#94a3b8; }
+.m-meta b { color:#cbd5e1; }
+.scores { width:100%; border-collapse:collapse; font-size:.8rem; margin-top:8px; }
+.scores th { text-align:left; padding:4px 8px; border-bottom:1px solid #25324a; color:#64748b; font-size:.64rem; text-transform:uppercase; letter-spacing:.04em; }
+.scores td { padding:4px 8px; border-bottom:1px solid #16233c; }
+.score-val { font-weight:700; color:#2dd4bf; font-variant-numeric:tabular-nums; }
+.score-var { color:#64748b; font-variant-numeric:tabular-nums; }
+.score-row.baseline-row td { color:#94a3b8; }
+.score-row.baseline-row .score-val { color:#64748b; font-weight:600; }
+.basetag { font-size:.54rem; background:#334155; color:#94a3b8; padding:1px 5px; border-radius:3px; text-transform:uppercase; letter-spacing:.04em; }
+.score-sys { font-size:.62rem; color:#5b6b85; font-family:ui-monospace,monospace; margin-left:4px; }
+a.score-sys { cursor:pointer; }
+a.score-sys:hover { color:#93c5fd; }
+.score-set { color:#94a3b8; font-size:.72rem; }
+
+/* References */
+.refs-sec .sec-body { max-height:440px; overflow-y:auto; }
+.ref { font-size:.78rem; color:#94a3b8; padding:5px 0; border-bottom:1px solid #16233c; }
+.ref-id { color:#64748b; font-family:ui-monospace,monospace; font-size:.7rem; margin-right:6px; }
+.ref-title { color:#cbd5e1; }
+.ref.central { border-left:2px solid #fbbf24; padding-left:8px; }
+.ref-roles { color:#475569; font-size:.68rem; margin-left:6px; }
+.ref-links { margin-top:3px; }
+.ref-link { color:#60a5fa; font-size:.72rem; margin-right:8px; cursor:pointer; }
+.ref-link:hover { text-decoration:underline; }
+
+/* Citation badges */
+.cite-badges { display:inline-flex; gap:3px; }
+.cite-badge { color:#fbbf24; background:#3a2a0c; font-family:ui-monospace,monospace; font-size:.64rem; padding:1px 5px; border-radius:3px; cursor:pointer; }
+.cite-badge:hover { background:#5a3f12; }
+
+/* Notes */
+.notes { margin-top:18px; background:#0f1829; border:1px solid #1e293b; border-radius:10px; padding:14px 16px; }
+.notes h2 { font-size:.84rem; color:#94a3b8; margin-bottom:8px; }
+.notes li { font-size:.78rem; color:#64748b; list-style:none; padding-left:14px; position:relative; margin-bottom:3px; }
+.notes li::before { content:"\\2022"; position:absolute; left:0; color:#475569; }
+"""
+
+JS_CODE = r"""
+(function () {
+  var cur = null;
+  function clearFocus() {
+    document.body.classList.remove('focusing');
+    var marked = document.querySelectorAll('.focus, .related');
+    for (var i = 0; i < marked.length; i++) marked[i].classList.remove('focus', 'related');
+    cur = null;
+  }
+  function focusUnit(id, navigate) {
+    var card = document.getElementById('u-' + id);
+    if (!card) return;
+    clearFocus();
+    document.body.classList.add('focusing');
+    card.classList.add('focus');
+    var rel = (card.getAttribute('data-rel') || '').split(' ');
+    for (var i = 0; i < rel.length; i++) {
+      if (!rel[i]) continue;
+      var n = document.getElementById('u-' + rel[i]);
+      if (n) n.classList.add('related');
+    }
+    cur = id;
+    if (navigate) {
+      card.classList.add('open');
+      var sec = card.closest('.sec');
+      if (sec) sec.classList.remove('collapsed');
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+  document.addEventListener('click', function (ev) {
+    var peer = ev.target.closest('[data-peer]');
+    if (peer) { focusUnit(peer.getAttribute('data-peer'), true); ev.preventDefault(); return; }
+    var cite = ev.target.closest('.cite-badge');
+    if (cite) {
+      var refs = document.getElementById('references');
+      if (refs) { refs.classList.remove('collapsed'); refs.scrollIntoView({ behavior: 'smooth' }); }
+      return;
+    }
+    var head = ev.target.closest('.sec-head');
+    if (head) { head.parentElement.classList.toggle('collapsed'); return; }
+    var unit = ev.target.closest('.unit');
+    if (unit) { unit.classList.toggle('open'); focusUnit(unit.getAttribute('data-uid'), false); return; }
+    clearFocus();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') clearFocus(); });
+})();
+"""
+
+
 # --- CLI ---
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Render section-IR extraction to interactive HTML",
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Render a section-IR extraction to a self-contained HTML page")
     parser.add_argument("input", type=Path, help="Extraction JSON file or production output directory")
-    parser.add_argument("-o", "--output", type=Path, default=None, help="Output HTML path (default: auto)")
+    parser.add_argument("-o", "--output", type=Path, default=None, help="Output HTML path (default: alongside input)")
     parser.add_argument("--metadata", type=Path, default=None, help="Metadata JSON sidecar")
     parser.add_argument("--references", type=Path, default=None, help="References JSON sidecar")
+    parser.add_argument("--open", action="store_true", help="Open the rendered page in a browser")
     args = parser.parse_args()
 
     pipeline_data = load_pipeline_data(args.input, args.metadata, args.references)
@@ -1324,9 +1213,12 @@ def main():
     else:
         output_path = args.input.with_suffix(".html")
 
-    html = render_html(pipeline_data)
-    output_path.write_text(html, encoding="utf-8")
-    print(f"Rendered: {output_path} ({len(html):,} bytes)")
+    html_out = render_html(pipeline_data)
+    output_path.write_text(html_out, encoding="utf-8")
+    print(f"Rendered: {output_path} ({len(html_out):,} bytes)")
+
+    if args.open:
+        webbrowser.open(output_path.resolve().as_uri())
 
 
 if __name__ == "__main__":
