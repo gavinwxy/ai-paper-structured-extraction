@@ -27,3 +27,6 @@ archive/*
 
 # batch extraction outputs
 production-outputs/
+
+# copied test-corpus papers (source .md + before.json); track only MANIFEST.md/README.md
+issues/test-corpus-by-issue/*/papers/
