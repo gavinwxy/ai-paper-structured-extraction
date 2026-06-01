@@ -838,9 +838,9 @@ def render_references_panel(references: dict | None, unit_index: dict | None = N
     rows, linked = "", 0
     for r in refs:
         rid = r.get("id", "")
-        authors = r.get("authors", [])
+        authors = r.get("authors") or []
         author_str = f"{authors[0]} et al." if len(authors) > 3 else ", ".join(authors)
-        title = r.get("title", "")
+        title = r.get("title") or ""
         venue = r.get("venue", "")
         year = r.get("year", "")
         year_str = f", {year}" if year else ""

@@ -175,14 +175,22 @@ async def _run_paper_pipeline(
             "valid": len(validation_issues) == 0,
         })
 
-        # Render HTML
-        pipeline_data = {
-            "extraction": extraction,
-            "metadata": metadata,
-            "references": references,
-        }
-        html_path = paper_dir / "extraction.html"
-        html_path.write_text(render_html(pipeline_data), encoding="utf-8")
+        # Render HTML — a non-essential side artifact. Never fail a paper whose
+        # extraction + validation already succeeded just because the renderer choked.
+        try:
+            pipeline_data = {
+                "extraction": extraction,
+                "metadata": metadata,
+                "references": references,
+            }
+            html_path = paper_dir / "extraction.html"
+            html_path.write_text(render_html(pipeline_data), encoding="utf-8")
+        except Exception as render_exc:
+            warnings.append(f"HTML render failed: {render_exc}")
+            logger.warning(
+                "[%s] HTML render failed (extraction is valid; skipping HTML): %s",
+                paper_id, render_exc,
+            )
 
         elapsed = time.monotonic() - t0
         write_status(paper_dir, "completed", timing_s=round(elapsed, 1),

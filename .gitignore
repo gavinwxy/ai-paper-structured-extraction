@@ -24,3 +24,6 @@ archive/*
 
 # env var
 .env
+
+# batch extraction outputs
+production-outputs/
