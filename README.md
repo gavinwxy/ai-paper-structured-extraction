@@ -1,133 +1,360 @@
 # Section-IR Extraction Pipeline
 
-A three-stage scientific literature extraction pipeline that decomposes a paper's scientific-discovery throughline into structured section-IR (`section-ir-0.9`):
+A three-stage LLM pipeline that reads a scientific paper (Markdown) and extracts its
+**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.10`):
 
 ```
 problem → method → evidence
 ```
 
-`evidence` is the merged experiment+analysis layer: it carries both what was measured and what those measurements mean, and it hosts the headline contribution finding.
+- **problem** — the single research problem the paper addresses (one trunk; the old multi-tag
+  `context` section collapsed to one).
+- **method** — the technical apparatus: the contribution and its components, plus the prior-art
+  and baseline methods it builds on or competes with.
+- **evidence** — the merged experiment + analysis layer. It carries both *what was measured*
+  (`Measure`, `ExperimentSetup`) and *what those measurements mean* (`Finding`), and it hosts the
+  **headline contribution finding** — so there is no separate `claim` section.
 
-## Pipeline Overview
+The discovery arc closes with a synthesized `resolves` edge from the headline finding back to the
+problem, and the one-sentence contribution is lifted onto the `Document` as `thesis`.
+
+The output is a single JSON object with four top-level keys — `document`, `sections`, `relations`,
+`extraction_notes` — described under [The section-IR data model](#the-section-ir-data-model).
+
+## Pipeline overview
 
 ```
-Paper (Markdown)
-     │
-     ▼
-┌─────────────────────────────┐
-│  Stage A: Node Census       │  → spine_summary, nodes[] (roles, no relations)
-│  (single LLM call)          │
-└─────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────┐
-│  Stage B: Relation Pass     │  → global relations[] (structural node↔node edges)
-│  (single LLM call)          │
-└─────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────┐
-│  Stage C: Content Fill      │  → 3 parallel LLM calls (problem/method/evidence)
-│  (parallel, per-section)    │     each returns section units + finding-centric edges
-└─────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────┐
-│  Assembly & Validation      │  → final section-IR JSON (single global relations[])
-│  (Python, no LLM)           │
-└─────────────────────────────┘
+                         Paper (Markdown, with [§N] markers)
+                                        │
+            ┌───────────────────────────┼───────────────────────────┐
+            ▼                            ▼                            ▼
+   ┌─────────────────┐         ┌──────────────────────┐     ┌──────────────────┐
+   │  Metadata       │         │ Stage A: Node Census │     │  References      │
+   │  (sidecar)      │         │ (single LLM call)    │     │  (sidecar)       │
+   └─────────────────┘         └──────────────────────┘     └──────────────────┘
+   title/authors/year/venue   spine_summary + nodes[]       bibliography (cite_keys
+                              (roles, salience; NO edges)    later joined to units)
+                                        │
+                                        ▼
+                          ┌──────────────────────────────┐
+                          │ Stage B: Relation Pass       │  → global relations[]
+                          │ (single LLM call)            │    (structural node↔node edges
+                          └──────────────────────────────┘     over the full node set)
+                                        │
+                                        ▼
+                          ┌──────────────────────────────┐
+                          │ Stage C: Content Fill        │  → 3 parallel LLM calls
+                          │ (parallel, per-section)      │    problem · method · evidence
+                          └──────────────────────────────┘    (units + finding-centric edges)
+                                        │
+                                        ▼
+                          ┌──────────────────────────────┐
+                          │ Assembly & Validation        │  → final section-IR JSON
+                          │ (Python, no LLM)             │    (one global relations[])
+                          └──────────────────────────────┘
 ```
 
 Metadata and references are extracted as independent sidecars, in parallel with the node census.
 
-## Directory Structure
+## Installation
 
-```
-.
-├── section_pipeline.py                  # Main pipeline implementation
-├── prompts/section-extraction/
-│   ├── node-census.md                   # Stage A prompt (system + user template)
-│   ├── relation-pass.md                 # Stage B prompt
-│   ├── section-extraction-pass.md       # Stage C shared core (rules common to all sections)
-│   ├── section-modules/                 # Self-contained per-section contract injected as section_focus
-│   │   ├── problem.md
-│   │   ├── method.md
-│   │   └── evidence.md
-│   └── examples/                        # Section-IR examples
-├── schemas/
-│   ├── node-census-output.schema.json   # Stage A response_format
-│   ├── relation-pass-output.schema.json # Stage B response_format
-│   ├── section-problem.schema.json      # Stage C per-section response_format
-│   ├── section-method.schema.json
-│   └── section-evidence.schema.json
-├── tools/
-│   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
-│   ├── render_extraction.py             # Render extraction JSON → HTML
-│   └── count_extraction.py              # Node/relation counts
-├── tests/
-│   ├── test_section_pipeline.py         # Unit tests
-│   ├── test_section_extraction.py       # LLM smoke test (end-to-end)
-│   ├── papers/                          # Test corpus (1-5.md, with §N markers)
-│   └── section-extraction-outputs/      # Generated outputs
-├── docs/
-│   ├── section-ir-0.9-redesign.md       # Active IR design spec (two-level type/role taxonomy)
-│   ├── section-ir-0.8-redesign.md       # 0.8 spine delta
-│   ├── section-ir-0.7-redesign.md       # 0.7 spec
-│   └── section-ir-design.md             # Legacy 0.6 design reference
-├── CLAUDE.md                            # Claude Code instructions
-└── AGENTS.md                            # Codex / agent instructions (mirrors CLAUDE.md)
+Requires **Python ≥ 3.10**. Dependencies are managed with [uv](https://docs.astral.sh/uv/)
+(`uv.lock` is committed); plain `venv` + `pip` works too. There are only two runtime
+dependencies: `openai` (the OpenAI-compatible client) and `python-dotenv`.
+
+```bash
+uv sync                         # create .venv and install from uv.lock
+# or:
+python -m venv .venv && .venv/bin/pip install "openai>=2.31.0" "python-dotenv>=1.2.2"
 ```
 
-## How It Works
+Create a `.env` with your API key:
 
-### Stage A: Node Census
+```bash
+API_KEY=sk-...                  # API-KEY (with a hyphen) is also accepted
+# optional overrides:
+# BASE_URL=http://35.220.164.252:3888/v1
+# MODEL=deepseek-v4-pro
+```
 
-**Prompt:** `prompts/section-extraction/node-census.md`
-**Schema:** `schemas/node-census-output.schema.json`
+The default endpoint is an OpenAI-compatible proxy (`http://35.220.164.252:3888/v1`); a fallback
+proxy lives at `http://34.13.73.248:3888/v1`. You can also point at official DeepSeek
+(`https://api.deepseek.com`) with a DeepSeek key — see [Model compatibility](#model-compatibility).
+
+## Quickstart
+
+### Batch extraction (the production path)
+
+Extract every paper in a directory:
+
+```bash
+.venv/bin/python -m production <input_dir> <output_dir> --model deepseek-v4-pro
+```
+
+`<input_dir>` is a **flat** directory of `*.md` papers (discovery is non-recursive). Each paper
+gets its own output subdirectory holding the staged intermediates and the final result:
+
+```
+<output_dir>/<paper_id>/
+├── 01_census.json                              # stage A
+├── 02_metadata.json                            # title/authors/year/venue sidecar
+├── 03_references.json                          # bibliography sidecar (+ reconciled provides_unit_ids)
+├── 04_relations.json                           # stage B
+├── 05_sections/{problem,method,evidence}.json  # stage C (per section)
+├── 06_extraction.json                          # ← final assembled section-IR
+├── 07_validation.json                          # validation issues ([] = clean)
+├── extraction.html                             # rendered view
+└── status.json
+<output_dir>/run_summary.json                   # batch-level summary
+```
+
+Runs are **resumable** — already-completed papers are skipped on re-run; pass `--force` to
+reprocess. Common flags:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--limit N` | `0` (all) | process at most N papers |
+| `--paper-concurrency N` | `10` | papers in flight at once |
+| `--llm-concurrency N` | `30` | concurrent LLM calls |
+| `--max-tokens N` | `32768` | output budget for content sections |
+| `--planning-max-tokens N` | `24576` | budget for census / relations / metadata / references |
+| `--max-retries N` | `3` | retries per LLM call (re-issues on malformed JSON) |
+| `--force` | off | ignore resumability, reprocess everything |
+
+Run `.venv/bin/python -m production --help` for the full set.
+
+### End-to-end smoke test (single papers)
+
+```bash
+.venv/bin/python tests/test_section_extraction.py --papers 4 5
+```
+
+This reads `tests/papers/{id}.md`. That directory **may be empty in a fresh checkout** — populate
+it, or drive extraction from `tests/benchmark/` (real papers with `[§N]` markers, addressed by
+numeric id) via the batch path above. Add `--allow-validation-issues` to keep going past
+validation errors. Useful flags: `--model`, `--base-url`, `--max-tokens` (planning, default 16384),
+`--section-max-tokens` (default 32768).
+
+If the primary base URL is unreachable, retry with `--base-url http://34.13.73.248:3888/v1`.
+
+### Unit tests
+
+```bash
+.venv/bin/python -m unittest tests.test_section_pipeline
+```
+
+### Render an extraction to HTML
+
+```bash
+python tools/render_extraction.py <output_dir>/<paper_id>/06_extraction.json
+```
+
+The renderer is schema-aware for `anchor_id` sections, colors units by section membership, and
+shows reference badges/links.
+
+### Regenerate schemas
+
+```bash
+python tools/generate_section_schemas.py
+```
+
+All JSON schemas are generated from constants in `section_pipeline.py` — **never hand-edit the
+JSON**.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `API_KEY` / `API-KEY` | — | API authentication, loaded from `.env` |
+| `BASE_URL` | `http://35.220.164.252:3888/v1` | OpenAI-compatible endpoint |
+| `MODEL` | `deepseek-v4-pro` | extraction model |
+
+Token budgets default to **32K** for content sections and **24K** for the single-shot
+planning/aux calls (census, relation pass, metadata, references); both are tunable on the CLI.
+
+### Model compatibility
+
+The default model is **`deepseek-v4-pro`**, run with **reasoning/thinking disabled** (faster, and
+reasoning gave no quality lift on this corpus). Thinking-off is enforced in the transport, not the
+model name: every call injects `extra_body={"thinking": {"type": "disabled"}}` when the model name
+matches `deepseek*` (both the sync `_call_llm` in `section_pipeline.py` and the async
+`production/llm.py`).
+
+Structured output is **model-adaptive**, detected from the model name (`_structured_output_mode`):
+
+- **json_schema mode** (any non-`deepseek*` model, e.g. the Gemini/OpenAI-compatible proxy) — the
+  per-stage JSON schema is sent in `response_format` with `strict: true`, so decoding is
+  schema-constrained and the prompts are unchanged.
+- **json_object mode** (the default, `deepseek*`) — DeepSeek rejects `response_format: json_schema`,
+  so the pipeline sends `{"type": "json_object"}` and renders the *same* schema into the prompt as
+  an **OUTPUT FORMAT CONTRACT** (`schema_to_prompt_spec`): keys, required/optional fields, enum
+  values, id patterns — the constraints strict decoding used to enforce. The contract is derived
+  from the schema, so it never drifts, and the deterministic [assembly repairs](#assembly--validation)
+  absorb the benign quirks strict decoding would have rejected. (DeepSeek also rejects the proxy's
+  cache-key kwargs, so they are omitted for `deepseek*`.)
+
+To run against official DeepSeek (smaller output ceiling — lower the budgets if a call 400s or
+truncates):
+
+```bash
+.venv/bin/python -m production <in> <out> \
+  --model deepseek-v4-pro --base-url https://api.deepseek.com --max-tokens 8192
+```
+
+(`API-KEY` in `.env` must then be your DeepSeek key.)
+
+## How it works
+
+### Stage A — Node Census
+
+**Prompt:** `prompts/section-extraction/node-census.md` · **Schema:**
+`schemas/node-census-output.schema.json`
 
 One full-paper call produces:
-- `spine_summary` — central contribution + argument flow
-- `nodes[]` — a flat list of every load-bearing node, each with a single granular `role` (the coarse `type` Method/ExperimentSetup/Measure and the document root are derived from `role`; the `role` is then carried onto the materialized unit as its fine-grained differentia), a `salience` (`must`/`should`), and **no relations**. Each `node_id` (prefix `mth:`/`exp:`/`mea:`) is reused verbatim as the final unit id.
 
-### Stage B: Relation Pass
+- `spine_summary` — the central contribution and argument flow (and, optionally,
+  `headline_result`, the paper's headline established result).
+- `nodes[]` — a flat list of every load-bearing node, each with a single granular **`role`**, a
+  **`salience`** (`must`/`should`), and **no relations**. The coarse `type`
+  (`Method`/`ExperimentSetup`/`Measure`/`Finding`) and the document root are *derived* from `role`;
+  the `role` is then carried onto the materialized unit as its fine-grained differentia. Each
+  `node_id` prefix (`mth:`/`exp:`/`mea:`/`fnd:`) follows from the role's type and is reused
+  verbatim as the final unit id.
 
-**Prompt:** `prompts/section-extraction/relation-pass.md`
-**Schema:** `schemas/relation-pass-output.schema.json`
+Two scoping rules: a **named model is a Method** (`builds_on`/`compared_against`), never a testbed
+node; **apparatus is not a node** (hardware and metric-scoring models are dropped). **Baselines are
+captured in full** — every compared-against system is a lightweight `compared_against` Method, and
+its number is a row in the relevant `Measure.scores[]`. Prior-art/testbed nodes also carry
+`cite_keys` (the in-text bibliography marker), the deterministic join key for reference linking.
 
-One call over the full paper plus the complete flat node list. It establishes the structural node↔node edges (`part_of`, `compares_to`, `evaluates`) with the whole node set in view — so cross-section composition and measure-subject binding need no forward references and no reconcile crutches. (The metric→dataset edge `measured_on` was removed in 0.9; a Measure binds to its dataset/split via the score row's `setup_id`.)
+### Stage B — Relation Pass
 
-### Stage C: Parallel Content Fill
+**Prompt:** `prompts/section-extraction/relation-pass.md` · **Schema:**
+`schemas/relation-pass-output.schema.json`
 
-**Prompt:** `prompts/section-extraction/section-extraction-pass.md` (shared core) + per-section module
-**Schema:** `schemas/section-{section}.schema.json`
+One call over the full paper plus the complete flat node list. It establishes the structural
+node↔node edges (`part_of`, `builds_on`, `uses`, `assumes`, `co_contribution`, `compares_to`,
+`evaluates`) with the whole node set in view — so cross-section composition and measure-subject
+binding need no forward references and no reconcile crutches.
 
-The shared core carries only the rules common to every section (identifiers, provenance,
-the output envelope, universal hard constraints) and is byte-identical across all section
-calls — so the paper text stays in the cross-section prompt cache. Each section module is
-self-contained: it declares that section's allowed unit types and their field contracts,
-the controlled vocabularies it uses, the relation subset it may author, a worked example, and
-its section-specific rules.
+### Stage C — Parallel Content Fill
 
-For each of the three sections (`problem`, `method`, `evidence`):
-1. Load the shared system prompt (universal rules only)
-2. Inject the self-contained section module as `section_focus`
-3. Build the user prompt with: `spine_summary`, `node_registry` (all nodes), the global `relations[]` from stage B, `section_focus`, and paper text
-4. Call LLM with that section's JSON schema as `response_format` (strict: true)
-5. Returns `section` (materialized + born units, plus any `about`/`supports`/`motivates` edges it authors)
+**Prompt:** `prompts/section-extraction/section-extraction-pass.md` (shared core) + per-section
+module · **Schema:** `schemas/section-{section}.schema.json`
 
-All three sections extract in parallel (ThreadPoolExecutor, max 5 workers).
+The shared core carries only the rules common to every section (identifiers, provenance format, the
+output envelope, universal hard constraints) and is **byte-identical** across all section calls — so
+the paper text stays in the cross-section prompt cache. Each per-section module
+(`prompts/section-extraction/section-modules/{problem,method,evidence}.md`) is a self-contained
+contract: that section's allowed unit types and field contracts, the controlled vocabularies and
+relation subset it uses, a worked example, and its section-specific rules.
+
+For each of the three sections:
+
+1. Load the shared system prompt (universal rules only).
+2. Inject the self-contained section module as `section_focus`.
+3. Build the user prompt with `spine_summary`, `node_registry` (all nodes), the global `relations[]`
+   from stage B, `section_focus`, and the paper text.
+4. Call the LLM with that section's response format.
+5. Get back `section` — the materialized census units it owns plus its born units, and any
+   `about`/`supports` (evidence) or `motivates` (problem) edges it authors.
+
+All three sections run in parallel.
+
+### Sidecars — metadata & references
+
+In parallel with the census, two single-shot calls extract `document` metadata (title, authors,
+year, venue) and the bibliography. After assembly, `reconcile_reference_units` backfills each
+reference's `relation.provides_unit_ids` by matching the reference to a materialized node — first
+by `cite_keys` (exact, grounded in the paper's own citation), then by a unique name match — and
+(FG-12) backfills contribution→target unit edges from reference roles.
 
 ### Assembly & Validation
 
-After all sections return:
-1. Flatten typed unit arrays into `section.units[]`; merge the stage-B edges with each section's `relations[]` into a single top-level `relations[]`
-2. Deterministic repairs (stamp census roles onto materialized units, dedup ExperimentSetups/IDs, drop empty sections, normalize provenance markers, dedup/drop-dangling/drop-invalid relations against the type matrix, synthesize `resolves`, recompute `covers_entries`)
-3. Run `validate_section_ir()` — the authoritative runtime contract
-4. Save JSON + rendered HTML
+After all sections return, `assemble_extraction` (Python, no LLM):
 
-## Prompt ↔ Schema Pairing
+1. Flattens the typed unit arrays into `section.units[]`, and merges the stage-B edges with each
+   section's `relations[]` into a single top-level `relations[]`.
+2. Runs deterministic, lossy-but-safe repairs (logged to `extraction_notes.uncertain_assignments`):
+   stamp census roles onto materialized units; sanitize control chars; dedup ExperimentSetups and
+   duplicate ids; drop empty sections; normalize provenance markers; repair score refs and anchors;
+   normalize degenerate optional enums; dedup / drop-dangling / drop-invalid relations against the
+   type matrix; **synthesize the `resolves` edge**; derive `Document.role` (FG-3), `thesis`, and
+   `headline_result`; recompute `covers_entries`.
+3. Runs `validate_section_ir()` — the authoritative runtime contract.
+4. Saves the JSON and the rendered HTML.
 
-Each LLM call has a paired prompt + JSON schema enforced via `response_format`:
+Coverage is measured against the census `must` nodes; an unmaterialized must-node surfaces in
+`extraction_notes.uncovered_items`.
+
+## The section-IR data model
+
+### Unit types & the two-level taxonomy
+
+Every unit carries two classificatory axes: a small, discipline-neutral **`type`** (anchored on the
+scientific method — *Identify a Problem → Design an Experiment → Collect Results → Construct a
+Conclusion*) and a fine-grained **`role`** (the AI/ML-specific differentia). Swapping disciplines
+means swapping the per-type role vocabularies, never the `type` set.
+
+Six allowed unit types:
+
+`Document` · `Problem` · `Method` · `ExperimentSetup` · `Measure` · `Finding`
+
+Per-type `role` vocabulary (`Problem` and `Measure` carry no `role`):
+
+| type | `role` ∈ |
+|---|---|
+| `Document` | `research_article`, `review`, `meta_analysis`, `methodology`, `benchmark_survey` (derived from the contribution) |
+| `Method` | `contribution`, `component`, `builds_on`, `compared_against` |
+| `ExperimentSetup` | **substrate** `dataset`, `benchmark`, `task` · **configuration** `data_split`, `inference_protocol`, `training_config`, `ensembling`, `population` |
+| `Finding` | `descriptive`, `mechanistic`, `comparative`, `modeling`, `ablation_finding`, `failure_mode`, `theorem`, `lemma`, `bound` |
+
+`Method`, the substrate `ExperimentSetup` roles, and `Measure` are **census nodes** (role-tagged in
+stage A). `Problem`, `Finding`, and the configuration `ExperimentSetup` roles are **born** during
+content fill — except the one `contribution_finding` root, which is a census node the evidence
+section materializes. `Method` also carries an optional structural `method_kind ∈ {algorithm,
+model_architecture, training_strategy, objective_function, resource, taxonomy, theorem, lemma, bound,
+definition}`, orthogonal to the argumentative `role`.
+
+### Contribution roots
+
+At least one census node is a **root** — the paper's primary deliverable. There are three shapes:
+
+| census role | unit type | id prefix | shape |
+|---|---|---|---|
+| `contribution` | `Method` | `mth:` | a proposed method / algorithm / model |
+| `contribution_resource` | `ExperimentSetup` | `exp:` | a benchmark / dataset deliverable (FG-1) |
+| `contribution_finding` | `Finding` | `fnd:` | a result / finding (an analysis paper with no proposed artifact; FG-5) |
+
+Normally exactly one root; a paper with **co-equal primary contributions** (FG-7) tags each as a
+root, and they are linked by `co_contribution`.
+
+### Relations (global)
+
+`relations[]` is a single top-level edge list; every edge resolves to a unit defined anywhere.
+
+| relation | source → target | authored by |
+|---|---|---|
+| `part_of` | {Method, ExperimentSetup} → {Method, ExperimentSetup} | relation pass (B) |
+| `builds_on` | {Method, ExperimentSetup} → same | relation pass (B) |
+| `uses` | {Method, ExperimentSetup} → same | relation pass (B) |
+| `assumes` | Method → ExperimentSetup | relation pass (B) |
+| `co_contribution` | {Method, ExperimentSetup} → same | relation pass (B) |
+| `compares_to` | {Method, ExperimentSetup, Measure} → same | relation pass (B) |
+| `evaluates` | Measure → Method | relation pass (B) |
+| `about` | Finding → {Method, ExperimentSetup, Measure} | content (evidence) |
+| `supports` | {Measure, Finding, Method} → Finding | content (evidence) |
+| `motivates` | Problem → {Method, ExperimentSetup} | content (problem) |
+| `resolves` | Finding → Problem | assembly (synthesized) |
+
+The matrix lives in `RELATION_MATRIX` in `section_pipeline.py`. `motivates` opens the discovery arc
+(Problem → contribution) and `resolves` closes it (headline Finding → Problem); the latter joins two
+units born in different parallel sections, so assembly synthesizes it from the contribution-node
+join rather than any section authoring it.
+
+## Prompt ↔ schema pairing
+
+Each LLM call has a paired prompt + JSON schema:
 
 | Call | Prompt | Schema |
 |------|--------|--------|
@@ -136,98 +363,77 @@ Each LLM call has a paired prompt + JSON schema enforced via `response_format`:
 | Problem section | `section-extraction-pass.md` + `section-modules/problem.md` | `section-problem.schema.json` |
 | Method section | `section-extraction-pass.md` + `section-modules/method.md` | `section-method.schema.json` |
 | Evidence section | `section-extraction-pass.md` + `section-modules/evidence.md` | `section-evidence.schema.json` |
+| Metadata (sidecar) | `metadata-extraction.md` | `metadata-output.schema.json` |
+| References (sidecar) | `references-extraction.md` | `references-output.schema.json` |
 
-## Section Modules
+In json_object mode the schema is rendered into the prompt as the OUTPUT FORMAT CONTRACT instead of
+sent as `response_format` — see [Model compatibility](#model-compatibility).
 
-Each module is a self-contained contract for its section — allowed unit types and fields,
-the vocabularies and relations it uses, a worked example, and its own rules — injected
-into the shared core as `section_focus`:
+## Directory structure
 
-- **problem** — born Problem unit (the single research-problem trunk); authors the `motivates` edge to the contribution.
-- **method** — materializes Method nodes (description, optional method_kind, formulas, objective_function, inputs/outputs, implementation_notes).
-- **evidence** — merged experiment+analysis: materializes Measure and substrate ExperimentSetup nodes (scores, unit, comparison_direction), creates born configuration ExperimentSetup and Finding units (including the headline contribution finding), sets `Measure.setup_ids`, and authors `about` / `supports` edges. The deployable-vs-diagnostic call is made once, with the whole results table in view.
-
-## Running
-
-### Unit tests
-
-```bash
-.venv/bin/python -m unittest tests.test_section_pipeline
 ```
-
-### LLM smoke test
-
-```bash
-.venv/bin/python tests/test_section_extraction.py --papers 4 5
+.
+├── section_pipeline.py                  # Core pipeline + assembly + validation; run_pipeline() is the entrypoint
+├── production/                          # Async batch runner (python -m production)
+│   ├── cli.py  config.py  runner.py     #   argument parsing, config, batch orchestration
+│   ├── worker.py                        #   per-paper pipeline with staged intermediate saves
+│   ├── llm.py  outputs.py  progress.py  #   async transport, atomic writes, progress
+├── prompts/
+│   ├── metadata-extraction.md           # Metadata sidecar prompt
+│   ├── references-extraction.md         # References sidecar prompt
+│   └── section-extraction/
+│       ├── node-census.md               # Stage A prompt
+│       ├── relation-pass.md             # Stage B prompt
+│       ├── section-extraction-pass.md   # Stage C shared core (rules common to all sections)
+│       └── section-modules/             # Self-contained per-section contracts (section_focus)
+│           ├── problem.md  method.md  evidence.md
+├── schemas/                             # Generated JSON schemas (do not hand-edit)
+│   ├── node-census-output.schema.json   relation-pass-output.schema.json
+│   ├── section-{problem,method,evidence}.schema.json
+│   └── metadata-output.schema.json      references-output.schema.json
+├── tools/
+│   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
+│   ├── render_extraction.py             # Render extraction JSON → HTML
+│   └── count_extraction.py              # Node/relation counts
+├── tests/                               # Local test harness + corpus (not version-controlled)
+│   ├── test_section_pipeline.py         #   unit tests
+│   ├── test_section_extraction.py       #   end-to-end LLM smoke test (reads tests/papers/{id}.md)
+│   └── benchmark/                       #   real papers (NNN_*.md, with [§N] markers) for the batch path
+├── CLAUDE.md                            # Claude Code instructions (authoritative project notes)
+└── AGENTS.md                            # Agent instructions (mirrors CLAUDE.md)
 ```
-
-Default LLM smoke-test settings:
-- Python: use the project-local `.venv/bin/python`.
-- API key: loaded from `.env` as `API_KEY` or `API-KEY`.
-- Model: `gemini-3-flash-preview` unless `MODEL` is set.
-- Primary base URL: `http://35.220.164.252:3888/v1`.
-- Fallback base URL: if the primary endpoint is unreachable, retry with `--base-url http://34.13.73.248:3888/v1`.
-
-Options:
-- `--model MODEL` — LLM model name
-- `--base-url URL` — API endpoint
-- `--allow-validation-issues` — don't fail on validation errors
-
-### Render output
-
-```bash
-python tools/render_extraction.py tests/section-extraction-outputs/paper4_extraction.json
-```
-
-### Regenerate schemas
-
-```bash
-python tools/generate_section_schemas.py
-```
-
-Schemas are generated from constants in `section_pipeline.py` — never hand-edit the JSON.
-
-### Environment variables
-
-- `BASE_URL` — API endpoint override; default is `http://35.220.164.252:3888/v1`
-- `API_KEY` or `API-KEY` — API authentication, usually loaded from `.env`
-- `MODEL` — model name override; default is `gemini-3-flash-preview`
-
-## IR Version
-
-Current: `section-ir-0.9` (`extraction_notes.input_mode` is `node_census_pipeline`)
-
-### Allowed Unit Types
-
-`Document`, `Problem`, `Method`, `ExperimentSetup`, `Measure`, `Finding`
-
-Every unit carries a generic `type` (above) plus a fine-grained `role` (the AI/ML differentia; `Problem` and `Measure` carry none). `Method`, the substrate `ExperimentSetup` roles (`dataset`/`benchmark`/`task`), and `Measure` are census nodes; `Problem`, `Finding`, and the configuration `ExperimentSetup` roles (`data_split`/`inference_protocol`/`training_config`/`ensembling`/`population`) are born during content fill. 0.9 renamed `Metric → Measure`, `Claim → Finding`, and merged `Entity ⊎ Setting → ExperimentSetup`.
-
-### Allowed Relations (global)
-
-`relations[]` is a single top-level edge list; every edge resolves to a unit defined anywhere.
-
-| relation | source → target | authored by |
-|---|---|---|
-| `part_of` | {Method, ExperimentSetup} → {Method, ExperimentSetup} | relation pass |
-| `compares_to` | {Method, ExperimentSetup, Measure} → same | relation pass |
-| `evaluates` | Measure → Method | relation pass |
-| `about` | Finding → {Method, ExperimentSetup, Measure} | content (evidence) |
-| `supports` | {Measure, Finding} → Finding | content (evidence) |
-| `motivates` | Problem → {Method, ExperimentSetup} | content (problem) |
-| `resolves` | Finding → Problem | assembly (synthesized) |
-
-(`measured_on` was removed in 0.9 — a Measure binds to its dataset/split via each score row's `setup_id` → ExperimentSetup, not a global edge.)
 
 ## Validation
 
-The Python `validate_section_ir()` function in `section_pipeline.py` is the authoritative runtime contract. It checks:
-- Unit type-specific required fields and per-type `role` vocabulary
-- The global relation matrix (source/target type pairing); endpoints must resolve to a unit defined anywhere
-- ID uniqueness and referential integrity
-- Provenance requirements (Finding and Measure must have non-empty provenance)
-- Measure constraints (`name`, `unit`, non-empty `scores`; `setup_ids` must point to section-local `ExperimentSetup` units; per-row `scores[].system_id` resolves to a Method and `scores[].setup_id` to a section-local ExperimentSetup; no `subject_id` / `evaluated_on` fields)
+`validate_section_ir()` in `section_pipeline.py` is the authoritative runtime contract. It checks:
 
-## Archived Material
+- Unit type-specific required fields and the per-type `role` vocabulary.
+- The global relation matrix (source/target type pairing); endpoints must resolve to a unit defined
+  anywhere.
+- ID uniqueness and referential integrity.
+- Provenance — every `Finding` and `Measure` must have non-empty provenance.
+- `Measure` constraints — `name`, `unit`, non-empty `scores`, and `setup_ids`. Each score row is
+  `{variant, value, variance, system_id, setup_id}`; a non-empty `system_id` must resolve to a
+  `Method` and a non-empty `setup_id` to a section-local `ExperimentSetup`. `setup_ids` (when
+  present) must point to section-local `ExperimentSetup` units.
 
-Historical paradigm-based code, design discussions, and legacy utilities are in `archive/`.
+## Versioning
+
+Current IR version: **`section-ir-0.10`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.10 is an **additive generalization** of 0.9 — 0.9-shaped output stays structurally valid except
+the `ir_version` string. It stops the empirical-CV monoculture from coercing other genres (FG-1…
+FG-12): a non-Method contribution (`contribution_resource`), a theory home (`method_kind +=
+theorem/lemma/bound/definition`, `Finding.role += theorem/lemma/bound`, symbolic score values,
+`assumes`), a derived `Document.role`, the `builds_on`/`uses`/`co_contribution` edges, non-leaderboard
+evaluation (pairwise/judge score fields, multi-objective measures), a Finding-as-root analysis paper,
+an optional Finding quantitative payload, and reference-role edge backfill. See `CLAUDE.md` for the
+full FG-by-FG delta.
+
+## Design notes & archived material
+
+The authoritative design notes — the section-IR field reference, the two-level type/role taxonomy,
+the relation matrix, and the full FG-by-FG `section-ir-0.10` delta — live in `CLAUDE.md`.
+
+Historical paradigm-based code and legacy utilities are in `archive/`. Do not treat archived
+material as active implementation guidance.
