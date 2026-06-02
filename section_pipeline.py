@@ -1850,7 +1850,11 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
     """Blank dangling or wrong-type per-row score references once the full unit set is known —
     lossy-but-safe, logged to uncertain_assignments. system_id/opponent_id resolve globally to a
     Method; setup_id resolves to a section-local ExperimentSetup; judge_id (FG-6) resolves globally
-    to a Method or ExperimentSetup (an LLM/human judge)."""
+    to a Method or ExperimentSetup (an LLM/human judge). The Measure-level `setup_ids[]` list is
+    pruned the same way (dangling/non-local/wrong-type entries dropped), so one stray setup
+    declaration — e.g. a setup the model named in `setup_ids` but never materialized — does not
+    hard-fail an otherwise-sound measure; list entries are dropped, not blanked (an empty string
+    would re-fail the section-local check)."""
     warnings: list[str] = []
     unit_index = {
         unit["id"]: unit
@@ -1898,6 +1902,24 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
                         "did not resolve to a Method or ExperimentSetup; blanked"
                     )
                     score["judge_id"] = ""
+            # The Measure-level setup_ids[] list scopes the measure to local ExperimentSetups.
+            # Drop (not blank — an empty string would re-fail the section-local check) any entry
+            # that resolves to no unit, is not section-local, or is not an ExperimentSetup.
+            setup_ids = unit.get("setup_ids")
+            if isinstance(setup_ids, list):
+                kept = [
+                    s
+                    for s in setup_ids
+                    if s in local_ids and unit_index.get(s, {}).get("type") == "ExperimentSetup"
+                ]
+                if len(kept) != len(setup_ids):
+                    dropped = [s for s in setup_ids if s not in kept]
+                    warnings.append(
+                        f"Measure {unit.get('id')} setup_ids dropped "
+                        f"{len(dropped)} dangling/non-local entr"
+                        f"{'y' if len(dropped) == 1 else 'ies'}: {dropped}"
+                    )
+                    unit["setup_ids"] = kept
     return warnings
 
 
