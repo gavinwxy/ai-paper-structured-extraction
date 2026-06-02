@@ -71,7 +71,10 @@ SECTION_PREFERRED_ANCHOR_TYPE: dict[str, str] = {
 SECTION_MATERIALIZED_NODE_TYPES: dict[str, set[str]] = {
     "problem": set(),
     "method": {"Method"},
-    "evidence": {"Measure", "ExperimentSetup"},
+    # evidence also materializes the FG-5 `contribution_finding` census root (a Finding): it is
+    # the one Finding the census plans, reused by id as the headline finding instead of a freshly
+    # born one. All other Findings are still born here.
+    "evidence": {"Measure", "ExperimentSetup", "Finding"},
 }
 # Content sections that author edges in their own `relations[]`: evidence authors the
 # claim-centric `about`/`supports`; problem authors `motivates` (Problem -> the census
@@ -89,11 +92,15 @@ TYPED_ARRAY_KEYS: dict[str, str] = {
 }
 # Census node concepts. The census emits a flat list of referenceable nodes; each
 # node_id is reused verbatim as the final unit id once a content section materializes it.
-NODE_TYPES = {"Method", "ExperimentSetup", "Measure"}
+NODE_TYPES = {"Method", "ExperimentSetup", "Measure", "Finding"}
 NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Method": "mth:",
     "ExperimentSetup": "exp:",
     "Measure": "mea:",
+    # `fnd:` is a census id prefix only for the FG-5 `contribution_finding` root (the one Finding
+    # the census plans); all other Findings are born in the evidence section with `fnd:` ids too,
+    # but are not census nodes.
+    "Finding": "fnd:",
 }
 SALIENCE_LEVELS = {"must", "should"}
 # Census node role — the single granular tag the census emits per node. It is the
@@ -106,6 +113,11 @@ SALIENCE_LEVELS = {"must", "should"}
 NODE_ROLES = {
     "contribution",          # the_method: the paper's single primary method/system (the root)
     "contribution_resource", # the_method: the root when the deliverable is a dataset/benchmark (FG-1)
+    "contribution_finding",  # the_method: the root when the deliverable IS a result/finding (an
+                             # analysis/mechanistic paper with no novel method or resource; FG-5,
+                             # 0.10 Pass 2). Materialized as a Finding (fnd: id) by the evidence
+                             # section, which resolves the Problem directly — no hollow "Analysis"
+                             # Method is invented as a stand-in root.
     "component",          # the_method: a sub-method/module that is part of the contribution
     "builds_on",          # prior_art: an existing method/model the contribution extends
     "compared_against",   # prior_art: a baseline method the contribution is compared against
@@ -121,6 +133,7 @@ NODE_ROLES = {
 ROLE_TO_TYPE: dict[str, str] = {
     "contribution": "Method",
     "contribution_resource": "ExperimentSetup",
+    "contribution_finding": "Finding",
     "component": "Method",
     "builds_on": "Method",
     "compared_against": "Method",
@@ -135,6 +148,7 @@ ROLE_TO_TYPE: dict[str, str] = {
 ROLE_CLUSTER: dict[str, str] = {
     "contribution": "the_method",
     "contribution_resource": "the_method",
+    "contribution_finding": "the_method",
     "component": "the_method",
     "builds_on": "prior_art",
     "compared_against": "prior_art",
@@ -151,7 +165,12 @@ ROLE_CLUSTER: dict[str, str] = {
 # hosts its own score rows (it is a valid setup_id target), so a benchmark contribution no longer
 # needs a duplicate Method twin to carry its numbers.
 CONTRIBUTION_ROLE = "contribution"
-CONTRIBUTION_ROLES = {"contribution", "contribution_resource"}
+# The document-root roles. `contribution` (a Method) and `contribution_resource` (an
+# ExperimentSetup deliverable, FG-1) are the artifact roots; `contribution_finding` (a Finding,
+# FG-5/0.10 Pass 2) is the root when the paper's deliverable is a *result*, not an artifact — an
+# analysis/mechanistic paper. A paper has ≥1 root (usually one; co-equal roots are linked by
+# co_contribution, FG-7).
+CONTRIBUTION_ROLES = {"contribution", "contribution_resource", "contribution_finding"}
 # The census-discovered ExperimentSetup substrate roles. dataset/benchmark/task are the external,
 # citeable testbed nodes; contribution_resource (FG-1) is the paper's own benchmark/dataset
 # deliverable as the document root (carries no cite_keys). The remaining ExperimentSetup roles
@@ -1141,9 +1160,15 @@ def _assign_roles_from_census(sections: list[dict[str, Any]], census: dict[str, 
             node = node_by_id.get(unit.get("id"))
             if node is None:
                 continue
-            if unit.get("type") in ROLE_VOCAB_BY_TYPE:
+            unit_type = unit.get("type")
+            if unit_type in ROLE_VOCAB_BY_TYPE:
                 census_role = node.get("role")
-                if census_role:
+                # Only stamp a census role that is valid for the unit's type. For a census-
+                # materialized Method/substrate-ExperimentSetup the census role IS the unit role.
+                # But the FG-5 `contribution_finding` root materializes as a Finding, and
+                # `contribution_finding` is not a Finding.role — the evidence section authors that
+                # finding's content role (mechanistic/comparative/...), so leave it untouched.
+                if census_role in ROLE_VOCAB_BY_TYPE[unit_type]:
                     unit["role"] = census_role
             # Only prior-art/testbed nodes legitimately carry cite_keys, and only Method/
             # ExperimentSetup whitelist the field. A Measure census node is spec'd to carry [],
@@ -1971,6 +1996,25 @@ def _assign_resolves(
 
     new_relations: list[dict[str, Any]] = []
     seen: set[str] = set()
+
+    # FG-5 (Finding-as-root, 0.10 Pass 2): when a contribution is itself a Finding — an analysis/
+    # mechanistic paper whose deliverable is the headline result, not a method — it resolves the
+    # Problem *directly*. Nothing is `about` it (the about-join below never fires for a Finding
+    # root), so emit root-Finding --resolves--> Problem here. This is what closes the arc on the
+    # papers that previously rooted on a hollow "Analysis" Method.
+    for nid in contribution_ids:
+        if unit_type.get(nid) == "Finding" and nid not in seen:
+            seen.add(nid)
+            prov = unit_prov.get(nid) or unit_prov.get(problem_id) or []
+            new_relations.append(
+                {
+                    "source_id": nid,
+                    "relation": "resolves",
+                    "target_id": problem_id,
+                    "provenance": list(prov),
+                }
+            )
+
     for rel in relations:
         if (
             not isinstance(rel, dict)

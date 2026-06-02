@@ -50,13 +50,14 @@
           "node_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, exp: for dataset/benchmark/task, mea: for metric"
+            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, exp: for contribution_resource/dataset/benchmark/task/theoretical_setting/structural_class, mea: for metric, fnd: for contribution_finding"
           },
           "role": {
             "type": "string",
             "enum": [
               "contribution",
               "contribution_resource",
+              "contribution_finding",
               "component",
               "builds_on",
               "compared_against",
@@ -67,7 +68,7 @@
               "structural_class",
               "metric"
             ],
-            "description": "Argumentative role, in search-cluster order. the_method: contribution (the single primary method) and component. prior_art: builds_on and compared_against. testbed: dataset, benchmark, task. yardsticks: metric."
+            "description": "Argumentative role, in search-cluster order. the_method: the root \u2014 contribution (a method/system), contribution_resource (a dataset/benchmark deliverable), or contribution_finding (a result/finding deliverable for an analysis paper with no novel method/resource) \u2014 plus component. prior_art: builds_on and compared_against. testbed: dataset, benchmark, task, theoretical_setting, structural_class. yardsticks: metric."
           },
           "name": {
             "type": "string",

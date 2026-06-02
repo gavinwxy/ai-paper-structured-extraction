@@ -74,7 +74,7 @@ ARRAY_TYPE_NAMES: dict[str, str] = {
 # yardsticks). The substrate roles (dataset/benchmark/task) are the only ExperimentSetup roles
 # the census emits; the configuration roles are born during content fill.
 NODE_ROLE_ORDER = [
-    "contribution", "contribution_resource", "component",
+    "contribution", "contribution_resource", "contribution_finding", "component",
     "builds_on", "compared_against",
     "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
     "metric",
@@ -537,13 +537,17 @@ def node_census_schema() -> dict[str, Any]:
                         "node_id": id_schema(
                             "Node id; the prefix follows from the role's type — mth: for "
                             "contribution/component/builds_on/compared_against, exp: for "
-                            "dataset/benchmark/task, mea: for metric"
+                            "contribution_resource/dataset/benchmark/task/theoretical_setting/"
+                            "structural_class, mea: for metric, fnd: for contribution_finding"
                         ),
                         "role": enum_schema(
                             "node_role",
-                            "Argumentative role, in search-cluster order. the_method: "
-                            "contribution (the single primary method) and component. prior_art: "
-                            "builds_on and compared_against. testbed: dataset, benchmark, task. "
+                            "Argumentative role, in search-cluster order. the_method: the root — "
+                            "contribution (a method/system), contribution_resource (a dataset/"
+                            "benchmark deliverable), or contribution_finding (a result/finding "
+                            "deliverable for an analysis paper with no novel method/resource) — "
+                            "plus component. prior_art: builds_on and compared_against. testbed: "
+                            "dataset, benchmark, task, theoretical_setting, structural_class. "
                             "yardsticks: metric.",
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
