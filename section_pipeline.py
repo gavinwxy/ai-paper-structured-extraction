@@ -37,18 +37,24 @@ DEFAULT_SECTION_MAX_TOKENS = 131_072
 MAX_SECTION_RETRIES = 2
 SECTION_MARKER_RE = re.compile(r"(?m)^\[§(\d+)\]\s*")
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*:[a-z0-9_]+$")
-# A provenance marker is a top-level §N (numeric body/block section) or §X (a lettered appendix
-# or a Roman-numeral section, e.g. §A, §C, §IV) — both legitimate, traceable paper locations — or
-# a float reference (Table/Figure/Algorithm/Equation/Listing N). Floats point at a real, citeable
-# element of the paper (often the *most* precise source for a Measure's numbers), the renderer
-# shows them verbatim, and nothing downstream resolves a marker back to the input — so rejecting
-# them only hard-failed otherwise-sound extractions over the model's natural way of citing a table.
-# Fine-grained section subdivisions (§4.3, §IV-D) and block ranges (§107-108, §118-§120) are
-# collapsed to their §N/§X parent by _normalize_provenance_markers *before* this check, so they
-# never reach it. A § glued to a float word (§Table 3) and free prose still fail.
+# A provenance marker is a top-level §N (numeric body/block section) or §X (a lettered appendix,
+# Roman-numeral section, or short section word — §A, §C, §IV, §supp) — both legitimate, traceable
+# paper locations — or a float reference (Table/Figure/Algorithm/Equation/Listing N, plus the
+# theorem-environment refs Theorem/Lemma/Corollary/Proposition/Definition that theory papers cite,
+# FG-2). A float may carry a panel suffix (Figure 2 (a), Figure 1 (R)). Floats point at a real,
+# citeable element of the paper (often the *most* precise source for a Measure's numbers), the
+# renderer shows them verbatim, and nothing downstream resolves a marker back to the input — so
+# rejecting them only hard-failed otherwise-sound extractions over the model's natural way of
+# citing a table or a lemma. Fine-grained section subdivisions (§4.3, §IV-D, §A4.2), block ranges
+# (§107-108, §118-§120), spelled appendices (Appendix A.2), and a § glued to a float word (§Table 3
+# -> Table 3) are all normalized to a valid form by _normalize_provenance_markers *before* this
+# check, so they never reach it. Free prose still fails.
 PROVENANCE_SOURCE_RE = re.compile(
-    r"^(?:§(?:\d+|[A-Z]+)"
-    r"|(?:Table|Figure|Fig|Algorithm|Alg|Equation|Eq|Listing)\.?\s+[A-Za-z0-9][\w.()\-]*)$"
+    r"^(?:§(?:\d+|[A-Za-z]+)"
+    r"|(?:Table|Figure|Fig|Algorithm|Alg|Equation|Eq|Listing"
+    r"|Theorem|Lemma|Corollary|Proposition|Definition|Assumption|Claim|Remark|Observation|Proof)"
+    r"\.?\s+[A-Za-z0-9][\w.()\-]*(?:\s*\([^)]*\))?)$",
+    re.IGNORECASE,
 )
 # A finer-grained locator that has a real, coarser parent among the input's top-level §N/§X
 # anchors: a dotted subsection (§4.3, §C.1, §G.2), an IEEE-style hyphenated subsection (§IV-D,
@@ -58,6 +64,9 @@ SUBSECTION_MARKER_RE = re.compile(r"^§(\d+|[A-Z]+)[.\-]")
 # A spelled-out appendix reference (Appendix A, Appendix A.2, App. C, App. D.1) maps to the §X
 # lettered-appendix anchor; the trailing subsection number is dropped, exactly as for §C.1 -> §C.
 APPENDIX_SPELLED_RE = re.compile(r"^App(?:endix)?\.?\s+([A-Za-z])(?![A-Za-z])")
+# A lettered appendix with a glued (separatorless) subsection number — §A4.2, §B3, §G2 — collapses
+# to its §X parent, exactly as the dotted/hyphenated forms do (the digit starts the subsection).
+APPENDIX_NUMBERED_RE = re.compile(r"^§([A-Za-z]+)\d")
 
 SECTION_TYPES = {"problem", "method", "evidence"}
 SECTION_ORDER = ["problem", "method", "evidence"]
@@ -944,10 +953,12 @@ def _normalize_provenance_markers(
     marker cannot be traced and fails validation, even though a real coarser anchor contains it.
     Rather than discard the marker we collapse it to that parent. This covers dotted subsections
     (§4.3 -> §4, §C.1 -> §C), IEEE-style hyphenated subsections (§IV-D -> §IV, §III-F1 -> §III),
-    block ranges (§107-108 / §118-§120 -> the leading block §107 / §118), and spelled-out
-    appendices (Appendix A.2 / App. D.1 -> §A / §D). Genuine float references (Table 5, Figure 8,
-    Algorithm 1) have no section parent and are left untouched — the validator now accepts them
-    directly, since they name a real, citeable element of the paper.
+    glued appendix subsections (§A4.2 -> §A, §G2 -> §G), block ranges (§107-108 / §118-§120 -> the
+    leading block §107 / §118), and spelled-out appendices (Appendix A.2 / App. D.1 -> §A / §D). A
+    stray § glued to a float word (§Table 3 -> Table 3, §Figure 2 (a) -> Figure 2 (a)) has the §
+    dropped, since § belongs only on a section/appendix marker. Genuine float references (Table 5,
+    Figure 8, Algorithm 1, Lemma 2) have no section parent and are left untouched — the validator
+    now accepts them directly, since they name a real, citeable element of the paper.
 
     Applied to both unit provenance and (when given) global relation provenance, so a relation's
     markers are repaired the same way units' are before relation-provenance validation runs.
@@ -960,12 +971,20 @@ def _normalize_provenance_markers(
         for marker in provenance:
             if isinstance(marker, str):
                 stripped = marker.strip()
+                new_marker: str | None = None
                 appendix = APPENDIX_SPELLED_RE.match(stripped)
-                if appendix:
-                    new_marker: str | None = f"§{appendix.group(1).upper()}"
-                else:
-                    subsection = SUBSECTION_MARKER_RE.match(stripped)
-                    new_marker = f"§{subsection.group(1)}" if subsection else None
+                numbered = APPENDIX_NUMBERED_RE.match(stripped)
+                subsection = SUBSECTION_MARKER_RE.match(stripped)
+                if stripped.startswith("§") and PROVENANCE_SOURCE_RE.match(stripped[1:].strip()):
+                    # A stray § glued to a float word (§Table 3, §Figure 2 (a)): drop the § so
+                    # the bare float — itself a valid marker — is what remains.
+                    new_marker = stripped[1:].strip()
+                elif appendix:
+                    new_marker = f"§{appendix.group(1).upper()}"
+                elif numbered:
+                    new_marker = f"§{numbered.group(1)}"
+                elif subsection:
+                    new_marker = f"§{subsection.group(1)}"
                 if new_marker is not None and new_marker != marker:
                     if marker not in seen:
                         seen.add(marker)
@@ -1923,6 +1942,70 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
+def _repair_unit_enums(sections: list[dict[str, Any]]) -> list[str]:
+    """Normalize degenerate / out-of-vocab values on the optional 0.10 enum fields — lossy-but-safe,
+    logged to uncertain_assignments.
+
+    These are benign quirks of fields the model fills freely (a blank ``polarity: ""``, a
+    ``method_kind`` reaching one step past the controlled set like ``assumption``, a ``Finding.role``
+    that holds a *polarity* word like ``mixed`` — confusion induced by FG-11 sitting next to
+    ``role``). None carry structural meaning, so rather than hard-fail an otherwise-sound extraction:
+
+    - an OPTIONAL enum whose value is out of vocab is dropped (the field is simply absent when
+      unsupported): ``Finding.polarity``, ``Method.method_kind``, ``Measure.objective_class``, and the
+      per-score-row ``value_kind``;
+    - ``Finding.role`` is REQUIRED (it has a vocab), so it is coerced, never dropped: when the bad
+      value is actually a polarity word and the polarity slot is free it is *moved* there and ``role``
+      floored to ``descriptive``; otherwise ``role`` is floored to ``descriptive`` outright.
+    """
+    warnings: list[str] = []
+
+    def _drop_invalid_optional(
+        container: dict[str, Any], field: str, vocab: set[str], label: str, uid: str
+    ) -> None:
+        val = container.get(field)
+        if val is not None and val not in vocab:
+            del container[field]
+            warnings.append(f"{label} {uid} dropped invalid {field}: {val!r}")
+
+    for section in sections:
+        units = section.get("units", [])
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if not isinstance(unit, dict):
+                continue
+            utype = unit.get("type")
+            uid = unit.get("id")
+            if utype == "Finding":
+                role = unit.get("role")
+                if role is not None and role not in FINDING_ROLES:
+                    if role in FINDING_POLARITIES and not unit.get("polarity"):
+                        unit["polarity"] = role
+                        unit["role"] = "descriptive"
+                        warnings.append(
+                            f"Finding {uid} role {role!r} moved to polarity; role -> descriptive"
+                        )
+                    else:
+                        unit["role"] = "descriptive"
+                        warnings.append(f"Finding {uid} coerced invalid role {role!r} -> descriptive")
+                _drop_invalid_optional(unit, "polarity", FINDING_POLARITIES, "Finding", uid)
+            elif utype == "Method":
+                _drop_invalid_optional(unit, "method_kind", METHOD_KINDS, "Method", uid)
+            elif utype == "Measure":
+                _drop_invalid_optional(
+                    unit, "objective_class", MEASURE_OBJECTIVE_CLASSES, "Measure", uid
+                )
+                scores = unit.get("scores")
+                if isinstance(scores, list):
+                    for row in scores:
+                        if isinstance(row, dict):
+                            _drop_invalid_optional(
+                                row, "value_kind", SCORE_VALUE_KINDS, "Measure score", uid
+                            )
+    return warnings
+
+
 def _drop_baseline_evaluates(
     relations: list[dict[str, Any]], census: dict[str, Any] | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -2138,6 +2221,7 @@ def assemble_extraction(
     assembly_warnings.extend(_normalize_provenance_markers(sections, relations))
     assembly_warnings.extend(_repair_section_anchors(sections))
     assembly_warnings.extend(_repair_score_refs(sections))
+    assembly_warnings.extend(_repair_unit_enums(sections))
     assembly_warnings.extend(_clean_method_equations(sections))
     assembly_warnings.extend(_strip_baseline_method_fields(sections, census))
 
