@@ -37,14 +37,27 @@ DEFAULT_SECTION_MAX_TOKENS = 131_072
 MAX_SECTION_RETRIES = 2
 SECTION_MARKER_RE = re.compile(r"(?m)^\[§(\d+)\]\s*")
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*:[a-z0-9_]+$")
-# A provenance marker is a top-level §N (numeric body section) or §X (a lettered appendix,
-# e.g. §A, §C). Both are legitimate paper locations; lettered appendices are common and were
-# previously rejected. Figure/table refs (`§Table 3`, `§Fig. 2`) still fail — they mix
-# lowercase/spaces and match neither alternative.
-PROVENANCE_SOURCE_RE = re.compile(r"^§(?:\d+|[A-Z]+)$")
-# A finer-grained subsection of a numeric body section (§4.3) or a lettered appendix (§C.1,
-# §G.2). The input only anchors top-level sections, so these collapse to their §N / §X parent.
-SUBSECTION_MARKER_RE = re.compile(r"^§(\d+|[A-Z]+)(?:\.\d+)+$")
+# A provenance marker is a top-level §N (numeric body/block section) or §X (a lettered appendix
+# or a Roman-numeral section, e.g. §A, §C, §IV) — both legitimate, traceable paper locations — or
+# a float reference (Table/Figure/Algorithm/Equation/Listing N). Floats point at a real, citeable
+# element of the paper (often the *most* precise source for a Measure's numbers), the renderer
+# shows them verbatim, and nothing downstream resolves a marker back to the input — so rejecting
+# them only hard-failed otherwise-sound extractions over the model's natural way of citing a table.
+# Fine-grained section subdivisions (§4.3, §IV-D) and block ranges (§107-108, §118-§120) are
+# collapsed to their §N/§X parent by _normalize_provenance_markers *before* this check, so they
+# never reach it. A § glued to a float word (§Table 3) and free prose still fail.
+PROVENANCE_SOURCE_RE = re.compile(
+    r"^(?:§(?:\d+|[A-Z]+)"
+    r"|(?:Table|Figure|Fig|Algorithm|Alg|Equation|Eq|Listing)\.?\s+[A-Za-z0-9][\w.()\-]*)$"
+)
+# A finer-grained locator that has a real, coarser parent among the input's top-level §N/§X
+# anchors: a dotted subsection (§4.3, §C.1, §G.2), an IEEE-style hyphenated subsection (§IV-D,
+# §III-F1), or a range of consecutive block markers (§107-108, §118-§120). The input only anchors
+# top-level sections/blocks, so all of these collapse to their leading §N / §X parent (group 1).
+SUBSECTION_MARKER_RE = re.compile(r"^§(\d+|[A-Z]+)[.\-]")
+# A spelled-out appendix reference (Appendix A, Appendix A.2, App. C, App. D.1) maps to the §X
+# lettered-appendix anchor; the trailing subsection number is dropped, exactly as for §C.1 -> §C.
+APPENDIX_SPELLED_RE = re.compile(r"^App(?:endix)?\.?\s+([A-Za-z])(?![A-Za-z])")
 
 SECTION_TYPES = {"problem", "method", "evidence"}
 SECTION_ORDER = ["problem", "method", "evidence"]
@@ -925,14 +938,16 @@ def _drop_empty_sections(sections: list[dict[str, Any]]) -> list[str]:
 def _normalize_provenance_markers(
     sections: list[dict[str, Any]], relations: list[dict[str, Any]] | None = None
 ) -> list[str]:
-    """Truncate fine-grained subsection markers (e.g. §4.3, §C.1) to their top-level parent.
+    """Collapse fine-grained / ranged markers to the top-level §N/§X parent that contains them.
 
-    Paper input carries only top-level section/appendix markers, so a `§4.3` or `§C.1`
-    provenance marker cannot be traced and fails validation. `§4` / `§C` is a real, coarser
-    anchor that contains it, so collapse the subnumber rather than discard the marker. This
-    covers both numeric body sections (§4.3 -> §4) and lettered appendices (§C.1 -> §C).
-    Table/figure references (`§Table 3`) have no clean parent and are left untouched so they
-    still surface as genuine provenance violations.
+    Paper input carries only top-level section/appendix/block markers, so a finer or ranged
+    marker cannot be traced and fails validation, even though a real coarser anchor contains it.
+    Rather than discard the marker we collapse it to that parent. This covers dotted subsections
+    (§4.3 -> §4, §C.1 -> §C), IEEE-style hyphenated subsections (§IV-D -> §IV, §III-F1 -> §III),
+    block ranges (§107-108 / §118-§120 -> the leading block §107 / §118), and spelled-out
+    appendices (Appendix A.2 / App. D.1 -> §A / §D). Genuine float references (Table 5, Figure 8,
+    Algorithm 1) have no section parent and are left untouched — the validator now accepts them
+    directly, since they name a real, citeable element of the paper.
 
     Applied to both unit provenance and (when given) global relation provenance, so a relation's
     markers are repaired the same way units' are before relation-provenance validation runs.
@@ -944,9 +959,14 @@ def _normalize_provenance_markers(
         rewritten: list[Any] = []
         for marker in provenance:
             if isinstance(marker, str):
-                match = SUBSECTION_MARKER_RE.match(marker.strip())
-                if match:
-                    new_marker = f"§{match.group(1)}"
+                stripped = marker.strip()
+                appendix = APPENDIX_SPELLED_RE.match(stripped)
+                if appendix:
+                    new_marker: str | None = f"§{appendix.group(1).upper()}"
+                else:
+                    subsection = SUBSECTION_MARKER_RE.match(stripped)
+                    new_marker = f"§{subsection.group(1)}" if subsection else None
+                if new_marker is not None and new_marker != marker:
                     if marker not in seen:
                         seen.add(marker)
                         warnings.append(f"Normalized provenance marker {marker} to {new_marker}")
