@@ -104,43 +104,58 @@ SALIENCE_LEVELS = {"must", "should"}
 # as its fine-grained differentia (section-ir-0.9: type = generic scope, role = sub-axis),
 # so the model commits to one axis instead of several half-overlapping fields.
 NODE_ROLES = {
-    "contribution",       # the_method: the paper's single primary method/system (the root)
+    "contribution",          # the_method: the paper's single primary method/system (the root)
+    "contribution_resource", # the_method: the root when the deliverable is a dataset/benchmark (FG-1)
     "component",          # the_method: a sub-method/module that is part of the contribution
     "builds_on",          # prior_art: an existing method/model the contribution extends
     "compared_against",   # prior_art: a baseline method the contribution is compared against
     "dataset",            # testbed: data the method is trained or evaluated on
     "benchmark",          # testbed: a standardized dataset+protocol for evaluation
     "task",               # testbed: the problem being solved/evaluated
+    "theoretical_setting", # testbed: the regime/assumptions a theorem holds under (FG-2, 0.10)
+    "structural_class",    # testbed: the structural family a result ranges over (graph class, etc.)
     "metric",             # yardsticks: a reported performance measure
 }
 # role -> coarse node type. Total and unambiguous: a node's type is a strict coarsening of
 # its role, so the census carries only `role` and the pipeline derives `type` from it.
 ROLE_TO_TYPE: dict[str, str] = {
     "contribution": "Method",
+    "contribution_resource": "ExperimentSetup",
     "component": "Method",
     "builds_on": "Method",
     "compared_against": "Method",
     "dataset": "ExperimentSetup",
     "benchmark": "ExperimentSetup",
     "task": "ExperimentSetup",
+    "theoretical_setting": "ExperimentSetup",
+    "structural_class": "ExperimentSetup",
     "metric": "Measure",
 }
 # role -> search cluster (carried into the registry as context for the relation pass).
 ROLE_CLUSTER: dict[str, str] = {
     "contribution": "the_method",
+    "contribution_resource": "the_method",
     "component": "the_method",
     "builds_on": "prior_art",
     "compared_against": "prior_art",
     "dataset": "testbed",
     "benchmark": "testbed",
     "task": "testbed",
+    "theoretical_setting": "testbed",
+    "structural_class": "testbed",
     "metric": "yardsticks",
 }
-# The single document-level root method is the node whose role is `contribution`.
+# The single document-level root is the node whose role is `contribution` (a Method) or
+# `contribution_resource` (an ExperimentSetup — when the paper's primary deliverable is a dataset/
+# benchmark; FG-1, section-ir-0.10). Exactly one root across both roles. An ExperimentSetup root
+# hosts its own score rows (it is a valid setup_id target), so a benchmark contribution no longer
+# needs a duplicate Method twin to carry its numbers.
 CONTRIBUTION_ROLE = "contribution"
-# The census-discovered ExperimentSetup substrate roles (dataset/benchmark/task). These are
-# the external, citeable testbed nodes; the remaining ExperimentSetup roles (data_split/...)
-# are paper-local configuration born during content fill, not emitted by the census.
+CONTRIBUTION_ROLES = {"contribution", "contribution_resource"}
+# The census-discovered ExperimentSetup substrate roles. dataset/benchmark/task are the external,
+# citeable testbed nodes; contribution_resource (FG-1) is the paper's own benchmark/dataset
+# deliverable as the document root (carries no cite_keys). The remaining ExperimentSetup roles
+# (data_split/...) are paper-local configuration born during content fill, not emitted by the census.
 SUBSTRATE_ROLES = {role for role, type_ in ROLE_TO_TYPE.items() if type_ == "ExperimentSetup"}
 UNIT_TYPES = {
     "Document",
@@ -195,6 +210,10 @@ EXPERIMENT_SETUP_ROLES = SUBSTRATE_ROLES | {
 
 # Finding role (was `claim_kind`), scoped to AI/ML literature: `causal`/`correlational` never
 # fire on this corpus and were dropped; `descriptive` is retained for future-work findings.
+# `theorem`/`lemma`/`bound` (0.10, FG-2) carry a *proven* theoretical result as a Finding, so the
+# epistemic "proven vs observed" distinction is structural — they were previously coerced into
+# `modeling`/`comparative`. (`definition` is not a result, so it is a `method_kind` only, not a
+# Finding role.)
 FINDING_ROLES = {
     "descriptive",
     "mechanistic",
@@ -202,7 +221,18 @@ FINDING_ROLES = {
     "modeling",
     "ablation_finding",
     "failure_mode",
+    "theorem",
+    "lemma",
+    "bound",
 }
+
+# Finding quantitative payload (section-ir-0.10, FG-11). Optional structured fields carried on a
+# Finding so its headline effect is queryable instead of buried in prose: `polarity` (the sign of
+# the effect, from the perspective of the paper's method/hypothesis — so a null/negative result is
+# structurally distinct from a positive one), plus the free-text `effect_size` (magnitude in the
+# paper's own terms, e.g. "+2.1 BLEU", "3 orders of magnitude") and `scope` (the conditions/range
+# under which it holds, e.g. "on 11 of 12 tasks"). All optional; omitted when the paper is silent.
+FINDING_POLARITIES = {"positive", "negative", "neutral", "mixed"}
 
 # `role` vocabulary per unit type (the differentia axis). Types absent here carry no `role`:
 # Problem is a single trunk; Measure is uniform.
@@ -216,24 +246,56 @@ ROLE_VOCAB_BY_TYPE: dict[str, set[str]] = {
 # Method `method_kind` survives as an OPTIONAL descriptive attribute (the structural kind),
 # orthogonal to the argumentative `role`. Scoped to AI/ML: `protocol`/`software_system` never
 # fire on this corpus.
-METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function"}
+# `resource`/`taxonomy` (0.10, FG-1) type a contribution that is a non-algorithmic deliverable
+# (a taxonomy, an atlas, a software library) as a Method for want of a dedicated type; method.md
+# suppresses the algorithm-form fields (inputs/outputs/formulas/objective_function) for them. A
+# dataset/benchmark deliverable is NOT a method_kind — it is an ExperimentSetup via the
+# contribution_resource census role, so it hosts score rows natively without a duplicate twin.
+# `theorem`/`lemma`/`bound`/`definition` (0.10, FG-2) type a formal statement/construct
+# materialized as a Method (a theorem, an established bound, a formal definition the paper
+# introduces); like resource/taxonomy these are not algorithms, so method.md suppresses the
+# algorithm-form fields for them. The *proven* result then lives as a Finding (role theorem/
+# lemma/bound) that the theorem-Method `supports`.
+METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function",
+                "resource", "taxonomy", "theorem", "lemma", "bound", "definition"}
 COMPARISON_DIRECTIONS = {"higher_is_better", "lower_is_better", "target", "unspecified"}
+# Optional per-score-row value kind (0.10, FG-2). A score `value` is always a string; `value_kind`
+# says how to read it so a symbolic/asymptotic theoretical result (`O(n^6)`, `PSPACE-complete`,
+# `2/Δ·logT`) is no longer forced into a numeric pseudo-leaderboard. Omitted ⇒ numeric (the
+# empirical-leaderboard default), so this is purely additive for the existing corpus. For a
+# symbolic/asymptotic/qualitative row the measure's `comparison_direction` is normally omitted or
+# `unspecified` (there is no monotone better/worse), and `variance` is normally "".
+SCORE_VALUE_KINDS = {"numeric", "symbolic", "asymptotic", "qualitative", "curve"}
+# Optional Measure objective class (0.10, FG-6): which axis of a multi-objective evaluation a
+# measure sits on, so a precision/cost/fairness/safety trade-off does not read as uniformly
+# positive evidence. Omitted ⇒ the headline quality axis (the leaderboard default), so additive.
+MEASURE_OBJECTIVE_CLASSES = {"primary_quality", "cost_efficiency", "fairness", "safety", "robustness"}
 # Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Measure
 # `value_type` (always scalar), Finding `novelty` (always original), `epistemic_status`
-# (always conclusion), `polarity` (dropped by request). The provenance `source_kind` enum was
-# dropped (2026-05-26): provenance is a flat list of `§N` markers. The `measured_on` relation
-# was dropped (section-ir-0.9): metric→dataset is now the score row's setup_id → ExperimentSetup.
+# (always conclusion). Finding `polarity` was dropped in 0.9 but is reintroduced in 0.10 as an
+# optional FG-11 payload field (FINDING_POLARITIES, above) — off-CV venues report null/negative/
+# mixed results the CV corpus did not, so the positive-vs-null distinction is now load-bearing.
+# The provenance `source_kind` enum was dropped (2026-05-26): provenance is a flat list of `§N`
+# markers. The `measured_on` relation was dropped (section-ir-0.9): metric→dataset is now the
+# score row's setup_id → ExperimentSetup.
 
-# Global relation type matrix (section-ir-0.9). Endpoints resolve to a unit defined
-# anywhere in the extraction; relations are no longer section-local. `measured_on` was
-# removed in 0.9 — a Measure binds to its dataset/split via the score row's setup_id →
-# ExperimentSetup, not via a global edge.
+# Global relation type matrix (section-ir-0.9; +builds_on/uses in 0.10). Endpoints resolve to a
+# unit defined anywhere in the extraction; relations are no longer section-local. `measured_on`
+# was removed in 0.9 — a Measure binds to its dataset/split via the score row's setup_id →
+# ExperimentSetup, not via a global edge. `builds_on`/`uses` (0.10, FG-4) are external-dependency
+# edges, distinct from `part_of` (internal composition) and `compares_to` (competition): a
+# contribution builds_on the prior art it extends and uses the methods/data it depends on. Before
+# 0.10 a builds_on dependency was coerced onto part_of (false containment) or left edgeless.
 RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
     "part_of": ({"Method", "ExperimentSetup"}, {"Method", "ExperimentSetup"}),
+    "builds_on": ({"Method", "ExperimentSetup"}, {"Method", "ExperimentSetup"}),
+    "uses": ({"Method", "ExperimentSetup"}, {"Method", "ExperimentSetup"}),
+    "assumes": ({"Method"}, {"ExperimentSetup"}),
+    "co_contribution": ({"Method", "ExperimentSetup"}, {"Method", "ExperimentSetup"}),
     "compares_to": ({"Method", "ExperimentSetup", "Measure"}, {"Method", "ExperimentSetup", "Measure"}),
     "evaluates": ({"Measure"}, {"Method"}),
     "about": ({"Finding"}, {"Method", "ExperimentSetup", "Measure"}),
-    "supports": ({"Measure", "Finding"}, {"Finding"}),
+    "supports": ({"Measure", "Finding", "Method"}, {"Finding"}),
     "motivates": ({"Problem"}, {"Method", "ExperimentSetup"}),
     "resolves": ({"Finding"}, {"Problem"}),
 }
@@ -246,10 +308,31 @@ RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
 # closing stroke of the discovery arc; it joins two units born in *different* parallel
 # sections, so no section can author it — assembly synthesizes it (_assign_resolves) from
 # the contribution-node join, which is globally visible.
-STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates"}
+# `assumes` (Method -> ExperimentSetup, FG-2) is stage-B: both endpoints are census nodes (a
+# theorem-Method and the theoretical_setting/structural_class substrate it holds under), so the
+# relation pass binds them with the whole node set in view, no forward reference needed.
+# `supports` (FG-2) now also accepts a Method source so a theorem-Method materialized in the
+# method section can `supports` the result-Finding born in evidence — the Method endpoint is a
+# census node visible to the evidence call, so it stays a stage-C edge.
+STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates", "builds_on", "uses", "assumes",
+                     "co_contribution"}
 STAGE_C_RELATIONS = {"about", "supports", "motivates"}
 SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
+
+# FG-12 (section-ir-0.10): map a reference's citation role to the unit-graph edge it implies, so
+# the reference vocabulary (extends/uses/baseline + stance) is reconciled onto the unit graph
+# (reconcile_reference_units) instead of being stranded. Context-only roles (background/related/
+# motivation/future_work) intentionally map to nothing — that absence is how a genuinely-run
+# baseline (→ compares_to) is distinguished from a related-work mention, addressing the
+# compared_against overload (FG-4) without inventing a new census role.
+REFERENCE_ROLE_TO_RELATION: dict[str, str] = {
+    "extends": "builds_on",
+    "uses_method": "uses",
+    "uses_data": "uses",
+    "baseline": "compares_to",
+    "contrast": "compares_to",
+}
 UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Document": "doc:",
     "Problem": "prb:",
@@ -259,7 +342,7 @@ UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Measure": "mea:",
 }
 ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Document": {"id", "type", "doc_id", "title", "role", "thesis", "provenance"},
+    "Document": {"id", "type", "doc_id", "title", "role", "thesis", "headline_result", "provenance"},
     "Problem": {"id", "type", "description", "provenance"},
     "Method": {
         "id",
@@ -298,6 +381,7 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "scores",
         "setup_ids",
         "comparison_direction",
+        "objective_class",
         "provenance",
     },
     "Finding": {
@@ -305,6 +389,10 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "type",
         "role",
         "statement",
+        # Optional FG-11 quantitative payload (section-ir-0.10); omitted when unstated.
+        "polarity",
+        "effect_size",
+        "scope",
         "provenance",
     },
 }
@@ -927,6 +1015,9 @@ def _drop_invalid_relations(
     The model sometimes emits relations the IR cannot represent (a `compares_to`
     between two Findings, an `evaluates` onto a non-Method). Such edges are
     unassemblable, so remove them with a warning instead of failing the extraction.
+    Self-loops (source_id == target_id) are also dropped: no relation type is
+    meaningfully reflexive (a method is not part_of/builds_on/compares_to itself),
+    and the relation pass occasionally emits one for the contribution node.
     """
     type_by_id = _build_unit_type_index(sections)
     kept: list[dict[str, Any]] = []
@@ -937,6 +1028,9 @@ def _drop_invalid_relations(
         rel = relation.get("relation")
         src = relation.get("source_id")
         tgt = relation.get("target_id")
+        if src is not None and src == tgt:
+            warnings.append(f"Dropped self-loop relation {src} -[{rel}]-> {tgt}")
+            continue
         matrix = RELATION_MATRIX.get(rel)
         if matrix is None:
             warnings.append(f"Dropped relation with invalid relation {rel!r}")
@@ -1107,8 +1201,9 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
       model id with uppercase or punctuation (mea:mIoU, mea:delta_1.25) is salvaged rather than
       hard-failing the census.
     - Suffix later duplicate node_ids so each is defined exactly once.
-    - Ensure exactly one document-level root method (role `contribution`): promote the first
-      must-priority method when none is marked, demote extras to `component` when several are.
+    - Ensure exactly one document-level root (role `contribution` for a Method, or
+      `contribution_resource` for an ExperimentSetup deliverable; FG-1): promote the strongest
+      node when none is marked, demote extras to a non-root role of their type when several are.
     """
     normalized = copy.deepcopy(census)
     nodes = iter_census_nodes(normalized)
@@ -1149,17 +1244,36 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
         used_ids.add(new_id)
 
     method_nodes = [node for node in nodes if node.get("type") == "Method"]
-    if method_nodes:
-        roots = [node for node in method_nodes if node.get("role") == CONTRIBUTION_ROLE]
-        if not roots:
-            chosen = next(
-                (node for node in method_nodes if node.get("salience") == "must"),
-                method_nodes[0],
-            )
+    roots = [node for node in nodes if node.get("role") in CONTRIBUTION_ROLES]
+    if not roots:
+        # No root tagged. Promote the strongest node: prefer a must-Method (the empirical-paper
+        # common case) as `contribution`, else a must-ExperimentSetup (a benchmark/dataset paper)
+        # as `contribution_resource`.
+        chosen = next((n for n in method_nodes if n.get("salience") == "must"), None)
+        if chosen is None and method_nodes:
+            chosen = method_nodes[0]
+        if chosen is not None:
             chosen["role"] = CONTRIBUTION_ROLE
-        elif len(roots) > 1:
-            for extra in roots[1:]:
-                extra["role"] = "component"
+        else:
+            exp_nodes = [n for n in nodes if n.get("type") == "ExperimentSetup"]
+            promote = next((n for n in exp_nodes if n.get("salience") == "must"), None)
+            if promote is None and exp_nodes:
+                promote = exp_nodes[0]
+            if promote is not None:
+                promote["role"] = "contribution_resource"
+    elif len(roots) > 1:
+        # Co-equal primary contributions (FG-7): a paper may deliver two roots that neither
+        # contains (a method AND a benchmark, or two independent algorithms presented as joint
+        # results). Keep every `must` root as a co-equal contribution — the relation pass links
+        # them with `co_contribution` and `_assign_resolves` fans the discovery arc across it.
+        # Demote only the weaker `should` "roots": a genuine co-contribution is must-salient, so a
+        # should-salient extra root is almost always a mis-tag, and demoting it stops a flood of
+        # speculative roots from surviving (when no root is `must`, keep just the first).
+        must_roots = [n for n in roots if n.get("salience") == "must"]
+        keep_ids = {id(n) for n in (must_roots or roots[:1])}
+        for extra in roots:
+            if id(extra) not in keep_ids:
+                extra["role"] = "component" if extra.get("type") == "Method" else "benchmark"
     return normalized
 
 
@@ -1176,6 +1290,13 @@ def validate_census(census: dict[str, Any]) -> list[str]:
         for key in ("central_contribution", "argument_flow"):
             if not spine_summary.get(key):
                 issues.append(f"Census spine_summary missing {key}")
+        # headline_result (FG-9, optional): when present it must be a non-empty string. It is a
+        # planning-time annotation of the paper's headline result for result-centric papers, not a node.
+        headline_result = spine_summary.get("headline_result")
+        if headline_result is not None and (
+            not isinstance(headline_result, str) or not headline_result.strip()
+        ):
+            issues.append("Census spine_summary headline_result must be a non-empty string when present")
 
     nodes = census.get("nodes")
     if not isinstance(nodes, list):
@@ -1184,7 +1305,7 @@ def validate_census(census: dict[str, Any]) -> list[str]:
 
     seen_ids: set[str] = set()
     method_count = 0
-    contribution_count = 0
+    root_count = 0
     for node in nodes:
         if not isinstance(node, dict):
             issues.append("Census node must be an object")
@@ -1233,12 +1354,18 @@ def validate_census(census: dict[str, Any]) -> list[str]:
             issues.append(f"Census node {label} source_scope must be a list of strings")
         if node_type == "Method":
             method_count += 1
-            if role == CONTRIBUTION_ROLE:
-                contribution_count += 1
+        if role in CONTRIBUTION_ROLES:
+            root_count += 1
 
-    if method_count and contribution_count != 1:
+    # At least one document root: a `contribution` Method or a `contribution_resource`
+    # ExperimentSetup (FG-1). Normally exactly one, but a paper with co-equal primary
+    # deliverables (a method AND a benchmark, or two independent algorithms) marks each as a
+    # root and the relation pass links them with `co_contribution` (FG-7), so root_count > 1 is
+    # valid. Only a complete absence of a root (when something is rootable) is a contract defect.
+    if (method_count or root_count) and root_count < 1:
         issues.append(
-            f"Census must mark exactly one contribution method (found {contribution_count})"
+            "Census must mark at least one contribution root (contribution or "
+            "contribution_resource); found 0"
         )
     return issues
 
@@ -1334,12 +1461,52 @@ def _slugify_doc_id(text: str) -> str:
     return slug[:30].strip("_") or "paper"
 
 
-def build_document_unit(paper_content: str, thesis: str = "") -> dict[str, Any]:
+def _derive_document_role(census: dict[str, Any] | None, sections: list[dict[str, Any]]) -> str:
+    """Derive the Document genre (FG-3, section-ir-0.10) from the materialized contribution.
+
+    Was a hardcoded literal `research_article` (a dead axis — 763/764 in the 0.9 corpus). The
+    reliable signal is what the contribution turned out to be: a dataset/benchmark deliverable
+    (a `contribution_resource` materialized as an ExperimentSetup) is a benchmark/dataset paper;
+    a `taxonomy` Method is review-like. Everything else stays `research_article`. Genres that need
+    true text-level judgement (position/meta_analysis) are not derived here.
+    """
+    if not isinstance(census, dict):
+        return "research_article"
+    contribution_ids = {
+        node.get("node_id")
+        for node in census.get("nodes") or []
+        if isinstance(node, dict) and node.get("role") in CONTRIBUTION_ROLES
+    }
+    contribution_ids.discard(None)
+    if not contribution_ids:
+        return "research_article"
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("id") not in contribution_ids:
+                continue
+            if unit.get("type") == "ExperimentSetup":
+                return "benchmark_survey"
+            if unit.get("type") == "Method" and unit.get("method_kind") == "taxonomy":
+                return "review"
+            return "research_article"
+    return "research_article"
+
+
+def build_document_unit(
+    paper_content: str,
+    thesis: str = "",
+    document_role: str = "research_article",
+    headline_result: str = "",
+) -> dict[str, Any]:
     """Build a deterministic Document unit from the paper preamble.
 
     `thesis` is the one-sentence central contribution; assembly sources it from the census
     `spine_summary.central_contribution` (already extracted and validated non-empty), so no
-    extra LLM call is needed. It is optional so the builder still works without a census.
+    extra LLM call is needed. `document_role` is the genre derived by `_derive_document_role`
+    (FG-3); it defaults to `research_article` so the builder still works without a census.
+    `headline_result` (FG-9, optional) is the census `spine_summary.headline_result` — the paper's
+    headline established result for a result-centric paper — lifted on so the finding is first-class
+    on the document; omitted entirely when the census did not state one (ordinary artifact paper).
     """
     first_marker = paper_content.find("[§")
     preamble = paper_content[:first_marker] if first_marker >= 0 else paper_content[:500]
@@ -1349,15 +1516,18 @@ def build_document_unit(paper_content: str, thesis: str = "") -> dict[str, Any]:
     else:
         title = next((line.strip() for line in preamble.splitlines() if line.strip()), "Untitled")
     doc_id = _slugify_doc_id(title)
-    return {
+    document: dict[str, Any] = {
         "id": f"doc:{doc_id}",
         "type": "Document",
         "doc_id": doc_id,
         "title": title,
-        "role": "research_article",
+        "role": document_role,
         "thesis": thesis,
         "provenance": [],
     }
+    if isinstance(headline_result, str) and headline_result.strip():
+        document["headline_result"] = headline_result.strip()
+    return document
 
 
 def build_extraction_notes(
@@ -1365,12 +1535,18 @@ def build_extraction_notes(
     sections: list[dict[str, Any]],
     sections_included: list[str] | None = None,
     sections_omitted: list[str] | None = None,
+    extra_uncovered: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Build final extraction notes for assembled content output.
 
     Coverage is measured against the census `must` nodes: a must-node is covered iff a unit
     reusing its node_id was materialized by some section. node_id == unit_id, so coverage is
     structural and needs no covers_entries echo from the model.
+
+    `extra_uncovered` (FG-10 D1) holds additional `{item_id, reason}` entries for information lost
+    during assembly (e.g. a Measure dropped for empty scores) so the canonical `uncovered_items`
+    list captures all of it; entries whose item_id is already listed (an uncovered must-node) are
+    skipped so a dropped must-Measure is not double-counted.
     """
     sections_used: set[str] = set()
     materialized_ids: set[str] = set()
@@ -1386,7 +1562,7 @@ def build_extraction_notes(
     must_nodes = census_must_node_ids(census)
     covered = must_nodes & materialized_ids
     notes: dict[str, Any] = {
-        "ir_version": "section-ir-0.9",
+        "ir_version": "section-ir-0.10",
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
         "uncertain_assignments": [],
         "skipped_spans": [],
@@ -1400,6 +1576,12 @@ def build_extraction_notes(
             "must_total": len(must_nodes),
         },
     }
+    if extra_uncovered:
+        listed = {item["item_id"] for item in notes["uncovered_items"]}
+        for item in extra_uncovered:
+            if item.get("item_id") not in listed:
+                notes["uncovered_items"].append(item)
+                listed.add(item.get("item_id"))
     if sections_included is not None:
         notes["sections_included"] = sections_included
     if sections_omitted is not None:
@@ -1509,16 +1691,24 @@ def _sanitize_unit_ids(
                 for row in unit.get("scores", []) or []:
                     if not isinstance(row, dict):
                         continue
-                    for key in ("system_id", "setup_id"):
+                    for key in ("system_id", "setup_id", "opponent_id", "judge_id"):
                         if row.get(key) in remap:
                             row[key] = remap[row[key]]
     return warnings
 
 
-def _drop_empty_scores_measures(sections: list[dict[str, Any]]) -> list[str]:
+def _drop_empty_scores_measures(
+    sections: list[dict[str, Any]], dropped_out: list[dict[str, str]] | None = None
+) -> list[str]:
     """Drop Measure units with an empty/missing ``scores`` list — a measure with no rows carries
     no data and is schema-invalid. Edges that pointed at it are pruned by the later relation
-    dangling-check. Lossy-but-safe; logged to uncertain_assignments."""
+    dangling-check. Lossy-but-safe; logged to uncertain_assignments.
+
+    FG-10 D1 (section-ir-0.10): each drop is also recorded in ``dropped_out`` (when provided) as a
+    structured ``{item_id, reason}`` so assembly can surface it in ``extraction_notes.uncovered_items``
+    — the canonical "what was not captured" list — instead of leaving the loss only in the free-text
+    ``uncertain_assignments``. This makes a measure the model surfaced but could not fill (a metric
+    named with no extractable rows) visible to a downstream consumer scanning a single field."""
     warnings: list[str] = []
     for section in sections:
         units = section.get("units")
@@ -1529,6 +1719,10 @@ def _drop_empty_scores_measures(sections: list[dict[str, Any]]) -> list[str]:
             scores = unit.get("scores")
             if unit.get("type") == "Measure" and not (isinstance(scores, list) and scores):
                 warnings.append(f"dropped Measure {unit.get('id')!r} with empty scores")
+                if dropped_out is not None and isinstance(unit.get("id"), str):
+                    dropped_out.append(
+                        {"item_id": unit["id"], "reason": "Measure dropped: empty scores (no extractable rows)"}
+                    )
             else:
                 kept.append(unit)
         section["units"] = kept
@@ -1608,9 +1802,10 @@ def _strip_baseline_method_fields(
 
 
 def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
-    """Blank dangling or wrong-type per-row score references (system_id/setup_id) once the
-    full unit set is known — lossy-but-safe, logged to uncertain_assignments. system_id resolves
-    globally (Methods live in the method section); setup_id resolves to a section-local ExperimentSetup."""
+    """Blank dangling or wrong-type per-row score references once the full unit set is known —
+    lossy-but-safe, logged to uncertain_assignments. system_id/opponent_id resolve globally to a
+    Method; setup_id resolves to a section-local ExperimentSetup; judge_id (FG-6) resolves globally
+    to a Method or ExperimentSetup (an LLM/human judge)."""
     warnings: list[str] = []
     unit_index = {
         unit["id"]: unit
@@ -1628,15 +1823,15 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
             for index, score in enumerate(unit.get("scores", []) or []):
                 if not isinstance(score, dict):
                     continue
-                system_id = score.get("system_id")
-                if system_id and (
-                    system_id not in unit_index or unit_index[system_id].get("type") != "Method"
-                ):
-                    warnings.append(
-                        f"Measure {unit.get('id')} scores[{index}] system_id {system_id!r} "
-                        "did not resolve to a Method; blanked"
-                    )
-                    score["system_id"] = ""
+                # system_id and opponent_id (FG-6) both resolve globally to a Method.
+                for key in ("system_id", "opponent_id"):
+                    ref = score.get(key)
+                    if ref and (ref not in unit_index or unit_index[ref].get("type") != "Method"):
+                        warnings.append(
+                            f"Measure {unit.get('id')} scores[{index}] {key} {ref!r} "
+                            "did not resolve to a Method; blanked"
+                        )
+                        score[key] = ""
                 setup_id = score.get("setup_id")
                 if setup_id and (
                     setup_id not in local_ids
@@ -1647,6 +1842,17 @@ def _repair_score_refs(sections: list[dict[str, Any]]) -> list[str]:
                         "is not a local ExperimentSetup; blanked"
                     )
                     score["setup_id"] = ""
+                # judge_id (FG-6) resolves globally to a Method or ExperimentSetup.
+                judge_id = score.get("judge_id")
+                if judge_id and (
+                    judge_id not in unit_index
+                    or unit_index[judge_id].get("type") not in {"Method", "ExperimentSetup"}
+                ):
+                    warnings.append(
+                        f"Measure {unit.get('id')} scores[{index}] judge_id {judge_id!r} "
+                        "did not resolve to a Method or ExperimentSetup; blanked"
+                    )
+                    score["judge_id"] = ""
     return warnings
 
 
@@ -1704,11 +1910,29 @@ def _assign_resolves(
     contribution_ids = {
         node.get("node_id")
         for node in (census.get("nodes") or [])
-        if isinstance(node, dict) and node.get("role") == CONTRIBUTION_ROLE
+        if isinstance(node, dict) and node.get("role") in CONTRIBUTION_ROLES
     }
     contribution_ids.discard(None)
     if not contribution_ids:
         return []
+
+    # FG-7: a paper with co-equal contributions links them with `co_contribution` (the single
+    # census root cannot name both). A finding about *either* co-equal contribution closes the arc,
+    # so fan the root set out across co_contribution edges (fixpoint over pairwise links) before
+    # deriving resolves — otherwise a correctly-motivated co-contribution would get no `resolves`.
+    changed = True
+    while changed:
+        changed = False
+        for rel in relations:
+            if not isinstance(rel, dict) or rel.get("relation") != "co_contribution":
+                continue
+            src, tgt = rel.get("source_id"), rel.get("target_id")
+            if src in contribution_ids and tgt not in contribution_ids and tgt is not None:
+                contribution_ids.add(tgt)
+                changed = True
+            if tgt in contribution_ids and src not in contribution_ids and src is not None:
+                contribution_ids.add(src)
+                changed = True
 
     unit_type: dict[str, str] = {}
     unit_prov: dict[str, list[str]] = {}
@@ -1822,7 +2046,8 @@ def assemble_extraction(
     # Drop dataless Measures before section/anchor repair: a section emptied by the drop is then
     # caught by _drop_empty_sections, and a section that anchored on the dropped measure is
     # re-pointed by _repair_section_anchors instead of being left with a dangling anchor_id.
-    assembly_warnings.extend(_drop_empty_scores_measures(sections))
+    dropped_measures: list[dict[str, str]] = []
+    assembly_warnings.extend(_drop_empty_scores_measures(sections, dropped_measures))
     assembly_warnings.extend(_drop_empty_sections(sections))
     assembly_warnings.extend(_normalize_provenance_markers(sections, relations))
     assembly_warnings.extend(_repair_section_anchors(sections))
@@ -1855,6 +2080,7 @@ def assemble_extraction(
         sections,
         sections_included=sections_included,
         sections_omitted=sections_omitted,
+        extra_uncovered=dropped_measures,
     )
     if assembly_warnings:
         uncertain = extraction_notes.setdefault("uncertain_assignments", [])
@@ -1863,8 +2089,12 @@ def assemble_extraction(
 
     spine_summary = census.get("spine_summary") if isinstance(census, dict) else None
     thesis = spine_summary.get("central_contribution") or "" if isinstance(spine_summary, dict) else ""
+    headline_result = spine_summary.get("headline_result") or "" if isinstance(spine_summary, dict) else ""
+    document_role = _derive_document_role(census, sections)
     return {
-        "document": build_document_unit(paper_content, thesis=thesis),
+        "document": build_document_unit(
+            paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result
+        ),
         "sections": sections,
         "relations": relations,
         "extraction_notes": extraction_notes,
@@ -2130,6 +2360,31 @@ def reconcile_reference_units(
                 if cite_key and nid not in citekey_to_ids.setdefault(cite_key, []):
                     citekey_to_ids[cite_key].append(nid)
 
+    # FG-12 (section-ir-0.10): also backfill unit-graph edges from each reference's citation roles,
+    # so the richer reference vocabulary is not stranded. Each edge is sourced at the contribution
+    # (the paper's own work relates to the cited prior work); the reference's linked unit is the
+    # target. An edge already present (e.g. a stage-B compares_to) is not duplicated; a non-neutral
+    # stance is merged onto it instead. Source attribution to the contribution is a deterministic
+    # default — an internal component's own builds_on/uses to an uncited dependency is not covered.
+    relations = extraction.get("relations")
+    if not isinstance(relations, list):
+        relations = None
+    contribution_id: str | None = None
+    if isinstance(census, dict):
+        for node in census.get("nodes", []) or []:
+            if isinstance(node, dict) and node.get("role") in CONTRIBUTION_ROLES:
+                cid = node.get("node_id")
+                if isinstance(cid, str) and cid in type_by_id:
+                    contribution_id = cid
+                break
+    existing_edges: set[tuple] = set()
+    if relations is not None:
+        for existing in relations:
+            if isinstance(existing, dict):
+                existing_edges.add(
+                    (existing.get("source_id"), existing.get("relation"), existing.get("target_id"))
+                )
+
     for ref in ref_list:
         if not isinstance(ref, dict):
             continue
@@ -2157,6 +2412,42 @@ def reconcile_reference_units(
             warnings.append(
                 f"Linked reference {ref.get('id')!r} to unit(s) {list(linked)} via {detail}"
             )
+            # Backfill dependency/comparison edges from this reference's citation roles.
+            if relations is not None and contribution_id:
+                stance = relation.get("stance")
+                for role_name in relation.get("roles") or []:
+                    edge_rel = REFERENCE_ROLE_TO_RELATION.get(role_name)
+                    if not edge_rel:
+                        continue
+                    for target_id in linked:
+                        if target_id == contribution_id:
+                            continue
+                        key = (contribution_id, edge_rel, target_id)
+                        if key in existing_edges:
+                            # Edge already present; enrich a stance-less compares_to with stance.
+                            if edge_rel == "compares_to" and stance in {"supportive", "critical"}:
+                                for existing in relations:
+                                    if (
+                                        existing.get("source_id"),
+                                        existing.get("relation"),
+                                        existing.get("target_id"),
+                                    ) == key and not existing.get("stance"):
+                                        existing["stance"] = stance
+                            continue
+                        edge: dict[str, Any] = {
+                            "source_id": contribution_id,
+                            "relation": edge_rel,
+                            "target_id": target_id,
+                            "provenance": [],
+                        }
+                        if edge_rel == "compares_to" and stance in {"supportive", "critical"}:
+                            edge["stance"] = stance
+                        relations.append(edge)
+                        existing_edges.add(key)
+                        warnings.append(
+                            f"Backfilled {contribution_id} -[{edge_rel}]-> {target_id} "
+                            f"from reference {ref.get('id')!r} role {role_name!r}"
+                        )
     return warnings
 
 
@@ -2540,6 +2831,10 @@ def _validate_unit_fields(
     elif utype == "Finding":
         if not unit.get("statement"):
             issues.append(f"Finding {uid} missing statement")
+        # Optional FG-11 payload: `polarity` is an enum when present; effect_size/scope are free text.
+        polarity = unit.get("polarity")
+        if polarity is not None and polarity not in FINDING_POLARITIES:
+            issues.append(f"Finding {uid} has invalid polarity: {polarity}")
     elif utype == "Problem":
         if not unit.get("description"):
             issues.append(f"Problem {uid} missing description")
@@ -2563,6 +2858,12 @@ def _validate_unit_fields(
                     issues.append(f"Measure {uid} scores[{index}] value must be a string")
                 if not isinstance(score.get("variance"), str):
                     issues.append(f"Measure {uid} scores[{index}] variance must be a string")
+                # Optional FG-2 value kind: how to read the (string) value. Omitted ⇒ numeric.
+                value_kind = score.get("value_kind")
+                if value_kind is not None and value_kind not in SCORE_VALUE_KINDS:
+                    issues.append(
+                        f"Measure {uid} scores[{index}] has invalid value_kind: {value_kind}"
+                    )
                 # Per-row references: a row may name the Method it reports (system_id, global)
                 # and the local ExperimentSetup it was measured under (setup_id). In 0.9 the
                 # setup_id also carries the dataset/split — it is how a Measure binds to its
@@ -2584,6 +2885,24 @@ def _validate_unit_fields(
                         issues.append(f"Measure {uid} scores[{index}] setup_id must be section-local: {row_setup_id}")
                     elif row_setup_unit.get("type") != "ExperimentSetup":
                         issues.append(f"Measure {uid} scores[{index}] setup_id {row_setup_id} must point to a local ExperimentSetup")
+                # FG-6 (optional): a pairwise/win-rate row names its opponent (the other system in
+                # an A-vs-B comparison → a Method), and a judged row names its judge (an LLM/human
+                # evaluator → a Method or an inference_protocol ExperimentSetup). Both optional;
+                # when non-empty must resolve to a unit of the right type.
+                opponent_id = score.get("opponent_id")
+                if opponent_id:
+                    opponent_unit = unit_index.get(opponent_id)
+                    if opponent_unit is None:
+                        issues.append(f"Measure {uid} scores[{index}] has unknown opponent_id: {opponent_id}")
+                    elif opponent_unit.get("type") != "Method":
+                        issues.append(f"Measure {uid} scores[{index}] opponent_id {opponent_id} must point to a Method")
+                judge_id = score.get("judge_id")
+                if judge_id:
+                    judge_unit = unit_index.get(judge_id)
+                    if judge_unit is None:
+                        issues.append(f"Measure {uid} scores[{index}] has unknown judge_id: {judge_id}")
+                    elif judge_unit.get("type") not in {"Method", "ExperimentSetup"}:
+                        issues.append(f"Measure {uid} scores[{index}] judge_id {judge_id} must point to a Method or ExperimentSetup")
         # setup_ids scope a measure to local ExperimentSetup units. It is optional: a deployable
         # measure is normally scoped by one setup, an ablation measure may carry none.
         setup_ids = unit.get("setup_ids")
@@ -2605,6 +2924,9 @@ def _validate_unit_fields(
         comparison_direction = unit.get("comparison_direction")
         if "comparison_direction" in unit and comparison_direction not in COMPARISON_DIRECTIONS:
             issues.append(f"Measure {uid} has invalid comparison_direction: {comparison_direction}")
+        objective_class = unit.get("objective_class")
+        if objective_class is not None and objective_class not in MEASURE_OBJECTIVE_CLASSES:
+            issues.append(f"Measure {uid} has invalid objective_class: {objective_class}")
 
 
 def _validate_relation(
@@ -2843,7 +3165,7 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
                 issues.append(f"extraction_notes missing {key}")
         if notes.get("input_mode") != "node_census_pipeline":
             issues.append(f"extraction_notes has invalid input_mode: {notes.get('input_mode')}")
-        if notes.get("ir_version") != "section-ir-0.9":
+        if notes.get("ir_version") != "section-ir-0.10":
             issues.append(f"extraction_notes has invalid ir_version: {notes.get('ir_version')}")
         sections_used = notes.get("sections_used", [])
         if isinstance(sections_used, list):
@@ -2887,9 +3209,11 @@ def _validate_census_trace(
     unknown_covered = sorted(covered_entries - node_ids)
     if unknown_covered:
         issues.append(f"covers_entries references unknown census nodes: {unknown_covered}")
-    unknown_uncovered = sorted(uncovered_items - node_ids)
-    if unknown_uncovered:
-        issues.append(f"uncovered_items references unknown census nodes: {unknown_uncovered}")
+    # uncovered_items is assembly-built (never model-written): it lists uncovered census must-nodes
+    # AND, since 0.10 (FG-10 D1), assembly-dropped non-census units (e.g. a born/should Measure
+    # dropped for empty scores). Only the census-node entries are constrained — the must-node
+    # accounting below ensures every must-node is materialized or declared uncovered; the dropped-
+    # unit entries are an informational superset, so they are not required to be census nodes.
 
     for entry_id in sorted(covered_entries):
         if entry_id not in unit_index:

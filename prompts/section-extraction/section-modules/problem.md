@@ -20,7 +20,7 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 |---|---|---|
 | `motivates` | Problem → {Method, ExperimentSetup} | this problem is what the node addresses / why it exists |
 
-- Author a `motivates` edge from the Problem to the contribution it justifies: point `target_id` at the method whose `node_registry` role is `contribution`. When the problem is instead about a specific dataset or task, point at that ExperimentSetup node.
+- Author a `motivates` edge from the Problem to the root contribution it justifies: point `target_id` at the `node_registry` node whose role is `contribution` (a method) or `contribution_resource` (a dataset/benchmark deliverable). When the problem is instead about a specific dataset or task, point at that ExperimentSetup node.
 - Endpoints reference `node_registry` ids; never invent an id, and never point at a Problem or Finding — the target must be a Method or ExperimentSetup node. Give the empty array `[]` only when no registry node maps to the problem.
 - You do **not** author the closing `resolves` edge (the finding that answers this problem). That edge is added automatically downstream, from the contribution the problem motivates and the finding that is about it.
 

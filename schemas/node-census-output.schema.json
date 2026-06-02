@@ -24,6 +24,10 @@
         "argument_flow": {
           "type": "string",
           "description": "One sentence describing how problem, method, and evidence fit together."
+        },
+        "headline_result": {
+          "type": "string",
+          "description": "Optional (FG-9): one sentence stating the paper's headline established RESULT \u2014 the answer the evidence demonstrates \u2014 as distinct from central_contribution (which names the artifact/contribution). State the finding itself: 'value learning is not the main bottleneck in offline RL', 'the model matches SOTA with 10x fewer parameters'. Fill it whenever the paper establishes a clear headline result (for an analysis/'is X the bottleneck?' paper this IS the payload); omit only for a pure resource/tool release with no empirical result. This stays a summary annotation \u2014 do NOT add a Finding node for it."
         }
       }
     },
@@ -52,12 +56,15 @@
             "type": "string",
             "enum": [
               "contribution",
+              "contribution_resource",
               "component",
               "builds_on",
               "compared_against",
               "dataset",
               "benchmark",
               "task",
+              "theoretical_setting",
+              "structural_class",
               "metric"
             ],
             "description": "Argumentative role, in search-cluster order. the_method: contribution (the single primary method) and component. prior_art: builds_on and compared_against. testbed: dataset, benchmark, task. yardsticks: metric."

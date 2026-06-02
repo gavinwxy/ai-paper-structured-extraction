@@ -25,10 +25,13 @@ if str(PROJECT_ROOT) not in sys.path:
 from section_pipeline import (  # noqa: E402
     COMPARISON_DIRECTIONS,
     EXPERIMENT_SETUP_ROLES,
+    FINDING_POLARITIES,
     FINDING_ROLES,
+    MEASURE_OBJECTIVE_CLASSES,
     METHOD_KINDS,
     METHOD_ROLES,
     NODE_ROLES,
+    SCORE_VALUE_KINDS,
     SECTION_AUTHORS_RELATIONS,
 )
 
@@ -45,10 +48,17 @@ SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
 # Fields that are optional on a unit type (everything else in its property set is required).
 # method_kind is now an optional descriptive attribute (the role is the required differentia);
 # ExperimentSetup carries an optional description and cite_keys.
+# `implementation_notes` is optional (0.10, FG-2): a non-implementation Method — a theorem/lemma/
+# bound/definition or a resource/taxonomy deliverable — carries no reproducibility notes, so it is
+# not forced to emit the field. Normal algorithmic methods still fill it (method.md asks for it);
+# making it schema-optional is additive (every existing 0.9 output already carries it).
 OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Measure": {"comparison_direction"},
-    "Method": {"method_kind", "inputs", "outputs", "formulas", "objective_function"},
+    "Measure": {"comparison_direction", "objective_class"},
+    "Method": {"method_kind", "inputs", "outputs", "formulas", "objective_function",
+               "implementation_notes"},
     "ExperimentSetup": {"description"},
+    # FG-11 (section-ir-0.10): optional Finding quantitative payload.
+    "Finding": {"polarity", "effect_size", "scope"},
 }
 
 ARRAY_TYPE_NAMES: dict[str, str] = {
@@ -64,21 +74,24 @@ ARRAY_TYPE_NAMES: dict[str, str] = {
 # yardsticks). The substrate roles (dataset/benchmark/task) are the only ExperimentSetup roles
 # the census emits; the configuration roles are born during content fill.
 NODE_ROLE_ORDER = [
-    "contribution", "component",
+    "contribution", "contribution_resource", "component",
     "builds_on", "compared_against",
-    "dataset", "benchmark", "task",
+    "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
     "metric",
 ]
 METHOD_ROLE_ORDER = ["contribution", "component", "builds_on", "compared_against"]
 EXPERIMENT_SETUP_ROLE_ORDER = [
-    "dataset", "benchmark", "task",
+    "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
+    "contribution_resource",
     "data_split", "inference_protocol", "training_config", "ensembling", "population",
 ]
 FINDING_ROLE_ORDER = [
     "descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode",
+    "theorem", "lemma", "bound",
 ]
 SALIENCE_ORDER = ["must", "should"]
-STAGE_B_RELATION_ORDER = ["part_of", "compares_to", "evaluates"]
+STAGE_B_RELATION_ORDER = ["part_of", "builds_on", "uses", "assumes", "co_contribution",
+                          "compares_to", "evaluates"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
 # problem authors only `motivates` (Problem -> the census Method/ExperimentSetup it justifies);
 # evidence authors the Finding-centric `about`/`supports`. The closing `resolves` (Finding ->
@@ -92,7 +105,7 @@ STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
 # One-line gloss per stage-C relation, joined into the schema field description.
 STAGE_C_RELATION_GLOSS: dict[str, str] = {
     "about": "about = a Finding is about a Method/ExperimentSetup/Measure",
-    "supports": "supports = a Measure or Finding supports a Finding",
+    "supports": "supports = a Measure, Finding, or Method (a theorem/proof) supports a Finding",
     "motivates": "motivates = a Problem motivates the Method/ExperimentSetup that addresses it",
 }
 
@@ -101,8 +114,12 @@ ENUM_ORDER: dict[str, list[str]] = {
     "method_role": METHOD_ROLE_ORDER,
     "experiment_setup_role": EXPERIMENT_SETUP_ROLE_ORDER,
     "finding_role": FINDING_ROLE_ORDER,
-    "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function"],
+    "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function",
+                    "resource", "taxonomy", "theorem", "lemma", "bound", "definition"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
+    "finding_polarity": ["positive", "negative", "neutral", "mixed"],
+    "score_value_kind": ["numeric", "symbolic", "asymptotic", "qualitative", "curve"],
+    "measure_objective_class": ["primary_quality", "cost_efficiency", "fairness", "safety", "robustness"],
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
@@ -112,6 +129,9 @@ ENUM_VALUES: dict[str, set[str]] = {
     "finding_role": FINDING_ROLES,
     "method_kind": METHOD_KINDS,
     "comparison_direction": COMPARISON_DIRECTIONS,
+    "finding_polarity": FINDING_POLARITIES,
+    "score_value_kind": SCORE_VALUE_KINDS,
+    "measure_objective_class": MEASURE_OBJECTIVE_CLASSES,
 }
 
 
@@ -195,6 +215,18 @@ def scores_schema(description: str) -> dict[str, Any]:
                 "setup_id": {
                     "type": "string",
                     "description": "ID of the local ExperimentSetup unit this row was measured under — the dataset/split/protocol (e.g. 'exp:wmt14_ende'). This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row.",
+                },
+                "value_kind": enum_schema(
+                    "score_value_kind",
+                    "How to read `value`: numeric (a number, the default — omit the field), symbolic (a closed-form expression like '2/Δ·logT'), asymptotic (a complexity class like 'O(n^6)' or 'PSPACE-complete'), qualitative (a categorical verdict), or curve (a trend). Omit for an ordinary numeric leaderboard score.",
+                ),
+                "opponent_id": {
+                    "type": "string",
+                    "description": "Optional (FG-6): for a pairwise/win-rate row (A-vs-B), the id of the Method this row's system was compared against — `system_id` is system A, `opponent_id` is system B, `value` is A's win rate vs B. Omit for an ordinary absolute-score row.",
+                },
+                "judge_id": {
+                    "type": "string",
+                    "description": "Optional (FG-6): for a judged row (LLM-as-judge or human evaluation), the id of the judge — a Method, or an inference_protocol/population ExperimentSetup that was materialized for the evaluator. Omit when the score needs no judge.",
                 },
             },
         },
@@ -316,6 +348,21 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             **base_unit_properties("Finding"),
             "role": enum_schema("finding_role", "Classification of the finding"),
             "statement": string_schema("The finding as a single declarative sentence"),
+            "polarity": enum_schema(
+                "finding_polarity",
+                "Optional sign of the finding's headline effect from the method/hypothesis's "
+                "perspective: positive (confirms/improves), negative (refutes/degrades), neutral "
+                "(no significant effect / a null result), mixed (direction depends on conditions); "
+                "omit when not applicable",
+            ),
+            "effect_size": string_schema(
+                "Optional magnitude of the effect in the paper's own terms (e.g. '+2.1 BLEU', "
+                "'3 orders of magnitude faster', 'r=0.83'); omit when none is stated"
+            ),
+            "scope": string_schema(
+                "Optional conditions/range under which the finding holds (e.g. 'on 11 of 12 "
+                "tasks', 'in low-resource regimes'); omit when unrestricted"
+            ),
         },
         "Method": {
             **base_unit_properties("Method"),
@@ -347,6 +394,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "unit": string_schema("Non-empty measurement unit such as %, ms, BLEU, F1, perplexity, or unitless"),
             "setup_ids": measure_setup_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
+            "objective_class": enum_schema("measure_objective_class", "Optional (FG-6): which axis of a multi-objective evaluation this measure sits on — primary_quality (the headline quality metric, the default — omit), cost_efficiency (latency/compute/memory/params), fairness, safety, or robustness. Set it on the non-primary axes of a trade-off so a cost/fairness/safety measure is not read as uniformly positive evidence."),
             "scores": scores_schema("Flat array of reported scores under this measure — one row per system, covering the method family's own variants and every compared-against baseline"),
         },
     }
@@ -467,6 +515,15 @@ def node_census_schema() -> dict[str, Any]:
                     "argument_flow": string_schema(
                         "One sentence describing how problem, method, and evidence fit together."
                     ),
+                    "headline_result": string_schema(
+                        "Optional (FG-9): one sentence stating the paper's headline established RESULT — the "
+                        "answer the evidence demonstrates — as distinct from central_contribution (which names "
+                        "the artifact/contribution). State the finding itself: 'value learning is not the main "
+                        "bottleneck in offline RL', 'the model matches SOTA with 10x fewer parameters'. Fill it "
+                        "whenever the paper establishes a clear headline result (for an analysis/'is X the "
+                        "bottleneck?' paper this IS the payload); omit only for a pure resource/tool release with "
+                        "no empirical result. This stays a summary annotation — do NOT add a Finding node for it."
+                    ),
                 },
             },
             "nodes": {
@@ -537,7 +594,11 @@ def relation_pass_schema() -> dict[str, Any]:
                             "type": "string",
                             "enum": STAGE_B_RELATION_ORDER,
                             "description": (
-                                "part_of = composition between Methods/ExperimentSetups; "
+                                "part_of = internal composition between Methods/ExperimentSetups; "
+                                "builds_on = the contribution extends external prior work it derives from; "
+                                "uses = the contribution depends on an external method/dataset as a tool; "
+                                "assumes = a theorem/result Method holds under a theoretical_setting/structural_class ExperimentSetup; "
+                                "co_contribution = two co-equal contributions of one paper (emit once, not fake part_of); "
                                 "compares_to = contrasted peers; "
                                 "evaluates = a Measure measures a Method."
                             ),

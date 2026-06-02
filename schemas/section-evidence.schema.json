@@ -90,6 +90,17 @@
                 ],
                 "description": "Whether higher or lower values are preferred; omit when unspecified"
               },
+              "objective_class": {
+                "type": "string",
+                "enum": [
+                  "primary_quality",
+                  "cost_efficiency",
+                  "fairness",
+                  "safety",
+                  "robustness"
+                ],
+                "description": "Optional (FG-6): which axis of a multi-objective evaluation this measure sits on \u2014 primary_quality (the headline quality metric, the default \u2014 omit), cost_efficiency (latency/compute/memory/params), fairness, safety, or robustness. Set it on the non-primary axes of a trade-off so a cost/fairness/safety measure is not read as uniformly positive evidence."
+              },
               "scores": {
                 "type": "array",
                 "items": {
@@ -122,6 +133,25 @@
                     "setup_id": {
                       "type": "string",
                       "description": "ID of the local ExperimentSetup unit this row was measured under \u2014 the dataset/split/protocol (e.g. 'exp:wmt14_ende'). This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row."
+                    },
+                    "value_kind": {
+                      "type": "string",
+                      "enum": [
+                        "numeric",
+                        "symbolic",
+                        "asymptotic",
+                        "qualitative",
+                        "curve"
+                      ],
+                      "description": "How to read `value`: numeric (a number, the default \u2014 omit the field), symbolic (a closed-form expression like '2/\u0394\u00b7logT'), asymptotic (a complexity class like 'O(n^6)' or 'PSPACE-complete'), qualitative (a categorical verdict), or curve (a trend). Omit for an ordinary numeric leaderboard score."
+                    },
+                    "opponent_id": {
+                      "type": "string",
+                      "description": "Optional (FG-6): for a pairwise/win-rate row (A-vs-B), the id of the Method this row's system was compared against \u2014 `system_id` is system A, `opponent_id` is system B, `value` is A's win rate vs B. Omit for an ordinary absolute-score row."
+                    },
+                    "judge_id": {
+                      "type": "string",
+                      "description": "Optional (FG-6): for a judged row (LLM-as-judge or human evaluation), the id of the judge \u2014 a Method, or an inference_protocol/population ExperimentSetup that was materialized for the evaluator. Omit when the score needs no judge."
                     }
                   }
                 },
@@ -169,6 +199,9 @@
                   "dataset",
                   "benchmark",
                   "task",
+                  "theoretical_setting",
+                  "structural_class",
+                  "contribution_resource",
                   "data_split",
                   "inference_protocol",
                   "training_config",
@@ -229,13 +262,34 @@
                   "comparative",
                   "modeling",
                   "ablation_finding",
-                  "failure_mode"
+                  "failure_mode",
+                  "theorem",
+                  "lemma",
+                  "bound"
                 ],
                 "description": "Classification of the finding"
               },
               "statement": {
                 "type": "string",
                 "description": "The finding as a single declarative sentence"
+              },
+              "polarity": {
+                "type": "string",
+                "enum": [
+                  "positive",
+                  "negative",
+                  "neutral",
+                  "mixed"
+                ],
+                "description": "Optional sign of the finding's headline effect from the method/hypothesis's perspective: positive (confirms/improves), negative (refutes/degrades), neutral (no significant effect / a null result), mixed (direction depends on conditions); omit when not applicable"
+              },
+              "effect_size": {
+                "type": "string",
+                "description": "Optional magnitude of the effect in the paper's own terms (e.g. '+2.1 BLEU', '3 orders of magnitude faster', 'r=0.83'); omit when none is stated"
+              },
+              "scope": {
+                "type": "string",
+                "description": "Optional conditions/range under which the finding holds (e.g. 'on 11 of 12 tasks', 'in low-resource regimes'); omit when unrestricted"
               }
             }
           }
@@ -264,7 +318,7 @@
                   "about",
                   "supports"
                 ],
-                "description": "about = a Finding is about a Method/ExperimentSetup/Measure; supports = a Measure or Finding supports a Finding."
+                "description": "about = a Finding is about a Method/ExperimentSetup/Measure; supports = a Measure, Finding, or Method (a theorem/proof) supports a Finding."
               },
               "target_id": {
                 "type": "string",

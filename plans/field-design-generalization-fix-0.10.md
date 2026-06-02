@@ -1,6 +1,7 @@
 # 修改计划：字段设计泛化性修复 → section-ir-0.10
 
-- **状态**：🟡 **计划草案，决策待定**。问题已审计完毕、已映射到具体代码;**6 条设计岔路(FORK-A..F)尚未拍板,用户后续决策后再动手**。本轮**未动任何代码**。分支 `planning-stage-redesign-deepseek`。
+- **状态**：🟢 **决策已拍板,实施中(2026-06-01)**。FORK 全部敲定:**A2**(census 仅加 `spine_summary.headline_result` 指针,不加 Problem/Finding 节点类型)· **B=role/method_kind 扩展**(不加新一等类型;FG-2 走完整 stopgap 打包)· **C2**(派生 Document.role)· **D1**(上浮——经核已实现;D2 视占比再做)· **E1**(全程 additive,Phase 6 一次切 0.10 + 重抽 764)· **F2 先**(reference 角色回填)再 F1。**范围 = Full 0.10**(全 12 FG,全 6 阶段,收尾重抽 764)。分支 `planning-stage-redesign-deepseek-heavy-fix`。
+  - **动手前对 HEAD `d6fb8fe` 核实的三点修正**:① **FG-8 比"prompt 级"更轻** —— `RELATION_MATRIX:235-236` 与 `evidence.md:79-80` 端点表均已许 `about→{Method,ExperimentSetup,Measure}`/`supports Finding→Finding`,单态纯由 worked example 偏向 Method 端点造成,改例即可、无契约改动、无需单独复核。② **FG-10 D1(上浮)已实现** —— `assemble_extraction:1859-1862` 已把 dropped-Measure 警告并入 `uncertain_assignments`,`build_extraction_notes:1394` 已把未覆盖 must-node 列入 `uncovered_items`;故 FG-10 剩余实为 D2/D3 恢复 + ~360 悬挂边(后者仍延后,见风险 6)。③ FG-1 强制是双重硬连:`ROLE_TO_TYPE['contribution']='Method'`(:119)+ `normalize_census_nodes` 提升逻辑(:1151-1162),两处都要开例外。
 - **拟定日期**：2026-06-01
 - **问题来源(必读)**：`issues/field-design-generalization-issues.zh.md` —— 12 条字段泛化缺口 FG-1..FG-12 的完整证据/根因/单条修复。本文件只管**「怎么改、改哪里、什么顺序、哪些要你拍板」**,不重复每条 issue 的证据。
 - **关联**：内存 `genz-field-design-audit.md`(审计全貌);回归语料 `issues/test-corpus-by-issue/`(12 个 FG 文件夹,每个含 `papers/<id>.md` + `<id>.before.json`,papers/ gitignored);规格 `docs/section-ir-0.9-redesign.md`(当前 0.9 两级 type/role 契约)。
@@ -74,7 +75,9 @@ issues 文档点名 **FG-9(census 对 Problem/Finding 失明)** 是 FG-1/FG-2/FG
 - 触点另含:`_drop_invalid_relations`/`_drop_baseline_evaluates` 对扩展后矩阵重新校验。
 - 测试:重抽 FG-04/FG-12 文件夹。**解锁** Phase 5 的 FG-7 `co_contribution` 边。
 
-### Phase 3 — 非 Method 贡献(FG-1)+ Document 体裁激活 [L]
+### Phase 3 — 非 Method 贡献(FG-1)+ Document 体裁激活 [L] — ✅ DONE (2026-06-01)
+> **实现**:走的是 `contribution_resource`(新 census 角色,`ROLE_TO_TYPE→ExperimentSetup`,`CONTRIBUTION_ROLES`)而非 plan 原稿的「`METHOD_KINDS+=dataset/benchmark`」——benchmark/数据集贡献**结构上就是 ExperimentSetup**,原生挂分数、**无双胞胎可言**(消除而非合并)。`METHOD_KINDS` 只加 `resource`/`taxonomy`(非数据的资源/分类法贡献仍是 Method)。FG-3 体裁由 `_derive_document_role`(据材化贡献单元类型)派生。`normalize_census_nodes` 根逻辑改写(must-Method 优先 contribution,否则 must-ExperimentSetup→contribution_resource)。
+> **验证**:FG-01 三篇 benchmark 论文(GraspNet/GRASP/WikiMixQA)全 `contribution_resource`+`benchmark_survey`+0 双胞胎;负对照三篇经验方法论文仍 `Method`+`research_article`+0 误判;0 校验问题。
 **目标**:让 benchmark/数据集/资源当贡献,不被强制成 `Method[algorithm]` 也不复制成断连双胞胎。
 - 现状:贡献 762/762 全是 Method;94/764 贡献名含 benchmark/dataset/taxonomy/survey 字样;9-16 篇精确同名 Method+ExperimentSetup 双胞胎无边。双胞胎是**结构强制**(benchmark 必须再获一个 ExperimentSetup 化身才能经 `setup_ids`/`scores.setup_id` 挂分数)。
 - 改动:
@@ -86,21 +89,31 @@ issues 文档点名 **FG-9(census 对 Problem/Finding 失明)** 是 FG-1/FG-2/FG
   - **FG-3 派生在此激活**:`build_document_unit` 据贡献节点 `role`/`method_kind` 派生体裁(benchmark/dataset/taxonomy/survey ⇒ `benchmark_survey`/`review`)。
 - 测试:重抽 FG-01(+ 复查 FG-03 派生已激活)。
 
-### Phase 4 — 理论之家(FG-2)+ 静默丢失上浮(FG-10 D1) [L]
+### Phase 4 — 理论之家(FG-2)+ 静默丢失上浮(FG-10 D1) [L] — ✅ DONE (2026-06-01)
+> **实现**:`FINDING_ROLES += {theorem,lemma,bound}`、`METHOD_KINDS += {theorem,lemma,bound,definition}`(method.md 抑制其 I/O/formulas/objective_function);`theoretical_setting`/`structural_class` 落 **census substrate**(NODE_ROLES/ROLE_TO_TYPE/ROLE_CLUSTER,自动入 SUBSTRATE_ROLES);`assumes`(Method→ExperimentSetup,stage-B)+ **放宽 `supports` 允许 Method 源**(proves/establishes 不加,被吸收);`scores.value_kind ∈ {numeric,symbolic,asymptotic,qualitative,curve}`(可选,省略⇒numeric);`implementation_notes` 转 schema-optional。FG-10 D1:被丢空-scores Measure 经 `_drop_empty_scores_measures(dropped_out=)` 上浮到 `uncovered_items`(validator 放宽:uncovered_items 可含非 census 的装配丢弃单元)。
+> **验证**:FG-02 三篇(051 PSPACE-complete / 024 Fair Range Clustering / 013 k-Trine)——method_kind theorem/definition/bound、Finding theorem/lemma/bound、value_kind symbolic/asymptotic、`assumes`→theoretical_setting、**定理 Method 零伪造 I/O**,均 0 校验问题;负对照三篇经验论文 theory 标签全 0(无误判)。114 单测绿。
 **目标**:给定理/界/定义忠实表示,并停止无声销毁自创指标贡献。
 - **FG-2 必须打包(五子症状同根,只加 method_kind 是陷阱)**:
-  - `METHOD_KINDS`(`:219`)、`FINDING_ROLES`(`:198-205`)`+= {theorem, lemma, bound, definition}`。
-  - `RELATION_MATRIX` 加 `proves`/`establishes`(Method→Finding)、`assumes`。⚠️ **未决**:`assumes` 的端点类型未定(Method→Finding? →Problem? →ExperimentSetup?),太宽会重演 `compared_against` 的过载 —— 动手前定死端点。
-  - **放宽 `supports` 允许 Method→Finding**(FG-2d:定理被材化成 Method 时,招牌理论结果与证明在图上断开)。
-  - `scores` 加 `value_kind ∈ {numeric, symbolic, asymptotic, qualitative, curve}` —— 符号界(`O(n^6)`/`PSPACE-complete`)不再塞进伪榜单;`comparison_direction` 对符号结果可空(`COMPARISON_DIRECTIONS` 已有 `unspecified`,`:220`)。
-  - `EXPERIMENT_SETUP_ROLES`(`:188-194`)`+= {theoretical_setting, structural_class}`(图类/博弈族/PDDL 域/分布假设 regime 不再被误标 dataset/benchmark)。
+  - 🟢 **DECIDED(动手前定死的两个端点 + 一个简化,2026-06-01)**:
+    - `assumes` = **Method → ExperimentSetup**(stage-B):定理-Method 假设其理论基底(theoretical_setting/structural_class)。端点最紧、两端皆 census 节点故 relation pass 可写,复用 builds_on/uses 的 stage-B 路径。Finding-源的假设(罕见)不在范围。
+    - `proves`/`establishes` **不加** —— 由「放宽 `supports` 允许 Method→Finding」吸收(定理-Method `supports` 结果-Finding)。避免 critic 警告的近义边过载;「已证 vs 观测」的区分已由 `Finding.role`(theorem/lemma/bound=已证)+ supports 源类型(Method 源=形式、Measure 源=经验)承载,无信息损失。
+    - theoretical_setting/structural_class 落 **census substrate**(NODE_ROLES+ROLE_TO_TYPE=ExperimentSetup+ROLE_CLUSTER=testbed,自动流入派生的 SUBSTRATE_ROLES),**不**放 config 块 —— 模型现已在 census 浮现它们(误标成 dataset/benchmark/task),最小修复是给对的角色;这也让 `assumes` 两端都是 census 节点。
+  - `METHOD_KINDS`(`:241`)`+= {theorem, lemma, bound, definition}`(形式陈述/构造作为器械);`FINDING_ROLES`(`:207`)`+= {theorem, lemma, bound}`(已证结果 —— definition 非结果,不入 Finding.role)。
+  - **放宽 `supports` 允许 Method→Finding**(FG-2d:定理被材化成 Method 时,招牌理论结果与证明在图上断开;同时吸收 proves)。
+  - `scores` 加 `value_kind ∈ {numeric, symbolic, asymptotic, qualitative, curve}` —— 符号界(`O(n^6)`/`PSPACE-complete`)不再塞进伪榜单;`comparison_direction` 对符号结果可空(`COMPARISON_DIRECTIONS` 已有 `unspecified`,`:243`)。
+  - `EXPERIMENT_SETUP_ROLES`(`:197`)经 census substrate 自动获得 `{theoretical_setting, structural_class}`(图类/博弈族/PDDL 域/分布假设 regime 不再被误标 dataset/benchmark)。
   - 放宽非实现性结果的 `implementation_notes` 必填。
   - prompts:`method.md`(`~:30` 当前指示证明用 `method_kind=algorithm`,须改)、`evidence.md`。
 - **FG-10 D1(便宜、不削弱守卫的那一半)**:别再静默丢弃 —— 把每个被丢的空 scores Measure(`_drop_empty_scores_measures`,`~:1518`)和未覆盖的指标 must-node(覆盖逻辑 `~:1006`)显式上浮到 `extraction_notes.uncovered_items`。**(critic 提示:`:1518-1535` 似乎已返回 warning 在 `~:1860` 记录 —— 动手前确认 D1 是「改进可见性」还是已部分实现,以免空做。)** D2(保留+status,放宽非空 scores 校验)与 ~360 条悬挂边(跨段一致性,FG-10 另一半)**本阶段不做**,见风险 6。
 - ⚠️ `FORBIDDEN_UNIT_TYPES`(`:156-168`)含 `Proposition`(0.8 退役);若**将来**走 FG-2 的新类型路径(FORK-B B3,不推荐),不可复用 `Proposition` 名且须从 FORBIDDEN 移除新名。推荐的 method_kind/role 路径完全绕开 FORBIDDEN。
 - 测试:重抽 FG-02/FG-10。
 
-### Phase 5 — 结果中心规划 + Finding-as-root [XL]
+### Phase 5 — 结果中心规划 + Finding-as-root [XL] — ✅ DONE (A2-scoped, 2026-06-01)
+> **实现(明确边界)**:**FG-9/A2** —— `spine_summary.headline_result`(可选,census schema + validate + node-census.md)+ 装配 `build_document_unit` lift 到 **`Document.headline_result`**(新可选字段,空则省略)。**FG-5** —— `resolves` 现已经由(可能空洞的)contribution 节点闭合到 headline Finding(既有机制,L385 单测);**A2 不改 census 节点发射**,空洞-Method 仍被 census 发出 —— 真正的结构性 Finding-as-root(消除空洞 Method、Finding 当结构根)是 **A1**,本阶段**不做**(plan 自身已 sanction 条件调度)。A2 交付的是「结果一等化」(headline_result 上浮到 Document)+ arc 闭合在 finding(既有)。**FG-7** —— 加 `co_contribution`({Method,ExperimentSetup}↔同,stage-B)边 + `_assign_resolves` 沿 co_contribution **扇出 arc 根**(fixpoint)+ relation-pass.md 指引;**另修自环 bug**(`_drop_invalid_relations` 丢 source==target,影响全语料,0.9 既存)。
+> **验证**:FG-05/FG-07 四篇 —— headline_result 精确命中结果中心论文(019「value learning is not the main bottleneck」/042/035)并上浮 Document;**reframe(据负对照实测)**:模型对经验方法论文也填 headline_result(ZIPA/OSP2B「one-stage outperforms two-stage」)——这是**特性非误判**(每篇都有 headline 结果,与 thesis=artifact 互补,更好地服务 FG-9「结果获得规划槽位」),遂把 schema/prompt 从「仅结果中心」重述为「论文的 headline 已确立结果,纯资源/工具发布才省略」。**co_contribution 模型 0 采纳**(census 把 co-equal 方法压成 component、normalize 降级额外 contribution —— 无 co-equality 信号,属单主干/A1 限制,已记录;边可用+单测+扇出就绪,待 A1 census 改造或模型识别)。122 单测绿,6/6 论文(含负对照)0 校验问题。
+> **残留→A1(已知、已记录)**:result-centric 论文的空洞-Method coercion 仍在(headline_result 注解可见但结构未重整);co_contribution 模型采纳需 census 识别 co-equal 贡献(触碰单一-contribution 不变式)。
+>
+> **【后续修复 · Pass 1,2026-06-01,uncommitted】co_contribution 已修复。** 根因是 census 单根不变式(非边),遂放宽:`validate_census` `root_count != 1`→`< 1`(≥1,>1 合法);`normalize_census_nodes` 保留每个 **`must`** 根、仅降级较弱 `should` 误标(防根泛滥);`node-census.md` 加 co-equal 豁免("罕见;须真正共生可分;存疑取单根");`relation-pass.md` 兄弟变体→`compares_to`/`co_contribution` 而非 `part_of`。验证:013/035/074 全触发 `co_contribution`、假 `part_of` 消失、arc 跨共生贡献扇出、0 校验问题;过度触发 **0/6** 干净单贡献对照长第二根;129 单测绿(3 个旧单根测试改写);CLAUDE.md 同步;无 schema regen。**剩余 A1 仅 = hollow-Method(FG-5,Pass 2,未开工)。**
 **目标**:停止 census 在结果中心型论文上锁死器械中心骨架,让 Finding 直接闭合 arc。
 - **FG-9(FORK-A A2)**:加可选 `spine_summary.headline_result` 槽位(`validate_census` `:1172-1178` 已 inspect spine_summary);装配用它锚定 `resolves` 并派生体裁 —— **不新增 census 节点类型**。
   - 触点:`schemas/node-census-output.schema.json` spine_summary 槽位;`node-census.md`(`:33` 当前禁 Problem/Finding,放宽到允许 headline_result 注解)。
@@ -109,7 +122,9 @@ issues 文档点名 **FG-9(census 对 Problem/Finding 失明)** 是 FG-1/FG-2/FG
 - **FG-7**(大部分是文档化 + 小边):`resolves` 扇形是 `_assign_resolves` 按设计产生、**语义无损**(CVPR 本身就 2-6 条/篇),**别再把它描述成「单一收尾箭头」**;加 `co_contribution`(Method↔Method)边给 ~4-5 篇 co-equal 方法论文(如 `013_ICML_2008`/`035_ICML_2025`),替代假 `part_of`;允许 arc 扇出到 co-equal 贡献。依赖 Phase 2 的边基础设施。
 - 测试:重抽 FG-09/FG-05/FG-07。**若 A2 后仍有残留 hollow-Method coercion,A1(完整 census 节点类型重写)在此调度。**
 
-### Phase 6 — 非榜单评测(FG-6)+ 切版 + 重抽 [L]
+### Phase 6 — 非榜单评测(FG-6)+ 切版 + 重抽 [L] — ✅ DONE (2026-06-01)
+> **实现**:FG-6 —— score 行可选 `opponent_id`(→Method)/`judge_id`(→Method/ExperimentSetup)+ Measure 可选 `objective_class ∈ {primary_quality,cost_efficiency,fairness,safety,robustness}`(走 score-row 字段路线,非 pairwise_preference 子类型);validate + `_repair_score_refs` 拉黑悬挂 opponent/judge + dedup remap 覆盖新键。**切版**:`ir_version` 两处(emit `:1555` + validator `:3158`)0.9→0.10,prompt 头部同切,RELATION_MATRIX 现 11 边。renderer:新边 REL_OUT/IN/COLOR + Document `headline_result`(Result 行)+ Finding payload/objective_class 作 tag pill。CLAUDE.md 加 11-边矩阵 + 0.10 delta 块;memory 加 [[section-ir-0.10-generalization-fix]]。
+> **验证(用户改写:只测 per-issue 语料,不跑 764)**:最终 19 篇跨体裁(benchmark/theory/result-centric/co-contribution/empirical/FG-12 reference-heavy)= **19/19 valid,全 section-ir-0.10,0 校验问题**;特性全触发(builds_on 64 / uses 105 / headline_result 19/19 / theory method_kind 24 / value_kind-nonnumeric 86 / opponent|judge 32 / objective_class 13 / doc.role benchmark_survey+review+research_article —— 死轴复活);co_contribution 模型 0 采纳(已记录 A1 限制)。127 单测绿(tests/ 全 gitignored,本地校验)。
 **目标**:表示成对/裁判/多目标评测,然后切 0.10 并重抽。
 - **FG-6**(moderate/occasional,issues 文档明确缩范围 —— 榜单 + 多 split 已干净迁移,「别动」):score 行加可选 `opponent_id`(→Method)、`judge_id`(→ExperimentSetup/Method),或加 `pairwise_preference` Measure 子类型 `{system_a_id, system_b_id, judge_id, value}`;Measure 加多目标类别轴(primary-quality/cost/fairness/safety)。
 - **切版 0.9→0.10(FORK-E E1)**:Phases 1-5 全做成 additive(新枚举/新边/可选字段都是 0.9 超集),开发期版本号不动;Phase 6 一次性:

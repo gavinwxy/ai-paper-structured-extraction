@@ -70,6 +70,10 @@ RESOURCE_ICONS = {
 # Human phrasing for each relation, from the source's view (out) and the target's view (in).
 REL_OUT = {
     "part_of": "part of",
+    "builds_on": "builds on",
+    "uses": "uses",
+    "assumes": "assumes",
+    "co_contribution": "co-contribution with",
     "compares_to": "compared with",
     "evaluates": "evaluates",
     "about": "about",
@@ -79,6 +83,10 @@ REL_OUT = {
 }
 REL_IN = {
     "part_of": "includes",
+    "builds_on": "extended by",
+    "uses": "used by",
+    "assumes": "assumed by",
+    "co_contribution": "co-contribution with",
     "compares_to": "compared with",
     "evaluates": "evaluated by",
     "about": "discussed by",
@@ -86,9 +94,13 @@ REL_IN = {
     "motivates": "motivated by",
     "resolves": "resolved by",
 }
-# Accent colour per relation family (structural / evaluative / evidential / arc).
+# Accent colour per relation family (structural / dependency / evaluative / evidential / arc).
 REL_COLOR = {
     "part_of": "#64748b",
+    "co_contribution": "#64748b",
+    "builds_on": "#3b82f6",
+    "uses": "#3b82f6",
+    "assumes": "#3b82f6",
     "compares_to": "#64748b",
     "evaluates": "#14b8a6",
     "about": "#22c55e",
@@ -482,7 +494,11 @@ def render_unit_relations(uid: str, out_edges: dict, in_edges: dict, unit_index:
 # --- Unit cards ---
 
 META_FIELDS = {"id", "type", "provenance", "role"}
-TAG_FIELDS = ("method_kind", "comparison_direction", "unit")
+# Scalar fields shown as pills. Includes the 0.10 optional payloads: Measure `objective_class`
+# (FG-6) and the Finding quantitative payload `polarity`/`effect_size`/`scope` (FG-11), each shown
+# only when populated.
+TAG_FIELDS = ("method_kind", "comparison_direction", "objective_class", "unit",
+              "polarity", "effect_size", "scope")
 PROSE_FIELDS = ("description", "implementation_notes")
 RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setup_ids", "statement", "name"}
 
@@ -819,11 +835,17 @@ def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
 
     thesis = (doc.get("thesis") or "").strip()
     thesis_html = f'<div class="thesis"><span class="thesis-l">Thesis</span> {escape(thesis)}</div>' if thesis else ""
+    headline = (doc.get("headline_result") or "").strip()
+    headline_html = (
+        f'<div class="thesis"><span class="thesis-l">Result</span> {escape(headline)}</div>'
+        if headline else ""
+    )
     return f"""
     <header class="paper-header">
       <h1>{escape(title)}</h1>
       {authors_html}
       {thesis_html}
+      {headline_html}
       {resources_html}
     </header>"""
 

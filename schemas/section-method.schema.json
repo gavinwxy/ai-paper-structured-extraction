@@ -38,8 +38,7 @@
               "provenance",
               "role",
               "name",
-              "description",
-              "implementation_notes"
+              "description"
             ],
             "additionalProperties": false,
             "properties": {
@@ -82,7 +81,13 @@
                   "algorithm",
                   "model_architecture",
                   "training_strategy",
-                  "objective_function"
+                  "objective_function",
+                  "resource",
+                  "taxonomy",
+                  "theorem",
+                  "lemma",
+                  "bound",
+                  "definition"
                 ],
                 "description": "Optional structural classification of the method; omit when unclear"
               },
