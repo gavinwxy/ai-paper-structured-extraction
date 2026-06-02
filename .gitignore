@@ -28,5 +28,9 @@ archive/*
 # batch extraction outputs
 production-outputs/
 
-# copied test-corpus papers (source .md + before.json); track only MANIFEST.md/README.md
-issues/test-corpus-by-issue/*/papers/
+# development docs — kept local, not published (public design notes live in README.md)
+CLAUDE.md
+AGENTS.md
+docs/
+issues/
+plans/

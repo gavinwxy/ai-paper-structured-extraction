@@ -395,12 +395,10 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 │   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
 │   ├── render_extraction.py             # Render extraction JSON → HTML
 │   └── count_extraction.py              # Node/relation counts
-├── tests/                               # Local test harness + corpus (not version-controlled)
-│   ├── test_section_pipeline.py         #   unit tests
-│   ├── test_section_extraction.py       #   end-to-end LLM smoke test (reads tests/papers/{id}.md)
-│   └── benchmark/                       #   real papers (NNN_*.md, with [§N] markers) for the batch path
-├── CLAUDE.md                            # Claude Code instructions (authoritative project notes)
-└── AGENTS.md                            # Agent instructions (mirrors CLAUDE.md)
+└── tests/                               # Local test harness + corpus (not version-controlled)
+    ├── test_section_pipeline.py         #   unit tests
+    ├── test_section_extraction.py       #   end-to-end LLM smoke test (reads tests/papers/{id}.md)
+    └── benchmark/                       #   real papers (NNN_*.md, with [§N] markers) for the batch path
 ```
 
 ## Validation
@@ -427,13 +425,13 @@ FG-12): a non-Method contribution (`contribution_resource`), a theory home (`met
 theorem/lemma/bound/definition`, `Finding.role += theorem/lemma/bound`, symbolic score values,
 `assumes`), a derived `Document.role`, the `builds_on`/`uses`/`co_contribution` edges, non-leaderboard
 evaluation (pairwise/judge score fields, multi-objective measures), a Finding-as-root analysis paper,
-an optional Finding quantitative payload, and reference-role edge backfill. See `CLAUDE.md` for the
-full FG-by-FG delta.
+an optional Finding quantitative payload, and reference-role edge backfill.
 
 ## Design notes & archived material
 
-The authoritative design notes — the section-IR field reference, the two-level type/role taxonomy,
-the relation matrix, and the full FG-by-FG `section-ir-0.10` delta — live in `CLAUDE.md`.
+The data model is specified in [The section-IR data model](#the-section-ir-data-model) above; the
+constants in `section_pipeline.py` (`RELATION_MATRIX`, `ROLE_VOCAB_BY_TYPE`, `UNIT_TYPES`, …) are the
+authoritative source from which the JSON schemas are generated.
 
 Historical paradigm-based code and legacy utilities are in `archive/`. Do not treat archived
 material as active implementation guidance.
