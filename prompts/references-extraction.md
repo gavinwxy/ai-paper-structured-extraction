@@ -20,27 +20,26 @@ Rules:
 For each reference, also fill `relation` — how the cited work relates to THIS (the citing) paper. Judge from the in-text citation context (e.g. "we adopt [12]", "unlike [12]", "we compare against [12]"), not from the bibliography entry alone.
 
 - `roles` (one or more):
-  - background — field, paradigm, or concept context.
-  - motivation — why the problem matters, or a prior limitation/gap that motivates this work.
-  - uses_method — a method, architecture, algorithm, technique, tool, optimizer, or library this paper reuses or builds on.
-  - uses_data — a dataset or benchmark this paper uses.
-  - extends — the direct predecessor this paper improves on or extends.
-  - baseline — a method this paper compares against experimentally.
-  - contrast — work this paper disagrees with or critiques.
-  - future_work — cited only as a future direction.
-  - related — passing mention; use only when no stronger role fits.
+  - extends — a direct predecessor THIS paper's contribution builds on, improves, or extends (the cited method your work descends from).
+  - uses_component — a method, architecture, algorithm, technique, tool, optimizer, library, dataset, or benchmark reused as a building block (not the contribution's lineage).
+  - compares — compared against experimentally (a baseline) or critiqued/disagreed with. Set `stance` to neutral for a plain baseline, critical for a critique.
+  - background — field/paradigm/concept context, why the problem matters, a future-work mention, or a passing related mention.
+
+  How to choose: is the cited work a DIRECT PREDECESSOR your contribution descends from (you build on / improve / extend it)? -> extends. Reused only as a part — a module, tool, dataset, or benchmark? -> uses_component. An experimental comparison or a critique? -> compares. Otherwise -> background. When ambiguous between extends and background, PREFER extends if the cited work is plausibly a direct predecessor (high recall). Never invent a relationship the in-text context does not support.
 - `stance`: supportive (builds on it), neutral, or critical (critiques/contrasts). Default neutral.
 - `salience`: central (load-bearing — a main baseline, a core building block, or relied on repeatedly) or peripheral (passing mention).
-- `provides_name`: for uses_method/uses_data/extends/baseline, the single most specific named artifact taken from the cited work (e.g. "Transformer", "ImageNet", "Adam", "BERT"); empty string otherwise.
+- `provides_name`: for extends, uses_component, and compares, the single most specific named artifact taken from or compared against the cited work (e.g. "Transformer", "ImageNet", "Adam", "BERT"); empty string otherwise.
 - `provides_unit_ids`: always output []. The pipeline fills this in later; never populate it.
 
 Examples:
-- "We adopt the Transformer architecture [12]." -> roles ["uses_method"], stance "supportive", salience "central", provides_name "Transformer".
-- "Unlike recurrent models [7], which preclude parallelization within sequences, ..." -> roles ["motivation","contrast"], stance "critical", salience "peripheral", provides_name "".
-- "We compare against BERT [9] on GLUE." -> roles ["baseline"], stance "neutral", salience "central", provides_name "BERT".
+- "We build our model on top of BERT [12], extending it with a retrieval module." -> roles ["extends"], stance "supportive", salience "central", provides_name "BERT".
+- "We adopt the Transformer architecture [12]." -> roles ["uses_component"], stance "supportive", salience "central", provides_name "Transformer".
+- "We train on ImageNet [4]." -> roles ["uses_component"], stance "neutral", salience "central", provides_name "ImageNet".
+- "We compare against BERT [9] on GLUE." -> roles ["compares"], stance "neutral", salience "central", provides_name "BERT".
+- "Unlike recurrent models [7], which preclude parallelization within sequences, ..." -> roles ["compares"], stance "critical", salience "peripheral", provides_name "".
 - "Deep networks have advanced many fields [1,2,3]." -> roles ["background"], stance "neutral", salience "peripheral", provides_name "".
 
-When the relationship is unclear, use roles ["related"], stance "neutral", salience "peripheral", provides_name "". Do not invent a relationship.
+When the relationship is unclear, use roles ["background"], stance "neutral", salience "peripheral", provides_name "". Do not invent a relationship.
 
 Output a single JSON object with key: references (an array of reference entries; empty array when the paper has none). Output only that JSON object — no markdown code fences or commentary.
 ```

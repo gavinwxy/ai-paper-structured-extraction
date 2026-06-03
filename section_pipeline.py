@@ -361,18 +361,22 @@ STAGE_C_RELATIONS = {"about", "supports", "motivates"}
 SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
 
-# FG-12 (section-ir-0.10): map a reference's citation role to the unit-graph edge it implies, so
-# the reference vocabulary (extends/uses/baseline + stance) is reconciled onto the unit graph
-# (reconcile_reference_units) instead of being stranded. Context-only roles (background/related/
-# motivation/future_work) intentionally map to nothing — that absence is how a genuinely-run
-# baseline (→ compares_to) is distinguished from a related-work mention, addressing the
-# compared_against overload (FG-4) without inventing a new census role.
+# FG-12 (section-ir-0.10): map a reference's citation role to the unit-graph edge it implies, so the
+# reference vocabulary is reconciled onto the unit graph (reconcile_reference_units) instead of being
+# stranded. The 0.10 Tier-1 vocab simplifies the references roles to four classes: `extends` (the
+# contribution's direct predecessor) -> `builds_on`; `uses_component` (a reused method/data building
+# block, merging the old uses_method+uses_data) -> `uses`; `compares` (an experimental baseline or a
+# critique, merging the old baseline+contrast — the distinction now rides on `stance`) -> `compares_to`.
+# The single context-only role `background` (merging the old background/motivation/future_work/related)
+# maps to nothing — that absence is how a genuinely-run comparison (→ compares_to) is distinguished
+# from a context mention, addressing the compared_against overload (FG-4) without inventing a new
+# census role. (A finer evolution split {improves/replaces/adapts} carried on an `evolution_kind`
+# edge attribute was A/B-tested and dropped 2026-06-03: the model collapsed all evolution to
+# `extends`, emitting zero of the finer kinds across 10 mixed-style papers.)
 REFERENCE_ROLE_TO_RELATION: dict[str, str] = {
     "extends": "builds_on",
-    "uses_method": "uses",
-    "uses_data": "uses",
-    "baseline": "compares_to",
-    "contrast": "compares_to",
+    "uses_component": "uses",
+    "compares": "compares_to",
 }
 UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Document": "doc:",
