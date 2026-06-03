@@ -2458,16 +2458,47 @@ def _normalize_name(text: Any) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
-def _normalize_cite_key(value: Any) -> str:
-    """Normalize a citation marker to a comparable key: strip brackets/whitespace, lowercase.
+# An author-year citation marker names the same reference two ways across stages: the census
+# tends to echo the in-text marker verbatim ("Warburg et al., 2021", "Qin et al., 2022a") while
+# the references pass compacts it ("Warburg2021", "Qin2022a"). A strip-brackets/lowercase compare
+# misses that pair (the "et al.", commas, and secondary authors survive on one side only), so on
+# the ros_ai 8-venue corpus the cite-key join held at 98% on numbered papers but fell to 45% on
+# author-year papers. Reducing any year-bearing marker to <first-author><year><disambig-letter>
+# on BOTH sides converges them; bare numeric markers and year-less keys keep the old behavior.
+_CITE_YEAR_RE = re.compile(r"(1[89]\d\d|20\d\d)([a-z])?")
+_CITE_AUTHOR_STOPWORDS = frozenset({"et", "al", "and", "the"})
 
-    A reference's `id` and a census node's `cite_keys` both name the same in-text marker but
-    may differ cosmetically ('[31]' vs '31'); normalizing both lets the bibliography join the
-    spine on the paper's own citation rather than on a fuzzy name match.
+
+def _normalize_cite_key(value: Any) -> str:
+    """Normalize a citation marker to a comparable key so census `cite_keys` and reference `id`s
+    join on the paper's own citation rather than a fuzzy name match.
+
+    Numbered markers collapse to their digits ('[31]' -> '31'). Author-year markers collapse to
+    '<first-author-lastname><year><letter>' regardless of surface form ('Warburg et al., 2021' ->
+    'warburg2021', 'Qin et al., 2022a' -> 'qin2022a', already-compact 'Vaswani2017' -> 'vaswani2017'),
+    so the census's verbatim in-text form and the references pass's compacted form land on the same
+    key. A year-less, non-numeric key falls back to strip-brackets/whitespace + lowercase
+    ('[AlexNet]' -> 'alexnet').
     """
     if not isinstance(value, str):
         return ""
-    return re.sub(r"[\[\]\s]+", "", value).lower()
+    stripped = value.strip()
+    # Numbered marker (optionally bracketed): digits only, never author-year-parsed.
+    if re.fullmatch(r"\[?\s*\d+\s*\]?", stripped):
+        return re.sub(r"[\[\]\s]+", "", stripped).lower()
+    match = _CITE_YEAR_RE.search(stripped)
+    if not match:
+        return re.sub(r"[\[\]\s]+", "", stripped).lower()
+    year, letter = match.group(1), (match.group(2) or "")
+    authors = [
+        tok
+        for tok in re.findall(r"[A-Za-z][A-Za-z\-]*", stripped[: match.start()])
+        if tok.lower() not in _CITE_AUTHOR_STOPWORDS
+    ]
+    if not authors:
+        return re.sub(r"[\[\]\s]+", "", stripped).lower()
+    first = re.sub(r"[^a-z0-9]", "", authors[0].lower())
+    return f"{first}{year}{letter}" if first else re.sub(r"[\[\]\s]+", "", stripped).lower()
 
 
 def reconcile_reference_units(
