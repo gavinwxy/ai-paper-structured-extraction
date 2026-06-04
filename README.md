@@ -306,7 +306,7 @@ Per-type `role` vocabulary (`Problem` and `Measure` carry no `role`):
 |---|---|
 | `Document` | `research_article`, `review`, `meta_analysis`, `methodology`, `benchmark_survey` (derived from the contribution) |
 | `Method` | `contribution`, `component`, `builds_on`, `compared_against` |
-| `ExperimentSetup` | **substrate** `dataset`, `benchmark`, `task` · **configuration** `data_split`, `inference_protocol`, `training_config`, `ensembling`, `population` |
+| `ExperimentSetup` | **substrate** `dataset`, `benchmark`, `task`, `theoretical_setting`, `structural_class` (+ `contribution_resource`, the dataset/benchmark root) · **configuration** `data_split`, `inference_protocol`, `training_config`, `ensembling`, `population` |
 | `Finding` | `descriptive`, `mechanistic`, `comparative`, `modeling`, `ablation_finding`, `failure_mode`, `theorem`, `lemma`, `bound` |
 
 `Method`, the substrate `ExperimentSetup` roles, and `Measure` are **census nodes** (role-tagged in
@@ -394,7 +394,9 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 ├── tools/
 │   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
 │   ├── render_extraction.py             # Render extraction JSON → HTML
-│   └── count_extraction.py              # Node/relation counts
+│   ├── count_extraction.py              # Node/relation counts
+│   ├── relink_references.py             # Replay reference reconcile over an existing batch (in place)
+│   └── ab_reference_roles.py            # A/B-test the references-stage citation-relation vocab
 └── tests/                               # Local test harness + corpus (not version-controlled)
     ├── test_section_pipeline.py         #   unit tests
     ├── test_section_extraction.py       #   end-to-end LLM smoke test (reads tests/papers/{id}.md)
@@ -410,10 +412,12 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
   anywhere.
 - ID uniqueness and referential integrity.
 - Provenance — every `Finding` and `Measure` must have non-empty provenance.
-- `Measure` constraints — `name`, `unit`, non-empty `scores`, and `setup_ids`. Each score row is
-  `{variant, value, variance, system_id, setup_id}`; a non-empty `system_id` must resolve to a
-  `Method` and a non-empty `setup_id` to a section-local `ExperimentSetup`. `setup_ids` (when
-  present) must point to section-local `ExperimentSetup` units.
+- `Measure` constraints — `name`, `unit`, non-empty `scores`, and a `setup_ids` list (which must be
+  present but may be empty — an ablation measure may carry none). Each score row is
+  `{variant, value, variance, system_id, setup_id}` plus optional FG-6 `opponent_id`/`judge_id` for
+  pairwise/judge rows; a non-empty `system_id` must resolve to a `Method` and a non-empty `setup_id`
+  to a section-local `ExperimentSetup`. `setup_ids` entries must point to section-local
+  `ExperimentSetup` units.
 
 ## Versioning
 
