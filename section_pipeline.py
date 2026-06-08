@@ -361,23 +361,25 @@ STAGE_C_RELATIONS = {"about", "supports", "motivates"}
 SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
 
-# FG-12 (section-ir-0.10): map a reference's citation role to the unit-graph edge it implies, so the
-# reference vocabulary is reconciled onto the unit graph (reconcile_reference_units) instead of being
-# stranded. The 0.10 Tier-1 vocab simplifies the references roles to four classes: `extends` (the
-# contribution's direct predecessor) -> `builds_on`; `uses_component` (a reused method/data building
-# block, merging the old uses_method+uses_data) -> `uses`; `compares` (an experimental baseline or a
-# critique, merging the old baseline+contrast — the distinction now rides on `stance`) -> `compares_to`.
-# The single context-only role `background` (merging the old background/motivation/future_work/related)
-# maps to nothing — that absence is how a genuinely-run comparison (→ compares_to) is distinguished
-# from a context mention, addressing the compared_against overload (FG-4) without inventing a new
-# census role. (A finer evolution split {improves/replaces/adapts} carried on an `evolution_kind`
-# edge attribute was A/B-tested and dropped 2026-06-03: the model collapsed all evolution to
-# `extends`, emitting zero of the finer kinds across 10 mixed-style papers.)
-REFERENCE_ROLE_TO_RELATION: dict[str, str] = {
-    "extends": "builds_on",
-    "uses_component": "uses",
-    "compares": "compares_to",
-}
+# FG-12 (section-ir-0.10) + vocab unification: a reference's citation role IS the unit-graph
+# edge it implies — the two vocabularies were merged so a role is just an edge-in-waiting, materialized
+# by reconcile_reference_units once the cited work links to a node. The reference roles are exactly the
+# external-dependency subset of the edge vocabulary plus one context-only sentinel: `builds_on` (the
+# contribution's direct predecessor), `uses` (a reused method/data/benchmark building block), and
+# `compares_to` (an experimental baseline or a critique — the distinction rides on `stance`) each
+# reconcile to the edge of the same name (identity, no translation). `background` (the merged
+# background/motivation/future_work/related) is the lone role with NO edge — that absence is how a
+# genuinely-run comparison (→ compares_to) is distinguished from a context mention, addressing the
+# compared_against overload (FG-4) without inventing a new census role. Backfilled edges are stamped
+# `origin="reference"` so downstream can tell a citation-derived edge from a natively-authored one
+# (the 3 overlapping edge types are otherwise indistinguishable); natively-authored edges carry no
+# `origin`. (Earlier 0.10 used a separate references vocab {extends, uses_component, compares}
+# translated via a map; that map collapsed to identity once the names were unified. A finer evolution
+# split {improves/replaces/adapts} on an `evolution_kind` attribute was A/B-tested and dropped
+# 2026-06-03: the model collapsed all evolution to one bucket, emitting zero finer kinds on 10 papers.)
+REFERENCE_EDGE_ROLES: frozenset[str] = frozenset({"builds_on", "uses", "compares_to"})
+# The reference-eligible subset of the edge vocabulary. `background` is intentionally absent (no edge).
+REFERENCE_EDGE_ORIGIN = "reference"
 UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Document": "doc:",
     "Problem": "prb:",
@@ -1630,7 +1632,7 @@ def build_extraction_notes(
     must_nodes = census_must_node_ids(census)
     covered = must_nodes & materialized_ids
     notes: dict[str, Any] = {
-        "ir_version": "section-ir-0.10",
+        "ir_version": "section-ir-0.11",
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
         "uncertain_assignments": [],
         "skipped_spans": [],
@@ -2565,12 +2567,14 @@ def reconcile_reference_units(
                 if cite_key and nid not in citekey_to_ids.setdefault(cite_key, []):
                     citekey_to_ids[cite_key].append(nid)
 
-    # FG-12 (section-ir-0.10): also backfill unit-graph edges from each reference's citation roles,
-    # so the richer reference vocabulary is not stranded. Each edge is sourced at the contribution
-    # (the paper's own work relates to the cited prior work); the reference's linked unit is the
-    # target. An edge already present (e.g. a stage-B compares_to) is not duplicated; a non-neutral
-    # stance is merged onto it instead. Source attribution to the contribution is a deterministic
-    # default — an internal component's own builds_on/uses to an uncited dependency is not covered.
+    # FG-12 (section-ir-0.10) + vocab unification: also backfill unit-graph edges from each
+    # reference's citation roles — a role uses the same vocabulary as the edges, so it is materialized
+    # as the edge of the same name. Each edge is sourced at the contribution (the paper's own work
+    # relates to the cited prior work); the reference's linked unit is the target, and the edge is
+    # stamped origin="reference". An edge already present (e.g. a natively-authored stage-B
+    # compares_to) is not duplicated and stays native (no origin); a non-neutral stance is merged onto
+    # it instead. Source attribution to the contribution is a deterministic default — an internal
+    # component's own builds_on/uses to an uncited dependency is not covered.
     relations = extraction.get("relations")
     if not isinstance(relations, list):
         relations = None
@@ -2621,15 +2625,18 @@ def reconcile_reference_units(
             if relations is not None and contribution_id:
                 stance = relation.get("stance")
                 for role_name in relation.get("roles") or []:
-                    edge_rel = REFERENCE_ROLE_TO_RELATION.get(role_name)
-                    if not edge_rel:
+                    # A reference role IS the edge it implies (identity); `background` and any other
+                    # non-edge role carry no unit-graph edge.
+                    if role_name not in REFERENCE_EDGE_ROLES:
                         continue
+                    edge_rel = role_name
                     for target_id in linked:
                         if target_id == contribution_id:
                             continue
                         key = (contribution_id, edge_rel, target_id)
                         if key in existing_edges:
-                            # Edge already present; enrich a stance-less compares_to with stance.
+                            # Edge already present (e.g. a natively-authored stage-B edge); enrich a
+                            # stance-less compares_to with stance, but leave it native (no origin).
                             if edge_rel == "compares_to" and stance in {"supportive", "critical"}:
                                 for existing in relations:
                                     if (
@@ -2644,6 +2651,7 @@ def reconcile_reference_units(
                             "relation": edge_rel,
                             "target_id": target_id,
                             "provenance": [],
+                            "origin": REFERENCE_EDGE_ORIGIN,
                         }
                         if edge_rel == "compares_to" and stance in {"supportive", "critical"}:
                             edge["stance"] = stance
@@ -3370,7 +3378,7 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
                 issues.append(f"extraction_notes missing {key}")
         if notes.get("input_mode") != "node_census_pipeline":
             issues.append(f"extraction_notes has invalid input_mode: {notes.get('input_mode')}")
-        if notes.get("ir_version") != "section-ir-0.10":
+        if notes.get("ir_version") != "section-ir-0.11":
             issues.append(f"extraction_notes has invalid ir_version: {notes.get('ir_version')}")
         sections_used = notes.get("sections_used", [])
         if isinstance(sections_used, list):

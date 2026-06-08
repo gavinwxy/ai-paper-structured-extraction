@@ -1,7 +1,7 @@
 # Section-IR Extraction Pipeline
 
 A three-stage LLM pipeline that reads a scientific paper (Markdown) and extracts its
-**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.10`):
+**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.11`):
 
 ```
 problem → method → evidence
@@ -267,7 +267,11 @@ In parallel with the census, two single-shot calls extract `document` metadata (
 year, venue) and the bibliography. After assembly, `reconcile_reference_units` backfills each
 reference's `relation.provides_unit_ids` by matching the reference to a materialized node — first
 by `cite_keys` (exact, grounded in the paper's own citation), then by a unique name match — and
-(FG-12) backfills contribution→target unit edges from reference roles.
+(FG-12) backfills contribution→target unit edges from reference roles. Reference roles use the same
+vocabulary as the unit-graph edges — a citation role is an edge-in-waiting: `builds_on`/`uses`/
+`compares_to` each become the edge of the same name, while `background` is the lone context-only
+role with no edge. Each backfilled edge is tagged `origin: "reference"` so a citation-derived edge
+can be told apart from a natively-authored one.
 
 ### Assembly & Validation
 
@@ -421,7 +425,14 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 ## Versioning
 
-Current IR version: **`section-ir-0.10`** (`extraction_notes.input_mode = node_census_pipeline`).
+Current IR version: **`section-ir-0.11`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.11 **unifies** the references-stage citation roles onto the unit-graph edge vocabulary — a
+citation role is an edge-in-waiting: `extends`→`builds_on`, `uses_component`→`uses`,
+`compares`→`compares_to`, with `background` unchanged as the lone context-only role (no edge). Each
+reference-backfilled edge is tagged `origin: "reference"` so it can be told apart from a
+natively-authored edge. It is additive over 0.10 except the references `roles` enum values and the
+`ir_version` string; re-run the references stage to migrate a 0.10 corpus.
 
 0.10 is an **additive generalization** of 0.9 — 0.9-shaped output stays structurally valid except
 the `ir_version` string. It stops the empirical-CV monoculture from coercing other genres (FG-1…

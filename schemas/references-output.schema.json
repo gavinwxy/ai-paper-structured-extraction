@@ -50,9 +50,9 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "enum": ["extends", "uses_component", "compares", "background"]
+                  "enum": ["builds_on", "uses", "compares_to", "background"]
                 },
-                "description": "Functional role(s) this reference plays for the citing paper; one or more. extends=a direct predecessor THIS paper's contribution builds on, improves, or extends (the cited method your work descends from); uses_component=a method/architecture/algorithm/technique/tool/optimizer/library/dataset/benchmark reused as a building block, not the contribution's lineage; compares=compared against experimentally (a baseline) or critiqued/disagreed with (the `stance` field carries supportive/neutral/critical); background=field/concept context, motivation, future-work mention, or passing related mention. When ambiguous between extends and background, prefer extends if the cited work is plausibly a direct predecessor (high recall); use background only when no stronger role fits."
+                "description": "Functional relation(s) this reference plays for the citing paper, drawn from the same vocabulary as the unit-graph edges; one or more. builds_on=a direct predecessor THIS paper's contribution builds on, improves, or extends (the cited method your work descends from); uses=a method/architecture/algorithm/technique/tool/optimizer/library/dataset/benchmark reused as a building block, not the contribution's lineage; compares_to=compared against experimentally (a baseline) or critiqued/disagreed with (the `stance` field carries supportive/neutral/critical); background=field/concept context, motivation, future-work mention, or passing related mention. builds_on/uses/compares_to each reconcile to the unit-graph edge of the same name; background is the only context-only role (no edge) and is mutually exclusive — emit it alone, never alongside a structural role. When ambiguous between builds_on and background, prefer builds_on if the cited work is plausibly a direct predecessor (high recall); use background only when no stronger role fits."
               },
               "stance": {
                 "type": "string",
@@ -66,7 +66,7 @@
               },
               "provides_name": {
                 "type": "string",
-                "description": "For extends, uses_component, and compares, the single most specific named artifact the citing paper takes from or compares against this work (e.g. 'Transformer', 'ImageNet', 'Adam', 'BERT'). Empty string for background or when no concrete artifact is named."
+                "description": "For builds_on, uses, and compares_to, the single most specific named artifact the citing paper takes from or compares against this work (e.g. 'Transformer', 'ImageNet', 'Adam', 'BERT'). Empty string for background or when no concrete artifact is named."
               },
               "provides_unit_ids": {
                 "type": "array",

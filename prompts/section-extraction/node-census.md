@@ -1,6 +1,6 @@
 # Node Census Pass Prompt — Stage A
 
-This is stage A of the three-stage section-ir-0.10 pipeline (`node census → relation pass →
+This is stage A of the three-stage section-ir-0.11 pipeline (`node census → relation pass →
 content fill`). It finds every referenceable node in one sweep, with **no relations** — those
 are established later, in stage B, with the whole node set in view. Each node is tagged with a
 single **role** drawn from four search clusters; the node's type is derived from that role

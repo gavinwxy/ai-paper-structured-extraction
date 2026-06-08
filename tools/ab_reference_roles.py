@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""A/B test the Tier-1 citation-relation vocab change at the references stage.
+"""A/B test a citation-relation vocab change at the references stage.
 
-The Tier-1 change (7-class Intern-Atlas role vocab + evolution_kind) touches ONLY the references
-stage — prompt + schema. So a faithful A/B runs references extraction on the same papers twice:
-  OLD = pre-Tier-1 prompt+schema (dump git HEAD to a dir, pass via --old-*)
+A vocab change (e.g. the unification that renames the references roles onto the unit-graph
+edge names: extends->builds_on, uses_component->uses, compares->compares_to, background unchanged)
+touches ONLY the references stage — prompt + schema. So a faithful A/B runs references extraction
+on the same papers twice:
+  OLD = previous prompt+schema (dump git HEAD to a dir, pass via --old-*)
   NEW = working-tree prompt+schema (the default paths)
 …then compares the role distributions the model emits under each. Same model, temperature,
 max_tokens, and json_object contract path for both, so the only variable is the vocab.
 
-Metrics (proposal §6 Phase-1 gate):
-  (a) evolution-role recall — does the strong-causal bucket rise from ~0.8% to a sane range
-      (a typical paper has 1–3 direct predecessors)?
+Metrics (the gate for a pure rename is distribution stability, not recall gain):
+  (a) evolution-role share — does the builds_on bucket hold steady vs the old `extends` (a rename
+      should not shift it; bare `builds_on` is fuzzier than `extends`, so watch for drift)?
   (b) precision — the script dumps every NEW evolution-role assignment for manual spot-check.
-  (c) context blow-up — does the weak-signal (background/…) bucket balloon?
+  (c) use/context blow-up — does bare `uses` over-trigger, or the weak-signal `background` balloon?
+
+The OLD/NEW BUCKETS below must match the two vocabularies actually being compared; update them
+when the dumped git-HEAD vocab differs from what is listed here.
 
 Usage:
   python tools/ab_reference_roles.py --papers <f1.md> <f2.md> ... \
@@ -46,17 +51,19 @@ from section_pipeline import (  # noqa: E402
 from production.llm import LLMClient  # noqa: E402
 
 # Comparable buckets so the differing OLD/NEW vocabularies line up on the same four axes.
+# Configured for the unification A/B: OLD = the committed 4-class references vocab,
+# NEW = the unified vocab that reuses the unit-graph edge names. Adjust if comparing other vocabs.
 BUCKETS = {
     "OLD": {
         "evolution": {"extends"},
-        "use": {"uses_method", "uses_data"},
-        "compare": {"baseline", "contrast"},
-        "context": {"background", "motivation", "future_work", "related"},
-    },
-    "NEW": {
-        "evolution": {"extends", "improves", "replaces", "adapts"},
         "use": {"uses_component"},
         "compare": {"compares"},
+        "context": {"background"},
+    },
+    "NEW": {
+        "evolution": {"builds_on"},
+        "use": {"uses"},
+        "compare": {"compares_to"},
         "context": {"background"},
     },
 }
@@ -207,7 +214,7 @@ async def main() -> int:
         o, n = ao["bucket_counts"].get(b, 0), an["bucket_counts"].get(b, 0)
         print(f"  {b:10}  {o:>6} {_pct(o, ao['total_roles'])}     {n:>6} {_pct(n, an['total_roles'])}")
     print("\n  NEW evolution-role breakdown:")
-    for r in ("extends", "improves", "replaces", "adapts"):
+    for r in sorted(BUCKETS["NEW"]["evolution"]):
         print(f"    {r:10} {an['role_counts'].get(r, 0)}")
     print(f"\n  OLD raw role_counts: {ao['role_counts']}")
     print(f"  NEW raw role_counts: {an['role_counts']}")

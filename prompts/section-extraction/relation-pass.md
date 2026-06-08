@@ -1,6 +1,6 @@
 # Relation Pass Prompt — Stage B
 
-This is stage B of the three-stage section-ir-0.10 pipeline. It receives the **complete** flat
+This is stage B of the three-stage section-ir-0.11 pipeline. It receives the **complete** flat
 node census from stage A and the full paper, and establishes the structural edges between
 nodes. Because it sees every node at once, it never has to forward-reference a node it has not
 captured yet — the failure mode that severed composition links and mis-bound metric subjects in
