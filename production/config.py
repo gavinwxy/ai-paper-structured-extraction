@@ -28,3 +28,6 @@ class Config:
     limit: int = 0
     force: bool = False
     log_level: str = "INFO"
+    # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim source
+    # tables and record a `score_fidelity` block in extraction_notes. No effect on extracted data.
+    verify_scores: bool = True

@@ -7,6 +7,7 @@ import copy
 import json
 import re
 from collections import Counter
+from html.parser import HTMLParser
 from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -2208,6 +2209,180 @@ def _slice_source_tables(paper_content: str) -> list[dict[str, str]]:
     return tables
 
 
+class _TableCellParser(HTMLParser):
+    """Collect the text of every <td>/<th> cell in a <table> blob — presence only, no grid topology.
+
+    The fidelity verifier (P2) matches score VALUES against cell TEXT, so a cell's row/column position
+    is irrelevant; rowspan/colspan are ignored on purpose. That is exactly why the verifier sidesteps
+    the rowspan/colspan addressing errors that make index-based table *binding* unsafe — it never
+    addresses a cell, it only asks whether a transcribed number appears somewhere in the table.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.cells: list[str] = []
+        self._depth = 0
+        self._buf: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in ("td", "th"):
+            if self._depth == 0:
+                self._buf = []
+            self._depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._depth > 0:
+            self._depth -= 1
+            if self._depth == 0:
+                self.cells.append("".join(self._buf).strip())
+
+    def handle_data(self, data: str) -> None:
+        if self._depth > 0:
+            self._buf.append(data)
+
+
+def _table_cell_texts(table_html: str) -> list[str]:
+    """Every non-empty <td>/<th> cell text in a verbatim table blob (entities unescaped, tags dropped)."""
+    parser = _TableCellParser()
+    try:
+        parser.feed(table_html or "")
+    except Exception:
+        return []
+    return [c for c in parser.cells if c]
+
+
+_NUM_TOKEN_RE = re.compile(r"[-+]?(?:\d[\d,]*\.?\d*|\.\d+)")
+
+
+def _canon_num(token: str) -> str | None:
+    """Canonical float key for one numeric token: '.323'->'0.323', '28.40'->'28.4', '1,234'->'1234'.
+
+    Returns None when the token is not a parseable number. Canonicalizing through float makes
+    leading-zero and trailing-zero formatting differences (the dominant false-positive source for a
+    value↔cell match) compare equal, so the verifier doesn't cry wolf over '.5' vs '0.50'.
+    """
+    t = token.replace(",", "").rstrip(".")
+    if t in ("", "-", "+", "."):
+        return None
+    try:
+        return f"{float(t):.10g}"
+    except ValueError:
+        return None
+
+
+def _numeric_keys(text: str) -> list[str]:
+    """All canonical numeric keys in a string — handles ranges/slashes/± by extracting every token."""
+    text = text.replace("−", "-").replace("–", "-").replace("—", "-")
+    keys: list[str] = []
+    for m in _NUM_TOKEN_RE.finditer(text):
+        key = _canon_num(m.group(0))
+        if key is not None:
+            keys.append(key)
+    return keys
+
+
+def _verify_score_fidelity(
+    sections: list[dict[str, Any]],
+    source_tables: list[dict[str, str]],
+    paper_content: str = "",
+) -> dict[str, Any] | None:
+    """Cross-check LLM-transcribed score values against the verbatim source tables (the P2 verifier).
+
+    Forward, presence-based and matched BY VALUE (never by cell position, so it is immune to the
+    rowspan/colspan addressing errors that make index-based binding unsafe): every numeric score
+    `value` should appear as a cell in some captured <table>. A value absent from every table — while
+    OTHER values of the same Measure DO match — is a high-signal candidate transcription error or
+    uncaptured-table value, surfaced as a flag. A Measure whose values match NO table at all is
+    treated as prose-derived (one low-confidence note, not per-row noise — ~6% of Measures are
+    legitimately prose). Reverse coverage (decimal cells never transcribed) is reported only as an
+    aggregate hint, because result/config/diagnostic cells are legitimately left untranscribed.
+
+    Pure audit: writes nothing into units/scores/relations, only returns a notes block. Returns None
+    when there are no tables (or no numeric cells) to check against.
+    """
+    if not source_tables:
+        return None
+    face: set[str] = set()
+    cell_decimal_keys: set[str] = set()
+    for table in source_tables:
+        for cell in _table_cell_texts(table.get("html", "")):
+            for key in _numeric_keys(cell):
+                face.add(key)
+                if "." in key:
+                    cell_decimal_keys.add(key)
+    if not face:
+        return None
+    # Numbers anywhere in the paper text (not just tables) — used to separate a value that is
+    # genuinely in the paper but stated in prose/figure (model was right, just not table-grounded —
+    # benign) from one absent everywhere (scaling/figure-read/possible transcription error — the
+    # higher-priority subset). A hint, not gospel: a bare integer matches loosely.
+    paper_keys = set(_numeric_keys(paper_content)) if paper_content else set()
+
+    flags: list[dict[str, Any]] = []
+    measures_no_table: list[dict[str, Any]] = []
+    transcribed_keys: set[str] = set()
+    values_total = 0
+    values_located = 0
+    flags_absent_from_paper = 0
+
+    for section in sections:
+        for unit in section.get("units", []):
+            if unit.get("type") != "Measure":
+                continue
+            rows: list[tuple[str, str, list[str], bool]] = []  # (variant, value, keys, located)
+            numeric_count = 0
+            located_count = 0
+            for score in unit.get("scores") or []:
+                value = str(score.get("value", "")).strip()
+                keys = _numeric_keys(value)
+                if not keys:
+                    continue  # qualitative/symbolic value — out of scope for a numeric cross-check
+                numeric_count += 1
+                transcribed_keys.update(keys)
+                located = any(key in face for key in keys)
+                if located:
+                    located_count += 1
+                rows.append((str(score.get("variant", "")), value, keys, located))
+            if numeric_count == 0:
+                continue
+            values_total += numeric_count
+            values_located += located_count
+            if located_count == 0:
+                # Whole Measure unmatched → prose-derived or uncaptured table. One low-confidence note.
+                measures_no_table.append(
+                    {"measure_id": unit.get("id", ""), "name": unit.get("name", ""),
+                     "n_values": numeric_count}
+                )
+                continue
+            # The Measure IS table-derived; an individual miss is now a real anomaly worth flagging.
+            for variant, value, keys, located in rows:
+                if located:
+                    continue
+                in_paper = bool(paper_keys) and any(key in paper_keys for key in keys)
+                if not in_paper:
+                    flags_absent_from_paper += 1
+                flags.append({
+                    "measure_id": unit.get("id", ""),
+                    "measure_name": unit.get("name", ""),
+                    "variant": variant,
+                    "value": value,
+                    "in_paper": in_paper,
+                    "kind": "value_not_in_table",
+                })
+
+    cells_unmatched = sum(1 for key in cell_decimal_keys if key not in transcribed_keys)
+    return {
+        "checked": True,
+        "values_total": values_total,
+        "values_located": values_located,
+        "located_pct": round(100.0 * values_located / values_total, 1) if values_total else None,
+        "flags": flags,
+        "flags_absent_from_paper": flags_absent_from_paper,
+        "measures_no_table": measures_no_table,
+        "table_cells_unmatched": cells_unmatched,
+    }
+
+
 def assemble_extraction(
     census: dict[str, Any],
     stage_b_relations: list[dict[str, Any]],
@@ -2215,6 +2390,7 @@ def assemble_extraction(
     paper_content: str,
     sections_included: list[str] | None = None,
     sections_omitted: list[str] | None = None,
+    verify_scores: bool = True,
 ) -> dict[str, Any]:
     """Merge content section results + relation-pass edges into final section-IR 0.7 output.
 
@@ -2309,6 +2485,13 @@ def assemble_extraction(
     source_tables = _slice_source_tables(paper_content)
     if source_tables:
         extraction_notes["source_tables"] = source_tables
+        # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim tables.
+        # Writes nothing into units/scores/relations — only a notes block — so it cannot affect render
+        # or validation. Matched by value, so it is immune to table-grid addressing errors.
+        if verify_scores:
+            fidelity = _verify_score_fidelity(sections, source_tables, paper_content)
+            if fidelity is not None:
+                extraction_notes["score_fidelity"] = fidelity
     return {
         "document": build_document_unit(
             paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result

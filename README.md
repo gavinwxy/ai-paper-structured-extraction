@@ -292,6 +292,15 @@ Assembly also captures every verbatim inline `<table>` blob (with its nearest `[
 `**Table k**` caption) into `extraction_notes.source_tables` — a lossless, deterministic
 source-of-truth for audit/fallback; the model never re-transcribes it.
 
+Using that capture, assembly then runs a **score-fidelity audit** (`extraction_notes.score_fidelity`,
+on by default; disable with `--no-verify-scores`): every transcribed score `value` is cross-checked
+**by canonical number** against the source-table cells. A value that is in no table while its
+Measure's other values are (`flags[].kind = value_not_in_table`, sub-classified by `in_paper`) is a
+candidate transcription error; a Measure with no table matches at all is recorded as prose-derived
+(`measures_no_table`). It is matched by value, never by cell position, so it cannot be fooled by
+rowspan/colspan layout, and it writes only this notes block — never touching units, scores, or
+relations.
+
 Coverage is measured against the census `must` nodes; an unmaterialized must-node surfaces in
 `extraction_notes.uncovered_items`.
 

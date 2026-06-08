@@ -64,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Console log level")
     parser.add_argument("--limit", type=int, default=0, help="Process at most N papers (0=all)")
     parser.add_argument("--force", action="store_true", help="Reprocess all papers (ignore resumability)")
+    parser.add_argument("--no-verify-scores", dest="verify_scores", action="store_false",
+                        help="Disable the score-fidelity audit (transcribed values vs source tables)")
     return parser.parse_args()
 
 
@@ -94,6 +96,7 @@ def main() -> None:
         limit=args.limit,
         force=args.force,
         log_level=args.log_level,
+        verify_scores=args.verify_scores,
     )
 
     setup_logging(config.output_dir, config.log_level)

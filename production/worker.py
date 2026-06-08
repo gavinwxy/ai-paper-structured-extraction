@@ -159,6 +159,7 @@ async def _run_paper_pipeline(
             census, relations, section_results, paper_content,
             sections_included=sections_included,
             sections_omitted=[],
+            verify_scores=config.verify_scores,
         )
         if references is not None:
             warnings.extend(reconcile_reference_units(references, extraction, census))
