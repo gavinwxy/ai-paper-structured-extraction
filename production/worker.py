@@ -193,28 +193,36 @@ async def _run_paper_pipeline(
             )
 
         elapsed = time.monotonic() - t0
+        token_usage = llm.drain_usage(paper_id)
         write_status(paper_dir, "completed", timing_s=round(elapsed, 1),
-                     validation_issues=len(validation_issues), warnings=warnings)
+                     validation_issues=len(validation_issues), warnings=warnings,
+                     token_usage=token_usage)
         logger.info(
-            "[%s] Done (%.1fs, %d validation issues)",
-            paper_id, elapsed, len(validation_issues),
+            "[%s] Done (%.1fs, %d validation issues, %d tokens)",
+            paper_id, elapsed, len(validation_issues), token_usage["totals"]["total_tokens"],
         )
         return {
             "paper_id": paper_id,
             "status": "completed",
             "timing_s": round(elapsed, 1),
             "validation_issues": len(validation_issues),
+            "tokens": token_usage["totals"],
         }
 
     except Exception as exc:
         elapsed = time.monotonic() - t0
-        write_status(paper_dir, "failed", error=str(exc), timing_s=round(elapsed, 1))
+        # Drain on failure too: captures cost-to-failure (e.g. a truncated evidence pass)
+        # and prevents the per-paper accumulator from leaking across a batch.
+        token_usage = llm.drain_usage(paper_id)
+        write_status(paper_dir, "failed", error=str(exc), timing_s=round(elapsed, 1),
+                     token_usage=token_usage)
         logger.error("[%s] FAILED (%.1fs): %s", paper_id, elapsed, exc)
         return {
             "paper_id": paper_id,
             "status": "failed",
             "error": str(exc),
             "timing_s": round(elapsed, 1),
+            "tokens": token_usage["totals"],
         }
 
 

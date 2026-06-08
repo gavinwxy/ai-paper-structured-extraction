@@ -113,9 +113,16 @@ async def run_batch(config: Config) -> dict[str, Any]:
             paper_results.append(result)
 
     # Summary
+    token_totals = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                    "total_tokens": 0, "cached_prompt_tokens": 0}
+    for r in paper_results:
+        for k, v in (r.get("tokens") or {}).items():
+            if isinstance(v, (int, float)):
+                token_totals[k] = token_totals.get(k, 0) + v
     summary = {
         **progress.summary(),
         "llm_stats": llm.stats,
+        "token_totals": token_totals,
         "model": config.model,
         "base_url": config.base_url,
         "paper_results": paper_results,

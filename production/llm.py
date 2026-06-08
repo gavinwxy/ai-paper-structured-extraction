@@ -31,6 +31,10 @@ class LLMClient:
         self._call_count = 0
         self._total_latency = 0.0
         self._error_count = 0
+        # paper_id -> stage -> token counters; drained per-paper into status.json so each
+        # paper's passes (census / relations / metadata / references / section:*) are
+        # attributable. This is the only token/cost telemetry the pipeline emits.
+        self._usage: dict[str, dict[str, dict[str, int]]] = {}
 
     @property
     def stats(self) -> dict[str, Any]:
@@ -40,6 +44,57 @@ class LLMClient:
             "total_latency_s": round(self._total_latency, 2),
             "avg_latency_s": round(self._total_latency / max(self._call_count, 1), 2),
         }
+
+    def _record_usage(self, paper_id: str, stage: str, usage: Any) -> None:
+        """Accumulate one call's token usage under (paper_id, stage).
+
+        Recorded right after the response returns — including truncated
+        (finish_reason=length) attempts, whose tokens are still billed — so the per-pass
+        totals reflect real cost, not just successful calls. A no-op when the provider
+        omits `usage` (e.g. a proxy that doesn't surface it); the zeros are themselves a
+        signal that usage isn't being reported.
+        """
+        if usage is None:
+            return
+
+        def _int(name: str) -> int:
+            val = getattr(usage, name, 0)
+            return int(val) if isinstance(val, (int, float)) else 0
+
+        details = getattr(usage, "prompt_tokens_details", None)
+        if isinstance(details, dict):
+            cached = details.get("cached_tokens", 0)
+        elif details is not None:
+            cached = getattr(details, "cached_tokens", 0)
+        else:
+            cached = 0
+        cached = int(cached) if isinstance(cached, (int, float)) else 0
+
+        entry = self._usage.setdefault(paper_id, {}).setdefault(
+            stage,
+            {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+             "total_tokens": 0, "cached_prompt_tokens": 0},
+        )
+        entry["calls"] += 1
+        entry["prompt_tokens"] += _int("prompt_tokens")
+        entry["completion_tokens"] += _int("completion_tokens")
+        entry["total_tokens"] += _int("total_tokens")
+        entry["cached_prompt_tokens"] += cached
+
+    def drain_usage(self, paper_id: str) -> dict[str, Any]:
+        """Pop this paper's accumulated usage as {by_stage, totals}.
+
+        Per-paper (not global) so each status.json carries only its own passes; called
+        once at the end of the paper's pipeline, on success and failure alike, which also
+        keeps the accumulator from growing across a large batch.
+        """
+        by_stage = self._usage.pop(paper_id, {})
+        totals = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                  "total_tokens": 0, "cached_prompt_tokens": 0}
+        for entry in by_stage.values():
+            for k in totals:
+                totals[k] += entry.get(k, 0)
+        return {"by_stage": by_stage, "totals": totals}
 
     async def call(
         self,
@@ -84,6 +139,7 @@ class LLMClient:
                     elapsed = time.monotonic() - t0
                     self._call_count += 1
                     self._total_latency += elapsed
+                    self._record_usage(paper_id, stage, getattr(response, "usage", None))
 
                     choice = response.choices[0]
                     if choice.finish_reason == "length":
