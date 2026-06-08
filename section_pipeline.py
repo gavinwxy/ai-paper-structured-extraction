@@ -67,6 +67,13 @@ APPENDIX_SPELLED_RE = re.compile(r"^App(?:endix)?\.?\s+([A-Za-z])(?![A-Za-z])")
 # A lettered appendix with a glued (separatorless) subsection number — §A4.2, §B3, §G2 — collapses
 # to its §X parent, exactly as the dotted/hyphenated forms do (the digit starts the subsection).
 APPENDIX_NUMBERED_RE = re.compile(r"^§([A-Za-z]+)\d")
+# P4 source-of-truth capture: every inline <table> blob is sliced verbatim (deterministically, no
+# parser) into extraction_notes.source_tables, tagged with the nearest preceding §N block anchor and
+# its **Table k** caption. The model never sees or emits this — it is the raw grid behind the evidence
+# pass's transcribed score rows, kept for audit/fallback and as the re-derivation source a future
+# table parser can read instead of re-reading the whole paper.
+TABLE_BLOCK_RE = re.compile(r"<table\b.*?</table>", re.DOTALL | re.IGNORECASE)
+TABLE_CAPTION_RE = re.compile(r"\*\*\s*Tab(?:le|\.)?[^*\n]*\*\*", re.IGNORECASE)
 
 SECTION_TYPES = {"problem", "method", "evidence"}
 SECTION_ORDER = ["problem", "method", "evidence"]
@@ -2169,6 +2176,38 @@ def _assign_resolves(
     return new_relations
 
 
+def _slice_source_tables(paper_content: str) -> list[dict[str, str]]:
+    """Slice every verbatim inline <table> blob, tagged with its §N anchor and **Table k** caption.
+
+    Deterministic and lossless (P4): the LLM never sees or emits this; it is the raw grid behind the
+    evidence pass's transcribed score rows, captured for audit/fallback and as the re-derivation
+    source a future table parser can read instead of re-reading the whole paper. The caption is
+    bounded to the region since the previous table so a caption-less table can't steal a distant one.
+    """
+    if not isinstance(paper_content, str) or "<table" not in paper_content.lower():
+        return []
+    anchors = [(m.start(), m.group(1)) for m in SECTION_MARKER_RE.finditer(paper_content)]
+    captions = [(m.start(), m.group(0)) for m in TABLE_CAPTION_RE.finditer(paper_content)]
+    tables: list[dict[str, str]] = []
+    prev_end = 0
+    for m in TABLE_BLOCK_RE.finditer(paper_content):
+        pos = m.start()
+        anchor = ""
+        for astart, anum in anchors:
+            if astart >= pos:
+                break
+            anchor = f"§{anum}"
+        caption = ""
+        for cstart, ctext in captions:
+            if cstart >= pos:
+                break
+            if cstart >= prev_end:
+                caption = ctext.strip("* ").strip()
+        tables.append({"anchor": anchor, "caption": caption, "html": m.group(0)})
+        prev_end = m.end()
+    return tables
+
+
 def assemble_extraction(
     census: dict[str, Any],
     stage_b_relations: list[dict[str, Any]],
@@ -2267,6 +2306,9 @@ def assemble_extraction(
     thesis = spine_summary.get("central_contribution") or "" if isinstance(spine_summary, dict) else ""
     headline_result = spine_summary.get("headline_result") or "" if isinstance(spine_summary, dict) else ""
     document_role = _derive_document_role(census, sections)
+    source_tables = _slice_source_tables(paper_content)
+    if source_tables:
+        extraction_notes["source_tables"] = source_tables
     return {
         "document": build_document_unit(
             paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result

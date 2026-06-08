@@ -15,6 +15,15 @@ from section_pipeline import _is_deepseek_model
 logger = logging.getLogger(__name__)
 
 
+class TruncationError(RuntimeError):
+    """Raised when the model stops on finish_reason=length.
+
+    Subclasses RuntimeError (not ValueError) so the worker's parse-retry loops — which catch only
+    (JSONDecodeError, ValueError) — do NOT re-retry it. A same-budget retry of a truncation is
+    futile at temperature 0, so it fails fast to the paper-level handler at ~1x cost instead of ~4x.
+    """
+
+
 class LLMClient:
     """Wraps AsyncOpenAI with a global semaphore for backpressure and retry logic."""
 
@@ -45,6 +54,11 @@ class LLMClient:
             "avg_latency_s": round(self._total_latency / max(self._call_count, 1), 2),
         }
 
+    @staticmethod
+    def _new_usage_entry() -> dict[str, Any]:
+        return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                "total_tokens": 0, "cached_prompt_tokens": 0, "truncated": False}
+
     def _record_usage(self, paper_id: str, stage: str, usage: Any) -> None:
         """Accumulate one call's token usage under (paper_id, stage).
 
@@ -71,15 +85,24 @@ class LLMClient:
         cached = int(cached) if isinstance(cached, (int, float)) else 0
 
         entry = self._usage.setdefault(paper_id, {}).setdefault(
-            stage,
-            {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
-             "total_tokens": 0, "cached_prompt_tokens": 0},
+            stage, self._new_usage_entry()
         )
         entry["calls"] += 1
         entry["prompt_tokens"] += _int("prompt_tokens")
         entry["completion_tokens"] += _int("completion_tokens")
         entry["total_tokens"] += _int("total_tokens")
         entry["cached_prompt_tokens"] += cached
+
+    def _mark_truncated(self, paper_id: str, stage: str) -> None:
+        """Flag the (paper_id, stage) usage entry as truncated (finish_reason=length).
+
+        The entry usually already exists (recorded right before the truncation check), but
+        setdefault keeps this safe if the provider omitted usage on the truncated attempt.
+        """
+        entry = self._usage.setdefault(paper_id, {}).setdefault(
+            stage, self._new_usage_entry()
+        )
+        entry["truncated"] = True
 
     def drain_usage(self, paper_id: str) -> dict[str, Any]:
         """Pop this paper's accumulated usage as {by_stage, totals}.
@@ -89,11 +112,13 @@ class LLMClient:
         keeps the accumulator from growing across a large batch.
         """
         by_stage = self._usage.pop(paper_id, {})
-        totals = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                  "total_tokens": 0, "cached_prompt_tokens": 0}
+        numeric = ("calls", "prompt_tokens", "completion_tokens",
+                   "total_tokens", "cached_prompt_tokens")
+        totals: dict[str, Any] = {k: 0 for k in numeric}
         for entry in by_stage.values():
-            for k in totals:
+            for k in numeric:
                 totals[k] += entry.get(k, 0)
+        totals["truncated"] = any(bool(entry.get("truncated")) for entry in by_stage.values())
         return {"by_stage": by_stage, "totals": totals}
 
     async def call(
@@ -144,7 +169,8 @@ class LLMClient:
                     choice = response.choices[0]
                     if choice.finish_reason == "length":
                         content = choice.message.content or ""
-                        raise ValueError(
+                        self._mark_truncated(paper_id, stage)
+                        raise TruncationError(
                             f"LLM response truncated (finish_reason=length, got {len(content)} chars)"
                         )
 
@@ -153,6 +179,18 @@ class LLMClient:
                         paper_id, stage, elapsed, attempt + 1,
                     )
                     return choice.message.content or ""
+
+                except TruncationError:
+                    # A same-budget retry of a truncation is futile at temperature 0 — fail fast
+                    # (no sleep, no retry) so the paper-level handler marks it failed at ~1x cost.
+                    elapsed = time.monotonic() - t0
+                    self._total_latency += elapsed
+                    self._error_count += 1
+                    logger.error(
+                        "[%s] %s truncated (finish_reason=length) — failing fast, no retry",
+                        paper_id, stage,
+                    )
+                    raise
 
                 except Exception as exc:
                     elapsed = time.monotonic() - t0

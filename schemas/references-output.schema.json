@@ -8,7 +8,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "authors", "title", "venue", "year", "doi", "url", "relation"],
+        "required": ["id", "authors", "title", "venue", "year", "relation"],
         "additionalProperties": false,
         "properties": {
           "id": {
@@ -31,14 +31,6 @@
           "year": {
             "type": ["integer", "null"],
             "description": "Publication year, null if unknown"
-          },
-          "doi": {
-            "type": ["string", "null"],
-            "description": "DOI if available"
-          },
-          "url": {
-            "type": ["string", "null"],
-            "description": "URL if available"
           },
           "relation": {
             "type": "object",

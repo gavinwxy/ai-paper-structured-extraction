@@ -117,12 +117,18 @@ async def run_batch(config: Config) -> dict[str, Any]:
                     "total_tokens": 0, "cached_prompt_tokens": 0}
     for r in paper_results:
         for k, v in (r.get("tokens") or {}).items():
+            if k == "truncated":
+                continue
             if isinstance(v, (int, float)):
                 token_totals[k] = token_totals.get(k, 0) + v
+    # Papers where at least one pass hit the max_tokens ceiling (finish_reason=length); now a
+    # fail-fast (1x, not 4x). Surfaced so ceiling hits are visible without inspecting each status.json.
+    truncated_papers = sum(1 for r in paper_results if (r.get("tokens") or {}).get("truncated"))
     summary = {
         **progress.summary(),
         "llm_stats": llm.stats,
         "token_totals": token_totals,
+        "truncated_papers": truncated_papers,
         "model": config.model,
         "base_url": config.base_url,
         "paper_results": paper_results,

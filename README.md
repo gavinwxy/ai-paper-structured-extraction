@@ -288,6 +288,10 @@ After all sections return, `assemble_extraction` (Python, no LLM):
 3. Runs `validate_section_ir()` — the authoritative runtime contract.
 4. Saves the JSON and the rendered HTML.
 
+Assembly also captures every verbatim inline `<table>` blob (with its nearest `[§N]` anchor and
+`**Table k**` caption) into `extraction_notes.source_tables` — a lossless, deterministic
+source-of-truth for audit/fallback; the model never re-transcribes it.
+
 Coverage is measured against the census `must` nodes; an unmaterialized must-node surfaces in
 `extraction_notes.uncovered_items`.
 
