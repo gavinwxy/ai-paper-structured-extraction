@@ -40,11 +40,13 @@ class Config:
     # redundant (not harmful) when the proxy is already warm. Cost is one section of serial latency
     # per paper, so disable with --no-warm-content-cache for latency-priority runs.
     warm_content_cache: bool = True
-    # Blob-primary evidence (section-ir-0.12, default OFF during rollout — mirror the warm-cache
-    # rollout: validate on the benchmark, then flip ON). When True the evidence pass uses the
-    # evidence-blob prompt module: the LLM points at result tables by [§N] marker and transcribes
-    # only the contribution method's own score rows (baselines + full ablation grids stay in the
-    # code-sliced verbatim table blob), mounts findings on tables via Measure.finding_ids instead of
-    # Finding<->Measure edges, and emits a headline_result one-liner. Gates: evidence prompt module
-    # selection, the assembly Finding<->Measure edge-drop, and the renderer blob path.
-    blob_primary_evidence: bool = False
+    # Blob-primary evidence (section-ir-0.12, default ON since the benchmark A/B win — mirror the
+    # warm-cache rollout). When True the evidence pass uses the evidence-blob prompt module: the LLM
+    # points at result tables by [§N] marker and transcribes only the contribution method's own score
+    # rows (baselines + full ablation grids stay in the code-sliced verbatim table blob), mounts
+    # findings on tables via Measure.finding_ids instead of Finding<->Measure edges, and emits a
+    # headline_result one-liner. A 20-paper A/B fired 20/20 valid with 0 loss (headline_result + blob
+    # cover the empty-main "contribution-as-modification" tables) at -12.9% cost (evidence completion
+    # halved). Gates: evidence prompt module selection, the assembly Finding<->Measure edge-drop, and
+    # the renderer blob path. Disable with --no-blob-primary-evidence for the section-ir-0.11 behavior.
+    blob_primary_evidence: bool = True

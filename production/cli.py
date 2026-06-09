@@ -75,13 +75,13 @@ def parse_args() -> argparse.Namespace:
                         help="Disable P3 warming — run all three content sections fully concurrently "
                              "(use when latency matters or the proxy is demonstrably warm)")
     parser.add_argument("--blob-primary-evidence", dest="blob_primary_evidence", action="store_true",
-                        default=False,
-                        help="section-ir-0.12 blob-primary evidence (OFF by default during rollout): "
-                             "the evidence pass points at result tables by [§N] marker and transcribes "
-                             "only the contribution method's rows; baselines + ablation grids stay in "
-                             "the code-sliced verbatim table blob")
+                        default=True,
+                        help="section-ir-0.12 blob-primary evidence (ON by default): the evidence pass "
+                             "points at result tables by [§N] marker and transcribes only the "
+                             "contribution method's rows; baselines + ablation grids stay in the "
+                             "code-sliced verbatim table blob")
     parser.add_argument("--no-blob-primary-evidence", dest="blob_primary_evidence", action="store_false",
-                        help="Disable blob-primary evidence — transcribe every score row as today "
+                        help="Disable blob-primary evidence — transcribe every score row "
                              "(the section-ir-0.11 evidence behavior)")
     return parser.parse_args()
 
