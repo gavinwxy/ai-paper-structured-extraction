@@ -3461,33 +3461,6 @@ def _validate_provenance(unit: dict[str, Any], issues: list[str]) -> None:
             issues.append(f"Unit {uid} provenance[{index}] '{marker}' must be a §N location marker")
 
 
-def _validate_formula_symbols(
-    uid: str,
-    where: str,
-    symbols: Any,
-    issues: list[str],
-) -> None:
-    """Validate the optional symbol gloss on a formula or objective_function.
-
-    Each entry maps one symbol/variable from the expression to its meaning; both
-    fields must be non-empty when an entry is present. The array may be empty when
-    the expression introduces no symbols to define.
-    """
-    if symbols is None:
-        return
-    if not isinstance(symbols, list):
-        issues.append(f"Method {uid} {where} symbols must be a list")
-        return
-    for index, entry in enumerate(symbols):
-        if not isinstance(entry, dict):
-            issues.append(f"Method {uid} {where} symbols[{index}] must be an object")
-            continue
-        if not entry.get("symbol"):
-            issues.append(f"Method {uid} {where} symbols[{index}] missing symbol")
-        if not entry.get("description"):
-            issues.append(f"Method {uid} {where} symbols[{index}] missing description")
-
-
 def _validate_unit_fields(
     unit: dict[str, Any],
     unit_index: dict[str, dict[str, Any]],
@@ -3523,6 +3496,8 @@ def _validate_unit_fields(
         if method_kind is not None and method_kind not in METHOD_KINDS:
             issues.append(f"Method {uid} has invalid method_kind: {method_kind}")
         # inputs/outputs/formulas/objective_function are optional; validate shape only when present.
+        # Formulas carry {name, expression}; the per-symbol glossary was dropped in section-ir-0.12
+        # (see generate_section_schemas.formulas_schema) so there is no symbols field to validate.
         formulas = unit.get("formulas")
         if formulas is not None:
             if not isinstance(formulas, list):
@@ -3534,9 +3509,6 @@ def _validate_unit_fields(
                         continue
                     if not formula.get("expression"):
                         issues.append(f"Method {uid} formulas[{index}] missing expression")
-                    _validate_formula_symbols(
-                        uid, f"formulas[{index}]", formula.get("symbols"), issues
-                    )
         objective = unit.get("objective_function")
         if objective is not None:
             if not isinstance(objective, dict):
@@ -3544,9 +3516,6 @@ def _validate_unit_fields(
             else:
                 if not objective.get("expression"):
                     issues.append(f"Method {uid} objective_function missing expression")
-                _validate_formula_symbols(
-                    uid, "objective_function", objective.get("symbols"), issues
-                )
     elif utype == "Finding":
         if not unit.get("statement"):
             issues.append(f"Finding {uid} missing statement")

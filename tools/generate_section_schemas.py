@@ -234,37 +234,16 @@ def scores_schema(description: str) -> dict[str, Any]:
     }
 
 
-def symbols_schema() -> dict[str, Any]:
-    return {
-        "type": "array",
-        "description": (
-            "Definitions of the symbols and variables appearing in the expression; "
-            "empty array when the expression introduces none"
-        ),
-        "items": {
-            "type": "object",
-            "required": ["symbol", "description"],
-            "additionalProperties": False,
-            "properties": {
-                "symbol": {
-                    "type": "string",
-                    "description": "A symbol or variable from the expression, e.g. 'Q', 'd_k', 'W^O'",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "What the symbol denotes, e.g. 'query matrix', 'dimension of the keys'",
-                },
-            },
-        },
-    }
-
-
 def formulas_schema(description: str) -> dict[str, Any]:
+    # section-ir-0.12 lean formulas: capture the equation itself (name + expression) but NOT a
+    # per-symbol glossary. The symbols[] array was ~25% of method output bytes (87% of it the prose
+    # descriptions) with no graph consumer — only the HTML renderer ever read it — so it is dropped
+    # for cost. Symbol meanings stay recoverable from the expression and the method's description.
     return {
         "type": "array",
         "items": {
             "type": "object",
-            "required": ["name", "expression", "symbols"],
+            "required": ["name", "expression"],
             "additionalProperties": False,
             "properties": {
                 "name": {
@@ -275,7 +254,6 @@ def formulas_schema(description: str) -> dict[str, Any]:
                     "type": "string",
                     "description": "The equation itself, as LaTeX or plain text, e.g. 'softmax(QK^T/sqrt(d_k))V'",
                 },
-                "symbols": symbols_schema(),
             },
         },
         "description": description,
@@ -283,9 +261,11 @@ def formulas_schema(description: str) -> dict[str, Any]:
 
 
 def objective_function_schema(description: str) -> dict[str, Any]:
+    # See formulas_schema: the symbols glossary is dropped for cost; keep expression + a one-line
+    # description of what is optimized.
     return {
         "type": "object",
-        "required": ["expression", "description", "symbols"],
+        "required": ["expression", "description"],
         "additionalProperties": False,
         "properties": {
             "expression": {
@@ -296,7 +276,6 @@ def objective_function_schema(description: str) -> dict[str, Any]:
                 "type": "string",
                 "description": "What the objective optimizes; empty string when only the formula is reported",
             },
-            "symbols": symbols_schema(),
         },
         "description": description,
     }

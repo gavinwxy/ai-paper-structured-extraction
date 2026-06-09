@@ -115,8 +115,7 @@
                   "type": "object",
                   "required": [
                     "name",
-                    "expression",
-                    "symbols"
+                    "expression"
                   ],
                   "additionalProperties": false,
                   "properties": {
@@ -127,28 +126,6 @@
                     "expression": {
                       "type": "string",
                       "description": "The equation itself, as LaTeX or plain text, e.g. 'softmax(QK^T/sqrt(d_k))V'"
-                    },
-                    "symbols": {
-                      "type": "array",
-                      "description": "Definitions of the symbols and variables appearing in the expression; empty array when the expression introduces none",
-                      "items": {
-                        "type": "object",
-                        "required": [
-                          "symbol",
-                          "description"
-                        ],
-                        "additionalProperties": false,
-                        "properties": {
-                          "symbol": {
-                            "type": "string",
-                            "description": "A symbol or variable from the expression, e.g. 'Q', 'd_k', 'W^O'"
-                          },
-                          "description": {
-                            "type": "string",
-                            "description": "What the symbol denotes, e.g. 'query matrix', 'dimension of the keys'"
-                          }
-                        }
-                      }
                     }
                   }
                 },
@@ -158,8 +135,7 @@
                 "type": "object",
                 "required": [
                   "expression",
-                  "description",
-                  "symbols"
+                  "description"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -170,28 +146,6 @@
                   "description": {
                     "type": "string",
                     "description": "What the objective optimizes; empty string when only the formula is reported"
-                  },
-                  "symbols": {
-                    "type": "array",
-                    "description": "Definitions of the symbols and variables appearing in the expression; empty array when the expression introduces none",
-                    "items": {
-                      "type": "object",
-                      "required": [
-                        "symbol",
-                        "description"
-                      ],
-                      "additionalProperties": false,
-                      "properties": {
-                        "symbol": {
-                          "type": "string",
-                          "description": "A symbol or variable from the expression, e.g. 'Q', 'd_k', 'W^O'"
-                        },
-                        "description": {
-                          "type": "string",
-                          "description": "What the symbol denotes, e.g. 'query matrix', 'dimension of the keys'"
-                        }
-                      }
-                    }
                   }
                 },
                 "description": "The optimization objective or loss the method minimizes/maximizes; omit when the method defines none"
