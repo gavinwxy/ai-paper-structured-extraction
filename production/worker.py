@@ -386,14 +386,30 @@ async def _run_all_content_sections(
     system_prompt, _ = load_prompt(SECTION_EXTRACTION_PROMPT_PATH)
     spine_summary = census.get("spine_summary") if isinstance(census.get("spine_summary"), dict) else None
 
-    tasks = [
-        _extract_single_content_section(
+    def _section(section_type: str):
+        return _extract_single_content_section(
             paper_id, paper_content, section_type, node_registry, relations,
             spine_summary, system_prompt, cache_key, config, llm, paper_dir,
         )
-        for section_type in SECTION_ORDER
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    if config.warm_content_cache and len(SECTION_ORDER) > 1:
+        # P3 lever: run the cheapest section (SECTION_ORDER[0] = "problem") to completion first so
+        # its [system+paper+spine+registry+relations] prefix populates the automatic prefix-cache;
+        # the remaining sections then hit that warm prefix instead of racing it cold. Mirror
+        # gather(return_exceptions=True) by capturing the warmer's exception so the loop below
+        # stays aligned to SECTION_ORDER and aggregates errors identically.
+        try:
+            first: Any = await _section(SECTION_ORDER[0])
+        except BaseException as exc:  # noqa: BLE001 — match gather's exception capture
+            first = exc
+        rest = await asyncio.gather(
+            *(_section(s) for s in SECTION_ORDER[1:]), return_exceptions=True
+        )
+        results: list[Any] = [first, *rest]
+    else:
+        results = await asyncio.gather(
+            *(_section(s) for s in SECTION_ORDER), return_exceptions=True
+        )
 
     section_results: list[dict[str, Any]] = []
     errors: list[str] = []

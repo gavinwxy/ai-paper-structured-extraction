@@ -31,3 +31,10 @@ class Config:
     # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim source
     # tables and record a `score_fidelity` block in extraction_notes. No effect on extracted data.
     verify_scores: bool = True
+    # P3 cost lever (opt-in, default off): the three content sections share a byte-identical
+    # paper-inclusive prompt prefix but fire concurrently, so the automatic prefix-cache is cold
+    # when they race and the paper is re-sent uncached up to 3x. When True, the first (cheapest)
+    # section runs to completion first to warm that prefix, then the rest hit the cache. Measured
+    # headroom ~6% of the eff-cost proxy on the 0.11 benchmark; costs one section of serial
+    # latency. Validate per-proxy before enabling — automatic-cache warming is timing-dependent.
+    warm_content_cache: bool = False

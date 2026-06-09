@@ -66,6 +66,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Reprocess all papers (ignore resumability)")
     parser.add_argument("--no-verify-scores", dest="verify_scores", action="store_false",
                         help="Disable the score-fidelity audit (transcribed values vs source tables)")
+    parser.add_argument("--warm-content-cache", dest="warm_content_cache", action="store_true",
+                        help="P3 cost lever: run the first content section first to warm the shared "
+                             "paper prefix so the rest hit the prefix-cache (saves ~6 pct eff-cost, "
+                             "costs one section of serial latency; validate per-proxy first)")
     return parser.parse_args()
 
 
@@ -97,6 +101,7 @@ def main() -> None:
         force=args.force,
         log_level=args.log_level,
         verify_scores=args.verify_scores,
+        warm_content_cache=args.warm_content_cache,
     )
 
     setup_logging(config.output_dir, config.log_level)

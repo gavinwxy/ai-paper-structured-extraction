@@ -120,8 +120,21 @@ reprocess. Common flags:
 | `--planning-max-tokens N` | `24576` | budget for census / relations / metadata / references |
 | `--max-retries N` | `3` | retries per LLM call (re-issues on malformed JSON) |
 | `--force` | off | ignore resumability, reprocess everything |
+| `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
+| `--warm-content-cache` | off | run the first content section first to warm the shared paper prefix, so the other two hit the prompt cache instead of racing it cold (see below) |
 
 Run `.venv/bin/python -m production --help` for the full set.
+
+**`--warm-content-cache`** (cost lever, opt-in). The three content sections (problem/method/evidence)
+share a byte-identical paper-inclusive prompt prefix but normally fire concurrently, so the provider's
+automatic prefix-cache is cold when they race and the paper is re-sent uncached up to 3×. With this
+flag the cheapest section (`problem`) runs to completion first to warm that prefix; the other two then
+cache it. On a **cold** proxy this recovers ~25 pts of content-section prompt into cache (≈6% of
+effective $), validated 12/12 papers; on an already-warm proxy it is redundant. It never worsens cache
+(only `method`/`evidence` improve) but costs ~one section of serial latency per paper, so it is OFF by
+default — enable it for cost-priority / cold-start batches. Inspect `relations` cached% in the
+telemetry to tell whether a proxy is warm (high ⇒ flag redundant); see
+`tools/token_cost_report.py --cache`.
 
 ### End-to-end smoke test (single papers)
 
@@ -413,7 +426,8 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 │   ├── render_extraction.py             # Render extraction JSON → HTML
 │   ├── count_extraction.py              # Node/relation counts
 │   ├── relink_references.py             # Replay reference reconcile over an existing batch (in place)
-│   └── ab_reference_roles.py            # A/B-test the references-stage citation-relation vocab
+│   ├── ab_reference_roles.py            # A/B-test the references-stage citation-relation vocab
+│   └── token_cost_report.py             # Per-stage token/cost report + prompt-cache diagnosis (--cache)
 └── tests/                               # Local test harness + corpus (not version-controlled)
     ├── test_section_pipeline.py         #   unit tests
     ├── test_section_extraction.py       #   end-to-end LLM smoke test (reads tests/papers/{id}.md)
