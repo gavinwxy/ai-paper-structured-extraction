@@ -155,7 +155,35 @@
                     }
                   }
                 },
-                "description": "Flat array of reported scores under this measure \u2014 one row per system, covering the method family's own variants and every compared-against baseline"
+                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here."
+              },
+              "source_table_marker": {
+                "type": "string",
+                "description": "Optional (blob-primary): the [\u00a7N] block id of the <table> this measure reads (e.g. '\u00a753'). Code slices that table verbatim \u2014 you never retype it. Omit for a prose-derived measure."
+              },
+              "caption_marker": {
+                "type": "string",
+                "description": "Optional (blob-primary): the [\u00a7N] block id of the table's caption (e.g. '\u00a752'). Code slices the caption verbatim. Omit when there is no caption block."
+              },
+              "table_role": {
+                "type": "string",
+                "enum": [
+                  "main_result",
+                  "ablation"
+                ],
+                "description": "Optional (blob-primary): main_result (a headline comparison \u2014 emit the contribution method's own score rows) or ablation (component/sensitivity study \u2014 emit no score rows; the source table carries it). Defaults to main_result."
+              },
+              "headline_result": {
+                "type": "string",
+                "description": "Optional (blob-primary): the contribution method's key one-liner from this table (e.g. 'Ours reaches 29.1 BLEU on WMT14 EN-DE, +2.1 over the prior best'). Emit it whenever the contribution's headline number is in this table, for either table_role."
+              },
+              "finding_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$"
+                },
+                "description": "Optional (blob-primary): ids of the Findings this table evidences (mounted directly, replacing the Finding<->Measure edges). Each must be a Finding born in this same response."
               }
             }
           }

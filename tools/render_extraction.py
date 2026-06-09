@@ -602,6 +602,23 @@ def render_unit_card(
     </div>"""
 
 
+def render_table_prettify(html: str, caption: str = "", marker: str = "") -> str:
+    """Render a verbatim source ``<table>`` blob inside a namespaced ``kb-measure-table`` wrapper.
+
+    The wrapper scopes all styling via descendant selectors (``.kb-measure-table table`` …) so the
+    paper's own table classes/inline styles cannot collide with the viewer's. The table HTML is the
+    paper's own markup, inserted as-is — these are trusted local papers and the whole point is to show
+    the verbatim grid; the caption (the model-chosen block, sliced verbatim in assembly) is shown as a
+    label with its surrounding ``**`` markdown stripped.
+    """
+    if not html:
+        return ""
+    cap = (caption or "").strip().strip("*").strip()
+    cap_html = f"<div class='kb-mt-cap'>{escape(cap)}</div>" if cap else ""
+    src_html = f"<span class='kb-mt-src'>source {escape(marker)}</span>" if marker else ""
+    return f"<div class='kb-measure-table'>{cap_html}<div class='kb-mt-wrap'>{html}</div>{src_html}</div>"
+
+
 def render_metric_block(
     m: dict,
     unit_index: dict,
@@ -614,8 +631,18 @@ def render_metric_block(
     in_edges: dict,
     neighbors: dict,
     unit_section: dict,
+    source_tables: dict | None = None,
+    rendered_markers: set[str] | None = None,
 ) -> str:
-    """A Measure rendered as a comparison block — itself an addressable, focusable node."""
+    """A Measure rendered as a comparison block — itself an addressable, focusable node.
+
+    Blob-primary (0.12): a Measure may carry a ``headline_result`` one-liner (rendered as a pill), a
+    ``source_table_marker`` that resolves to a verbatim source-table blob (rendered once per distinct
+    marker — a shared multi-metric table is drawn under its first Measure, later ones link up to it),
+    and ``finding_ids`` mounting the Findings it evidences (rendered as links). Marker-less Measures
+    (flag-off / prose / older outputs) render exactly as before via ``render_scores``.
+    """
+    source_tables = source_tables or {}
     mid = m.get("id", "")
     subj_ids = subject_by_metric.get(mid, [])
     head = next((s for s in subj_ids if roles_final.get(s) == "contribution"), subj_ids[0] if subj_ids else "")
@@ -631,6 +658,35 @@ def render_metric_block(
         meta_bits += f"<span class='m-meta'>evaluates <b>{escape(str(name_of(head)))}</b></span>"
     if ds_ids:
         meta_bits += f"<span class='m-meta'>on {escape(', '.join(name_of(d) for d in ds_ids))}</span>"
+
+    headline = m.get("headline_result")
+    headline_html = f"<div class='m-headline'>{escape(str(headline))}</div>" if headline else ""
+
+    # Verbatim source-table blob, drawn once per distinct marker across the section.
+    blob_html = ""
+    marker = (m.get("source_table_marker") or "").strip()
+    if marker:
+        entry = source_tables.get(marker)
+        if isinstance(entry, dict) and entry.get("html"):
+            if rendered_markers is not None and marker in rendered_markers:
+                blob_html = f"<div class='m-tableref'>source table {escape(marker)} shown above</div>"
+            else:
+                if rendered_markers is not None:
+                    rendered_markers.add(marker)
+                blob_html = render_table_prettify(entry.get("html", ""), entry.get("caption", ""), marker)
+
+    # Mounted findings (0.12) — the table→finding link, replacing the Finding↔Measure edges.
+    finding_links = []
+    for fid in m.get("finding_ids") or []:
+        if not isinstance(fid, str):
+            continue
+        label = name_of(fid)
+        label = str(label)[:90] + ("…" if len(str(label)) > 90 else "")
+        finding_links.append(
+            f"<a class='m-finding' href='#u-{escape(fid)}' data-peer='{escape(fid)}'>{escape(label)}</a>"
+        )
+    findings_html = f"<div class='m-findings'>{''.join(finding_links)}</div>" if finding_links else ""
+
     prov_html = render_provenance(m.get("provenance", []))
     rels_html = render_unit_relations(mid, out_edges, in_edges, unit_index, unit_section)
     data_rel = " ".join(sorted(neighbors.get(mid, set())))
@@ -643,7 +699,10 @@ def render_metric_block(
         <span class="m-unit">{escape(str(m.get('unit', '')))}</span>
         {meta_bits}
       </div>
+      {headline_html}
       {scores_html}
+      {blob_html}
+      {findings_html}
       {f'<div class="u-prov">{prov_html}</div>' if prov_html else ''}
       {rels_html}
     </div>"""
@@ -755,10 +814,12 @@ def render_section(
     subject_by_metric: dict,
     dataset_by_metric: dict,
     cite_by_unit: dict,
+    source_tables: dict | None = None,
 ) -> str:
     color = SECTION_COLORS.get(section_type, "#64748b")
     label = SECTION_LABELS.get(section_type, section_type.replace("_", " ").title())
     subtitle = SECTION_SUBTITLES.get(section_type, "")
+    source_tables = source_tables or {}
 
     # Dedup units across sections of the same type.
     seen: set[str] = set()
@@ -781,10 +842,12 @@ def render_section(
         # Measures as comparison blocks first, then findings/other as cards.
         measures = [u for u in units if u.get("type") == "Measure"]
         others = [u for u in units if u.get("type") != "Measure"]
+        rendered_markers: set[str] = set()  # dedup a shared source-table blob across measures
         for m in measures:
             body += render_metric_block(
                 m, unit_index, subject_by_metric, dataset_by_metric, roles_final,
                 baseline_keys, baseline_ids, out_edges, in_edges, neighbors, unit_section,
+                source_tables=source_tables, rendered_markers=rendered_markers,
             )
         for u in others:
             body += render_unit_card(u, unit_index, section_type=section_type, **common)
@@ -937,6 +1000,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     doc = data.get("document", {})
     notes = data.get("extraction_notes", {})
     ir_version = notes.get("ir_version", "")
+    source_tables = notes.get("source_tables") if isinstance(notes.get("source_tables"), dict) else {}
 
     total_units = sum(1 for u in unit_index.values() if u.get("type") != "Document")
     total_sections = len(data.get("sections", []))
@@ -961,7 +1025,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
             out_edges=out_edges, in_edges=in_edges, neighbors=neighbors, unit_section=unit_section,
             roles_final=roles_final, baseline_keys=baseline_keys, baseline_ids=baseline_ids,
             subject_by_metric=subject_by_metric, dataset_by_metric=dataset_by_metric,
-            cite_by_unit=cite_by_unit,
+            cite_by_unit=cite_by_unit, source_tables=source_tables,
         )
 
     references_html = render_references_panel(references, unit_index)
@@ -1142,6 +1206,21 @@ body.focusing .unit:not(.focus):not(.related) { opacity:.26; }
 a.score-sys { cursor:pointer; }
 a.score-sys:hover { color:#93c5fd; }
 .score-set { color:#94a3b8; font-size:.72rem; }
+
+/* Blob-primary evidence (0.12): headline pill, mounted findings, verbatim source-table blob */
+.m-headline { margin-top:8px; padding:6px 10px; border-left:3px solid #2dd4bf; background:#0f2a2a; color:#d1faf4; font-size:.82rem; border-radius:4px; }
+.m-findings { margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; }
+a.m-finding { font-size:.72rem; color:#cbd5e1; background:#1e293b; border:1px solid #334155; padding:2px 8px; border-radius:10px; text-decoration:none; cursor:pointer; }
+a.m-finding:hover { color:#93c5fd; border-color:#3b82f6; }
+.m-tableref { margin-top:8px; font-size:.72rem; color:#64748b; font-style:italic; }
+.kb-measure-table { margin-top:10px; }
+.kb-mt-cap { font-size:.72rem; color:#94a3b8; margin-bottom:5px; font-weight:600; }
+.kb-mt-src { display:inline-block; margin-top:4px; font-size:.6rem; color:#5b6b85; font-family:ui-monospace,monospace; }
+.kb-mt-wrap { overflow-x:auto; border:1px solid #25324a; border-radius:6px; }
+.kb-measure-table table { border-collapse:collapse; font-size:.74rem; width:100%; color:#cbd5e1; }
+.kb-measure-table th, .kb-measure-table td { border:1px solid #1e293b; padding:3px 7px; text-align:left; white-space:nowrap; }
+.kb-measure-table th { background:#16233c; color:#94a3b8; font-weight:700; }
+.kb-measure-table tr:nth-child(even) td { background:#0e1726; }
 
 /* References */
 .refs-sec .sec-body { max-height:440px; overflow-y:auto; }

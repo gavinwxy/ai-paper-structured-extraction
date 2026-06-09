@@ -30,6 +30,7 @@ from section_pipeline import (
     normalize_census_nodes,
     validate_census,
     build_node_registry,
+    build_table_index,
     render_content_user_prompt,
     build_prompt_cache_key,
     assemble_extraction,
@@ -160,6 +161,7 @@ async def _run_paper_pipeline(
             sections_included=sections_included,
             sections_omitted=[],
             verify_scores=config.verify_scores,
+            blob_primary_evidence=config.blob_primary_evidence,
         )
         if references is not None:
             warnings.extend(reconcile_reference_units(references, extraction, census))
@@ -442,7 +444,9 @@ async def _extract_single_content_section(
     paper_dir: Path,
 ) -> dict[str, Any]:
     """Extract a single content section with retry logic."""
-    section_module = load_section_module(section_type)
+    section_module = load_section_module(section_type, config.blob_primary_evidence)
+    if config.blob_primary_evidence and section_type == "evidence":
+        section_module = f"{section_module}\n\n## Source-table index\n{build_table_index(paper_content)}"
     section_schema = load_section_schema(section_type)
     resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=config.model)
 

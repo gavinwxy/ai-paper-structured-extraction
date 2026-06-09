@@ -1,7 +1,7 @@
 # Section-IR Extraction Pipeline
 
 A three-stage LLM pipeline that reads a scientific paper (Markdown) and extracts its
-**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.11`):
+**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.12`):
 
 ```
 problem → method → evidence
@@ -122,6 +122,7 @@ reprocess. Common flags:
 | `--force` | off | ignore resumability, reprocess everything |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
 | `--no-warm-content-cache` | on (warming) | disable content-cache warming; run the three content sections fully concurrently instead of warming the shared prefix first (see below) |
+| `--blob-primary-evidence` | off (rollout) | section-ir-0.12 blob-primary evidence: point at result tables by `[§N]` marker and transcribe only the contribution method's rows; baselines + ablation grids stay in the code-sliced verbatim table blob (see below) |
 
 Run `.venv/bin/python -m production --help` for the full set.
 
@@ -136,6 +137,20 @@ harmless (it never worsens cache — only `method`/`evidence` improve). It costs
 latency per paper, so pass `--no-warm-content-cache` for latency-priority runs or when the proxy is
 demonstrably warm. Inspect `relations` cached% in the telemetry to tell whether a proxy is warm
 (high ⇒ warming redundant); see `tools/token_cost_report.py --cache`.
+
+**Blob-primary evidence** (completion-cost lever, **off by default during rollout**; enable with
+`--blob-primary-evidence`). Result-collection data is the heaviest part of the output (score rows
+dominate completion tokens), and most of those rows are *baselines* — competitor numbers the LLM
+laboriously (and sometimes lossily) retypes. In blob-primary mode the evidence pass instead **points**
+at each result table by its `[§N]` block marker (`source_table_marker`/`caption_marker`); code slices
+that table and caption verbatim into `extraction_notes.source_tables`, so the full leaderboard and
+every ablation grid are preserved **without** transcription tokens or transcription error. The LLM
+transcribes only the **contribution method's own** rows (`table_role: main_result`) or none at all
+(`table_role: ablation`), emits a `headline_result` one-liner as a durable text backstop, and mounts
+the findings a table evidences via `Measure.finding_ids` (replacing the `Finding`↔`Measure` edges).
+The contribution rows stay structured and verifier-checked, so the queryable high-value core is
+intact at near-zero cost. Gated behind the flag until the corpus is re-run, then flipped on by
+default (mirroring the warm-cache rollout).
 
 ### End-to-end smoke test (single papers)
 
@@ -453,7 +468,17 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 ## Versioning
 
-Current IR version: **`section-ir-0.11`** (`extraction_notes.input_mode = node_census_pipeline`).
+Current IR version: **`section-ir-0.12`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.12 is the **blob-primary evidence** revision: a results Measure may point at its source `<table>`
+by `[§N]` marker (`source_table_marker`/`caption_marker`) and carry only the contribution method's
+own score rows (`table_role: main_result`) or none at all (`table_role: ablation`), with the
+compared-against baselines and whole ablation grids left in the code-sliced verbatim table blob
+rather than transcribed. A `headline_result` one-liner backstops the contribution number and
+`finding_ids` mounts the Findings a table evidences (replacing the Finding↔Measure edges). It is
+additive over 0.11 (every new Measure field is optional) except the `ir_version` string and the
+relaxed rule that a Measure with a `source_table_marker` may carry empty `scores`; gated behind
+`--blob-primary-evidence` until the corpus is re-run.
 
 0.11 **unifies** the references-stage citation roles onto the unit-graph edge vocabulary — a
 citation role is an edge-in-waiting: `extends`→`builds_on`, `uses_component`→`uses`,

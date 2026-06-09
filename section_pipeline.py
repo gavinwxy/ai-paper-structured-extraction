@@ -69,10 +69,11 @@ APPENDIX_SPELLED_RE = re.compile(r"^App(?:endix)?\.?\s+([A-Za-z])(?![A-Za-z])")
 # to its §X parent, exactly as the dotted/hyphenated forms do (the digit starts the subsection).
 APPENDIX_NUMBERED_RE = re.compile(r"^§([A-Za-z]+)\d")
 # P4 source-of-truth capture: every inline <table> blob is sliced verbatim (deterministically, no
-# parser) into extraction_notes.source_tables, tagged with the nearest preceding §N block anchor and
-# its **Table k** caption. The model never sees or emits this — it is the raw grid behind the evidence
-# pass's transcribed score rows, kept for audit/fallback and as the re-derivation source a future
-# table parser can read instead of re-reading the whole paper.
+# parser) into extraction_notes.source_tables, a dict keyed by the §N block that contains the table
+# (the same `[§N]` marker the evidence pass references) carrying that block's **Table k** caption.
+# The model never emits this html — it is the raw grid behind the evidence pass's score rows, kept
+# for audit/fallback and as the re-derivation source a future table parser can read instead of
+# re-reading the whole paper.
 TABLE_BLOCK_RE = re.compile(r"<table\b.*?</table>", re.DOTALL | re.IGNORECASE)
 TABLE_CAPTION_RE = re.compile(r"\*\*\s*Tab(?:le|\.)?[^*\n]*\*\*", re.IGNORECASE)
 
@@ -319,6 +320,10 @@ SCORE_VALUE_KINDS = {"numeric", "symbolic", "asymptotic", "qualitative", "curve"
 # measure sits on, so a precision/cost/fairness/safety trade-off does not read as uniformly
 # positive evidence. Omitted ⇒ the headline quality axis (the leaderboard default), so additive.
 MEASURE_OBJECTIVE_CLASSES = {"primary_quality", "cost_efficiency", "fairness", "safety", "robustness"}
+# Optional Measure table role (0.12, blob-primary): main_result tables carry the contribution
+# method's own score rows (baselines stay in the source-table blob); ablation tables carry no rows
+# at all (the blob is the whole story). Omitted ⇒ main_result.
+MEASURE_TABLE_ROLES = {"main_result", "ablation"}
 # Removed in the AI/ML-scoped type cleanup (each was monotone across the corpus): Measure
 # `value_type` (always scalar), Finding `novelty` (always original), `epistemic_status`
 # (always conclusion). Finding `polarity` was dropped in 0.9 but is reintroduced in 0.10 as an
@@ -437,6 +442,17 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "setup_ids",
         "comparison_direction",
         "objective_class",
+        # Blob-primary evidence (section-ir-0.12, all optional): the Measure points at its source
+        # table by [§N] marker rather than transcribing every comparison row. `source_table_marker`
+        # / `caption_marker` are the [§N] block ids of the <table> and its caption (code slices both
+        # verbatim); `table_role` classifies the table; `headline_result` is the contribution's key
+        # one-liner (the #2 backstop, kept even for ablations); `finding_ids` mounts the Findings
+        # this table evidences (replacing the Finding<->Measure edges).
+        "source_table_marker",
+        "caption_marker",
+        "table_role",
+        "headline_result",
+        "finding_ids",
         "provenance",
     },
     "Finding": {
@@ -665,9 +681,18 @@ def load_section_schema(section_type: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_section_module(section_type: str) -> str:
-    """Load the per-section focus module text for prompt injection."""
-    path = SECTION_MODULES_DIR / f"{section_type}.md"
+def load_section_module(section_type: str, blob_primary_evidence: bool = False) -> str:
+    """Load the per-section focus module text for prompt injection.
+
+    When ``blob_primary_evidence`` is set, the evidence section uses the blob-primary module
+    (``evidence-blob.md``) — the LLM points at result tables by ``[§N]`` marker and transcribes only
+    the contribution method's rows, instead of retyping every baseline. All other sections, and the
+    flag-off evidence path, use ``{section_type}.md`` unchanged.
+    """
+    name = section_type
+    if blob_primary_evidence and section_type == "evidence":
+        name = "evidence-blob"
+    path = SECTION_MODULES_DIR / f"{name}.md"
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8").strip()
@@ -1640,7 +1665,7 @@ def build_extraction_notes(
     must_nodes = census_must_node_ids(census)
     covered = must_nodes & materialized_ids
     notes: dict[str, Any] = {
-        "ir_version": "section-ir-0.11",
+        "ir_version": "section-ir-0.12",
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
         "uncertain_assignments": [],
         "skipped_spans": [],
@@ -1782,6 +1807,11 @@ def _drop_empty_scores_measures(
     no data and is schema-invalid. Edges that pointed at it are pruned by the later relation
     dangling-check. Lossy-but-safe; logged to uncertain_assignments.
 
+    0.12 (blob-primary) exception: a Measure with empty scores that carries a ``source_table_marker``
+    is an **ablation/table-blob** measure — its data is the code-sliced verbatim table, not transcribed
+    rows — so it is kept. Only a marker-less empty Measure (a metric the model named but could not
+    fill) is dropped.
+
     FG-10 D1 (section-ir-0.10): each drop is also recorded in ``dropped_out`` (when provided) as a
     structured ``{item_id, reason}`` so assembly can surface it in ``extraction_notes.uncovered_items``
     — the canonical "what was not captured" list — instead of leaving the loss only in the free-text
@@ -1795,7 +1825,8 @@ def _drop_empty_scores_measures(
         kept: list[dict[str, Any]] = []
         for unit in units:
             scores = unit.get("scores")
-            if unit.get("type") == "Measure" and not (isinstance(scores, list) and scores):
+            has_marker = bool(unit.get("source_table_marker"))
+            if unit.get("type") == "Measure" and not (isinstance(scores, list) and scores) and not has_marker:
                 warnings.append(f"dropped Measure {unit.get('id')!r} with empty scores")
                 if dropped_out is not None and isinstance(unit.get("id"), str):
                     dropped_out.append(
@@ -2177,19 +2208,25 @@ def _assign_resolves(
     return new_relations
 
 
-def _slice_source_tables(paper_content: str) -> list[dict[str, str]]:
-    """Slice every verbatim inline <table> blob, tagged with its §N anchor and **Table k** caption.
+def _slice_source_tables(paper_content: str) -> dict[str, dict[str, str]]:
+    """Slice every verbatim inline <table> blob, keyed by the `[§N]` block that contains it.
 
-    Deterministic and lossless (P4): the LLM never sees or emits this; it is the raw grid behind the
-    evidence pass's transcribed score rows, captured for audit/fallback and as the re-derivation
-    source a future table parser can read instead of re-reading the whole paper. The caption is
-    bounded to the region since the previous table so a caption-less table can't steal a distant one.
+    Deterministic and lossless (P4): the LLM never emits this html; it is the raw grid behind the
+    evidence pass, captured for audit/fallback and as the re-derivation source a future table parser
+    can read instead of re-reading the whole paper. The caption is bounded to the region since the
+    previous table so a caption-less table can't steal a distant one.
+
+    Returns a dict keyed by the table's `§N` ``marker`` (the same `[§N]` block id the evidence pass
+    references via ``source_table_marker``), so a Measure's marker self-checks (it must be a key here)
+    and the renderer can resolve the blob by marker. Each entry is ``{marker, caption, html}``. When a
+    single `[§N]` block holds more than one ``<table>`` the blobs are concatenated under that one
+    marker (lossless for the by-value verifier; flagged elsewhere as an abnormal block).
     """
     if not isinstance(paper_content, str) or "<table" not in paper_content.lower():
-        return []
+        return {}
     anchors = [(m.start(), m.group(1)) for m in SECTION_MARKER_RE.finditer(paper_content)]
     captions = [(m.start(), m.group(0)) for m in TABLE_CAPTION_RE.finditer(paper_content)]
-    tables: list[dict[str, str]] = []
+    tables: dict[str, dict[str, str]] = {}
     prev_end = 0
     for m in TABLE_BLOCK_RE.finditer(paper_content):
         pos = m.start()
@@ -2204,9 +2241,104 @@ def _slice_source_tables(paper_content: str) -> list[dict[str, str]]:
                 break
             if cstart >= prev_end:
                 caption = ctext.strip("* ").strip()
-        tables.append({"anchor": anchor, "caption": caption, "html": m.group(0)})
+        html = m.group(0)
+        existing = tables.get(anchor)
+        if existing is None:
+            tables[anchor] = {"marker": anchor, "caption": caption, "html": html}
+        else:
+            # >1 <table> in one [§N] block: keep both verbatim under the shared marker so the
+            # by-value verifier still sees every cell; first non-empty caption wins.
+            existing["html"] = existing["html"] + "\n" + html
+            if caption and not existing.get("caption"):
+                existing["caption"] = caption
         prev_end = m.end()
     return tables
+
+
+def build_table_index(paper_content: str) -> str:
+    """A reference list of the paper's captured ``<table>`` blocks for the blob-primary evidence prompt.
+
+    The slicer knows exactly which ``[§N]`` blocks contain a ``<table>`` grid; handing that list to the
+    LLM (each table's caption + a header-row preview) grounds ``source_table_marker`` to a real table
+    block instead of letting the model guess a ``§N`` — which it otherwise aims at the prose paragraph
+    that *discusses* a table, at an image ``![...]`` figure, or at a bare caption line (the dominant
+    failure mode on the first benchmark: 31/142 markers pointed at non-table blocks). Returns a
+    no-tables note when the paper has no ``<table>`` grids, so the model transcribes prose numbers
+    with no marker instead of inventing one.
+    """
+    tables = _slice_source_tables(paper_content)
+    if not tables:
+        return (
+            "This paper has NO <table> grids (its results are in prose or figures). Do NOT emit any "
+            "source_table_marker; transcribe the contribution's reported numbers directly as scores[] "
+            "rows, as for a prose result."
+        )
+    lines: list[str] = []
+    for marker, t in tables.items():
+        cap = (t.get("caption") or "").strip().strip("*").strip()
+        preview = " | ".join(c for c in _table_cell_texts(t.get("html", ""))[:8] if c)
+        label = cap or (f"columns: {preview}" if preview else "(no caption)")
+        lines.append(f"- `{marker}` — {label[:180]}")
+    header = (
+        "Available result tables — these are the ONLY blocks that contain a <table> grid. Set every "
+        "`source_table_marker` to one of these EXACT markers; never point at a prose paragraph that "
+        "merely discusses a table, at an image/figure `![...]`, or at a bare caption line. Match a "
+        "measure to its table by the caption/columns below:"
+    )
+    return header + "\n" + "\n".join(lines)
+
+
+def _attach_model_captions(
+    sections: list[dict[str, Any]],
+    source_tables: dict[str, dict[str, str]],
+    paper_content: str,
+) -> list[str]:
+    """Blob-primary: store each table's model-chosen caption verbatim on its ``source_tables`` entry.
+
+    The model points at the caption block with ``caption_marker`` (e.g. ``§52``) — its authoritative
+    location, chosen with the table in view, instead of the slicer's "nearest preceding **Table k**"
+    proximity heuristic. Here we slice that block verbatim from the segmented paper and overwrite the
+    table entry's ``caption`` (and record ``caption_marker``). Falls back silently to the heuristic
+    caption when the marker is missing; warns when it points at a block that does not exist.
+    """
+    blocks = parse_sections(paper_content)  # {N: block_text}, block_text keeps its leading [§N]
+    warnings: list[str] = []
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") != "Measure":
+                continue
+            tmarker = _canon_marker(unit.get("source_table_marker") or "")
+            cmarker = _canon_marker(unit.get("caption_marker") or "")
+            if not cmarker or tmarker not in source_tables:
+                continue
+            block_text = blocks.get(cmarker.lstrip("§"))
+            if not block_text:
+                warnings.append(
+                    f"measure {unit.get('id')!r} caption_marker {cmarker} did not resolve to a block"
+                )
+                continue
+            caption = SECTION_MARKER_RE.sub("", block_text, count=1).strip()
+            source_tables[tmarker]["caption"] = caption
+            source_tables[tmarker]["caption_marker"] = cmarker
+    return warnings
+
+
+def _canon_marker(marker: Any) -> str:
+    """Normalize an evidence-pass section marker to canonical ``§N`` form.
+
+    The blob-primary evidence pass is told to write a table/caption marker as ``"§53"``, but a
+    json_object model may emit ``"53"`` or ``"[§53]"``. Canonicalizing both the stored marker and any
+    lookup key keeps Measure ``source_table_marker``/``caption_marker`` comparable to the
+    ``source_tables`` dict keys (which ``_slice_source_tables`` already emits as ``§N``). Returns ""
+    for a blank/non-string input.
+    """
+    if not isinstance(marker, str):
+        return ""
+    m = marker.strip()
+    if m.startswith("[") and m.endswith("]"):
+        m = m[1:-1].strip()
+    m = m.lstrip("§").strip()
+    return f"§{m}" if m else ""
 
 
 class _TableCellParser(HTMLParser):
@@ -2283,7 +2415,7 @@ def _numeric_keys(text: str) -> list[str]:
 
 def _verify_score_fidelity(
     sections: list[dict[str, Any]],
-    source_tables: list[dict[str, str]],
+    source_tables: dict[str, dict[str, str]],
     paper_content: str = "",
 ) -> dict[str, Any] | None:
     """Cross-check LLM-transcribed score values against the verbatim source tables (the P2 verifier).
@@ -2304,12 +2436,16 @@ def _verify_score_fidelity(
         return None
     face: set[str] = set()
     cell_decimal_keys: set[str] = set()
-    for table in source_tables:
+    marker_faces: dict[str, set[str]] = {}
+    for marker, table in source_tables.items():
+        tface: set[str] = set()
         for cell in _table_cell_texts(table.get("html", "")):
             for key in _numeric_keys(cell):
+                tface.add(key)
                 face.add(key)
                 if "." in key:
                     cell_decimal_keys.add(key)
+        marker_faces[marker] = tface
     if not face:
         return None
     # Numbers anywhere in the paper text (not just tables) — used to separate a value that is
@@ -2332,6 +2468,11 @@ def _verify_score_fidelity(
             rows: list[tuple[str, str, list[str], bool]] = []  # (variant, value, keys, located)
             numeric_count = 0
             located_count = 0
+            # 0.12: a Measure that points at its own source table is checked against THAT table's
+            # cells only (no cross-table false matches); a marker-less / prose Measure, or one whose
+            # marker did not resolve, falls back to the union of all tables.
+            marker = _canon_marker(unit.get("source_table_marker") or "")
+            local_face = marker_faces.get(marker, face) if marker else face
             for score in unit.get("scores") or []:
                 value = str(score.get("value", "")).strip()
                 keys = _numeric_keys(value)
@@ -2339,7 +2480,7 @@ def _verify_score_fidelity(
                     continue  # qualitative/symbolic value — out of scope for a numeric cross-check
                 numeric_count += 1
                 transcribed_keys.update(keys)
-                located = any(key in face for key in keys)
+                located = any(key in local_face for key in keys)
                 if located:
                     located_count += 1
                 rows.append((str(score.get("variant", "")), value, keys, located))
@@ -2383,6 +2524,75 @@ def _verify_score_fidelity(
     }
 
 
+def _mount_findings_on_measures(
+    sections: list[dict[str, Any]], relations: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Blob-primary (0.12): make ``Measure.finding_ids`` the sole table→finding link.
+
+    Three jobs, all on the blob-primary path only (the caller gates on the flag):
+    1. Canonicalize each Measure's ``source_table_marker``/``caption_marker`` to ``§N`` form so they
+       match the ``source_tables`` dict keys downstream.
+    2. Migrate any ``Measure --supports--> Finding`` or ``Finding --about--> Measure`` edge the model
+       authored into the target Measure's ``finding_ids`` (so no link is lost if the model used an
+       edge instead of the mount), then drop those two edge shapes from ``relations``. Other edges —
+       ``Finding --about--> Method/ExperimentSetup``, ``Finding/Method --supports--> Finding`` — are
+       untouched.
+    3. Drop a ``finding_id`` that does not resolve to a Finding unit (a stale mount — a grounding
+       hazard). Each migration/repair is logged to ``uncertain_assignments``.
+    """
+    warnings: list[str] = []
+    finding_unit_ids: set[str] = set()
+    measures: dict[str, dict[str, Any]] = {}
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict):
+                continue
+            uid, utype = unit.get("id"), unit.get("type")
+            if utype == "Finding" and isinstance(uid, str):
+                finding_unit_ids.add(uid)
+            elif utype == "Measure" and isinstance(uid, str):
+                measures[uid] = unit
+                for key in ("source_table_marker", "caption_marker"):
+                    if unit.get(key):
+                        unit[key] = _canon_marker(unit[key])
+
+    def _mount(measure_id: str, finding_id: str) -> None:
+        m = measures.get(measure_id)
+        if m is None:
+            return
+        ids = m.setdefault("finding_ids", [])
+        if isinstance(ids, list) and finding_id not in ids:
+            ids.append(finding_id)
+
+    kept: list[dict[str, Any]] = []
+    for rel in relations:
+        if not isinstance(rel, dict):
+            kept.append(rel)
+            continue
+        src, predicate, tgt = rel.get("source_id"), rel.get("relation"), rel.get("target_id")
+        if predicate == "supports" and src in measures and tgt in finding_unit_ids:
+            _mount(src, tgt)
+            warnings.append(f"mounted finding {tgt!r} on measure {src!r} (dropped supports edge)")
+            continue
+        if predicate == "about" and tgt in measures and src in finding_unit_ids:
+            _mount(tgt, src)
+            warnings.append(f"mounted finding {src!r} on measure {tgt!r} (dropped about edge)")
+            continue
+        kept.append(rel)
+
+    for uid, m in measures.items():
+        ids = m.get("finding_ids")
+        if not isinstance(ids, list):
+            continue
+        resolved = [fid for fid in ids if fid in finding_unit_ids]
+        if len(resolved) != len(ids):
+            stale = [fid for fid in ids if fid not in finding_unit_ids]
+            warnings.append(f"dropped stale finding_ids {stale!r} from measure {uid!r}")
+            m["finding_ids"] = resolved
+
+    return kept, warnings
+
+
 def assemble_extraction(
     census: dict[str, Any],
     stage_b_relations: list[dict[str, Any]],
@@ -2391,6 +2601,7 @@ def assemble_extraction(
     sections_included: list[str] | None = None,
     sections_omitted: list[str] | None = None,
     verify_scores: bool = True,
+    blob_primary_evidence: bool = False,
 ) -> dict[str, Any]:
     """Merge content section results + relation-pass edges into final section-IR 0.7 output.
 
@@ -2455,6 +2666,14 @@ def assemble_extraction(
     relations, warns = _drop_baseline_evaluates(relations, census)
     assembly_warnings.extend(warns)
 
+    # Blob-primary (0.12): the table↔finding link is the Measure's `finding_ids`, not an edge —
+    # migrate any Measure↔Finding edge the model authored into the mount and drop those edge shapes
+    # (and canonicalize the table markers). Runs on the contribution-node-join edges that survive the
+    # cleanup above, and before _assign_resolves (which uses Finding→contribution `about`, untouched).
+    if blob_primary_evidence:
+        relations, warns = _mount_findings_on_measures(sections, relations)
+        assembly_warnings.extend(warns)
+
     # Synthesize the closing `resolves` edge(s) from the surviving contribution-node join,
     # then dedup so a re-run can't double it. These are valid by construction (Finding->Problem).
     synthesized = _assign_resolves(sections, relations, census)
@@ -2484,6 +2703,15 @@ def assemble_extraction(
     document_role = _derive_document_role(census, sections)
     source_tables = _slice_source_tables(paper_content)
     if source_tables:
+        # Blob-primary: override each table's heuristic caption with the model-chosen caption block
+        # (the model's caption_marker is the authoritative location; code slices it verbatim), so the
+        # caption stored beside the table is the one the model pointed at, not a proximity guess.
+        if blob_primary_evidence:
+            cap_warns = _attach_model_captions(sections, source_tables, paper_content)
+            if cap_warns:
+                uncertain = extraction_notes.setdefault("uncertain_assignments", [])
+                if isinstance(uncertain, list):
+                    uncertain.extend(cap_warns)
         extraction_notes["source_tables"] = source_tables
         # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim tables.
         # Writes nothing into units/scores/relations — only a notes block — so it cannot affect render
@@ -2919,10 +3147,13 @@ def extract_single_content_section_sync(
     max_retries: int = MAX_SECTION_RETRIES,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
+    blob_primary_evidence: bool = False,
 ) -> dict[str, Any]:
     """Extract one content section (stage C) using the synchronous LLM client."""
     system_prompt, _ = load_prompt(SECTION_EXTRACTION_PROMPT_PATH)
-    section_module = load_section_module(section_type)
+    section_module = load_section_module(section_type, blob_primary_evidence)
+    if blob_primary_evidence and section_type == "evidence":
+        section_module = f"{section_module}\n\n## Source-table index\n{build_table_index(paper_content)}"
     section_schema = load_section_schema(section_type)
     resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=model)
 
@@ -2987,6 +3218,7 @@ def run_content_extraction_sync(
     max_tokens: int = DEFAULT_SECTION_MAX_TOKENS,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
+    blob_primary_evidence: bool = False,
 ) -> dict[str, Any]:
     """Run the four content sections (stage C) over a shared prefix, then assemble 0.7 output."""
     parsed_sections = parse_sections(paper_content)
@@ -3013,6 +3245,7 @@ def run_content_extraction_sync(
             max_retries=MAX_SECTION_RETRIES,
             prompt_cache_key=cache_key,
             prompt_cache_retention=prompt_cache_retention,
+            blob_primary_evidence=blob_primary_evidence,
         )
 
     # Seed the shared paper prefix into the cache with the first call, then fan out.
@@ -3044,6 +3277,7 @@ def run_content_extraction_sync(
         paper_content,
         sections_included=sections_included,
         sections_omitted=sections_omitted,
+        blob_primary_evidence=blob_primary_evidence,
     )
 
 
@@ -3060,6 +3294,7 @@ def run_pipeline(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     strict: bool = True,
+    blob_primary_evidence: bool = False,
 ) -> dict[str, Any]:
     """Run census + metadata + references in parallel, then the relation pass, content fill, and validation."""
     pipeline_warnings: list[str] = []
@@ -3115,6 +3350,7 @@ def run_pipeline(
         max_tokens=section_max_tokens,
         prompt_cache_key=cache_key,
         prompt_cache_retention=prompt_cache_retention,
+        blob_primary_evidence=blob_primary_evidence,
     )
     if references is not None:
         pipeline_warnings.extend(reconcile_reference_units(references, extraction, census))
@@ -3281,7 +3517,13 @@ def _validate_unit_fields(
             if not unit.get(key):
                 issues.append(f"Measure {uid} missing {key}")
         scores = unit.get("scores")
-        if not isinstance(scores, list) or not scores:
+        has_marker = bool(unit.get("source_table_marker"))
+        if not isinstance(scores, list):
+            issues.append(f"Measure {uid} scores must be a non-empty list")
+        elif not scores and not has_marker:
+            # 0.12 (blob-primary): an ablation/table-blob Measure may carry empty scores, but only
+            # when it points at its source table by marker (the blob carries the data). A marker-less
+            # empty Measure is dataless and is dropped in assembly.
             issues.append(f"Measure {uid} scores must be a non-empty list")
         else:
             for index, score in enumerate(scores):
@@ -3365,6 +3607,30 @@ def _validate_unit_fields(
         objective_class = unit.get("objective_class")
         if objective_class is not None and objective_class not in MEASURE_OBJECTIVE_CLASSES:
             issues.append(f"Measure {uid} has invalid objective_class: {objective_class}")
+        # 0.12 blob-primary fields (all optional). Structure/enum/referential checks here; marker
+        # resolution against extraction_notes.source_tables is enforced loudly in assembly
+        # (_validate_finding_mounts), which is where source_tables is in hand.
+        table_role = unit.get("table_role")
+        if table_role is not None and table_role not in MEASURE_TABLE_ROLES:
+            issues.append(f"Measure {uid} has invalid table_role: {table_role}")
+        for marker_key in ("source_table_marker", "caption_marker"):
+            marker = unit.get(marker_key)
+            if marker is not None and not isinstance(marker, str):
+                issues.append(f"Measure {uid} {marker_key} must be a string")
+        headline = unit.get("headline_result")
+        if headline is not None and not isinstance(headline, str):
+            issues.append(f"Measure {uid} headline_result must be a string")
+        finding_ids = unit.get("finding_ids")
+        if finding_ids is not None:
+            if not isinstance(finding_ids, list):
+                issues.append(f"Measure {uid} finding_ids must be a list")
+            else:
+                for fid in finding_ids:
+                    target = unit_index.get(fid) if isinstance(fid, str) else None
+                    if target is None:
+                        issues.append(f"Measure {uid} finding_ids has unknown id: {fid}")
+                    elif target.get("type") != "Finding":
+                        issues.append(f"Measure {uid} finding_ids {fid} must point to a Finding")
 
 
 def _validate_relation(
@@ -3603,13 +3869,28 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
                 issues.append(f"extraction_notes missing {key}")
         if notes.get("input_mode") != "node_census_pipeline":
             issues.append(f"extraction_notes has invalid input_mode: {notes.get('input_mode')}")
-        if notes.get("ir_version") != "section-ir-0.11":
+        if notes.get("ir_version") != "section-ir-0.12":
             issues.append(f"extraction_notes has invalid ir_version: {notes.get('ir_version')}")
         sections_used = notes.get("sections_used", [])
         if isinstance(sections_used, list):
             invalid_sections = [st for st in sections_used if st not in SECTION_TYPES]
             if invalid_sections:
                 issues.append(f"extraction_notes.sections_used has invalid values: {invalid_sections}")
+
+    # 0.12 blob-primary: a Measure's source_table_marker must resolve to a captured [§N] table block
+    # (extraction_notes.source_tables is a dict keyed by §N). An unresolved marker means the verbatim
+    # table cannot be attached — a grounding hazard — so it is a hard issue. (caption_marker points at
+    # a separate caption block resolved against the paper text in assembly, not here.)
+    source_tables = notes.get("source_tables") if isinstance(notes, dict) else None
+    table_markers = set(source_tables) if isinstance(source_tables, dict) else set()
+    for uid, unit in unit_index.items():
+        if unit.get("type") != "Measure":
+            continue
+        raw_marker = unit.get("source_table_marker")
+        if raw_marker and _canon_marker(raw_marker) not in table_markers:
+            issues.append(
+                f"Measure {uid} source_table_marker {raw_marker!r} does not resolve to a captured source table"
+            )
 
     if census is not None:
         _validate_census_trace(census, covered_entries, unit_index, notes, issues)
