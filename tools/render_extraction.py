@@ -913,11 +913,13 @@ def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
     </header>"""
 
 
-def render_references_panel(references: dict | None, unit_index: dict | None = None) -> str:
-    if not references:
-        return ""
-    refs = references.get("references", [])
-    if not refs:
+def render_references_panel(
+    references: dict | None, unit_index: dict | None = None, references_blob: str | None = None,
+) -> str:
+    refs = references.get("references", []) if isinstance(references, dict) else []
+    # Blob-primary references: the structured `refs` are only the graph-linked entries; the full
+    # bibliography is the code-sliced verbatim blob, shown beneath them. With neither, nothing to render.
+    if not refs and not references_blob:
         return ""
     unit_index = unit_index or {}
     rows, linked = "", 0
@@ -953,13 +955,23 @@ def render_references_panel(references: dict | None, unit_index: dict | None = N
             f'{link_html}</div>\n'
         )
     extra = f" &middot; {linked} linked to units" if linked else ""
+    # Blob-primary: the verbatim full bibliography (code-sliced) shown beneath the structured linked
+    # entries — the completeness backstop for the background refs the references pass no longer transcribes.
+    blob_html = ""
+    if references_blob:
+        title_n = f" &middot; {len(refs)} linked above" if refs else ""
+        blob_html = (
+            f'<div class="ref-blob"><div class="ref-blob-head">Full bibliography (verbatim){title_n}</div>'
+            f'<pre class="ref-blob-body">{escape(references_blob)}</pre></div>\n'
+        )
+    label = "Graph-linked references" if references_blob else "References"
     return f"""
     <section class="sec collapsed refs-sec" id="references">
       <div class="sec-head">
-        <span class="sec-title">References ({len(refs)}){extra}</span>
+        <span class="sec-title">{label} ({len(refs)}){extra}</span>
         <span class="sec-chevron">&#9660;</span>
       </div>
-      <div class="sec-body">{rows}</div>
+      <div class="sec-body">{rows}{blob_html}</div>
     </section>"""
 
 
@@ -1012,7 +1024,9 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     )
 
     header_html = render_metadata_panel(metadata, doc)
-    nav_html = render_nav(grouped, has_refs=bool(isinstance(references, dict) and references.get("references")))
+    nav_html = render_nav(grouped, has_refs=bool(
+        (isinstance(references, dict) and references.get("references")) or notes.get("references_blob")
+    ))
     arc_html = render_discovery_arc(data, unit_index, roles_final, all_links)
 
     section_html = ""
@@ -1028,7 +1042,9 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
             cite_by_unit=cite_by_unit, source_tables=source_tables,
         )
 
-    references_html = render_references_panel(references, unit_index)
+    references_html = render_references_panel(
+        references, unit_index, references_blob=notes.get("references_blob"),
+    )
 
     notes_html = ""
     for ua in notes.get("uncertain_assignments", []):
@@ -1232,6 +1248,9 @@ a.m-finding:hover { color:#93c5fd; border-color:#3b82f6; }
 .ref-links { margin-top:3px; }
 .ref-link { color:#60a5fa; font-size:.72rem; margin-right:8px; cursor:pointer; }
 .ref-link:hover { text-decoration:underline; }
+.ref-blob { margin-top:10px; padding-top:8px; border-top:1px solid #16233c; }
+.ref-blob-head { font-size:.72rem; color:#64748b; font-weight:600; margin-bottom:5px; }
+.ref-blob-body { font-size:.72rem; color:#94a3b8; white-space:pre-wrap; word-break:break-word; margin:0; font-family:inherit; }
 
 /* Citation badges */
 .cite-badges { display:inline-flex; gap:3px; }

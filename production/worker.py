@@ -44,6 +44,7 @@ from section_pipeline import (
     SECTION_EXTRACTION_PROMPT_PATH,
     METADATA_PROMPT_PATH,
     REFERENCES_PROMPT_PATH,
+    REFERENCES_BLOB_PROMPT_PATH,
     METADATA_SCHEMA_PATH,
     REFERENCES_SCHEMA_PATH,
     SECTION_ORDER,
@@ -162,6 +163,7 @@ async def _run_paper_pipeline(
             sections_omitted=[],
             verify_scores=config.verify_scores,
             blob_primary_evidence=config.blob_primary_evidence,
+            blob_primary_references=config.blob_primary_references,
         )
         if references is not None:
             warnings.extend(reconcile_reference_units(references, extraction, census))
@@ -354,7 +356,8 @@ async def _run_references(
     paper_id: str, paper_content: str, config: Config, llm: LLMClient,
 ) -> dict[str, Any]:
     """Run references extraction."""
-    system_prompt, user_template = load_prompt(REFERENCES_PROMPT_PATH)
+    prompt_path = REFERENCES_BLOB_PROMPT_PATH if config.blob_primary_references else REFERENCES_PROMPT_PATH
+    system_prompt, user_template = load_prompt(prompt_path)
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
     schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="references_output", model=config.model)

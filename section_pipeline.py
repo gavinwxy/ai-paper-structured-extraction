@@ -22,6 +22,7 @@ SECTION_MODULES_DIR = PROMPTS_DIR / "section-modules"
 EXAMPLES_DIR = PROMPTS_DIR / "examples"
 METADATA_PROMPT_PATH = PROJECT_ROOT / "prompts" / "metadata-extraction.md"
 REFERENCES_PROMPT_PATH = PROJECT_ROOT / "prompts" / "references-extraction.md"
+REFERENCES_BLOB_PROMPT_PATH = PROJECT_ROOT / "prompts" / "references-extraction-blob.md"
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
 NODE_CENSUS_SCHEMA_PATH = SCHEMAS_DIR / "node-census-output.schema.json"
 RELATION_PASS_SCHEMA_PATH = SCHEMAS_DIR / "relation-pass-output.schema.json"
@@ -76,6 +77,15 @@ APPENDIX_NUMBERED_RE = re.compile(r"^§([A-Za-z]+)\d")
 # re-reading the whole paper.
 TABLE_BLOCK_RE = re.compile(r"<table\b.*?</table>", re.DOTALL | re.IGNORECASE)
 TABLE_CAPTION_RE = re.compile(r"\*\*\s*Tab(?:le|\.)?[^*\n]*\*\*", re.IGNORECASE)
+# Blob-primary references (section-ir-0.12): the whole reference list is sliced verbatim by code into
+# extraction_notes.references_blob (the backstop that lets the LLM transcribe only graph-linked refs and
+# leave background refs in the blob). REFERENCES_HEADER_RE locates the bibliography section header;
+# MARKDOWN_HEADER_RE bounds its end at the next markdown header (an appendix that follows references).
+REFERENCES_HEADER_RE = re.compile(
+    r"^#{1,6}[ \t]*(?:references?|bibliography|references\s+and\s+notes|literature\s+cited)\b[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+MARKDOWN_HEADER_RE = re.compile(r"^#{1,6}[ \t]+\S", re.MULTILINE)
 
 SECTION_TYPES = {"problem", "method", "evidence"}
 SECTION_ORDER = ["problem", "method", "evidence"]
@@ -2288,6 +2298,34 @@ def build_table_index(paper_content: str) -> str:
     return header + "\n" + "\n".join(lines)
 
 
+def _slice_references_blob(paper_content: str) -> str:
+    """Slice the paper's bibliography section verbatim, for blob-primary references.
+
+    Deterministic and lossless: the LLM never re-types the full reference list — code captures it here
+    as the backstop that lets the references pass transcribe only the graph-linked references (the
+    ~40% with a structural role or a provided name) and leave every background reference in this blob.
+    The renderer shows it as the complete bibliography beneath the structured linked entries.
+
+    The section runs from the bibliography header (``# References`` / ``Bibliography`` / ``References and
+    Notes`` …) to the next markdown header (an appendix that follows references) or end-of-file. Takes
+    the LAST header match, since the only ``# References`` header is the bibliography itself and any
+    earlier mention would be body prose. Returns ``""`` when no bibliography header is present.
+    """
+    if not isinstance(paper_content, str) or not paper_content:
+        return ""
+    matches = list(REFERENCES_HEADER_RE.finditer(paper_content))
+    if not matches:
+        return ""
+    head = matches[-1]
+    nxt = MARKDOWN_HEADER_RE.search(paper_content, head.end())
+    end = nxt.start() if nxt else len(paper_content)
+    blob = paper_content[head.start():end]
+    # Drop any stray markdown image the extractor misplaced into the reference run (a figure is never a
+    # reference) so the verbatim bibliography reads clean; references carry no images of their own.
+    blob = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", blob)
+    return blob.strip()
+
+
 def _attach_model_captions(
     sections: list[dict[str, Any]],
     source_tables: dict[str, dict[str, str]],
@@ -2602,6 +2640,7 @@ def assemble_extraction(
     sections_omitted: list[str] | None = None,
     verify_scores: bool = True,
     blob_primary_evidence: bool = False,
+    blob_primary_references: bool = False,
 ) -> dict[str, Any]:
     """Merge content section results + relation-pass edges into final section-IR 0.7 output.
 
@@ -2720,6 +2759,12 @@ def assemble_extraction(
             fidelity = _verify_score_fidelity(sections, source_tables, paper_content)
             if fidelity is not None:
                 extraction_notes["score_fidelity"] = fidelity
+    # Blob-primary references: capture the full bibliography verbatim so the references pass can emit
+    # only graph-linked entries and leave background refs here (the display + completeness backstop).
+    if blob_primary_references:
+        references_blob = _slice_references_blob(paper_content)
+        if references_blob:
+            extraction_notes["references_blob"] = references_blob
     return {
         "document": build_document_unit(
             paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result
