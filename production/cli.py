@@ -67,9 +67,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-verify-scores", dest="verify_scores", action="store_false",
                         help="Disable the score-fidelity audit (transcribed values vs source tables)")
     parser.add_argument("--warm-content-cache", dest="warm_content_cache", action="store_true",
-                        help="P3 cost lever: run the first content section first to warm the shared "
-                             "paper prefix so the rest hit the prefix-cache (saves ~6 pct eff-cost, "
-                             "costs one section of serial latency; validate per-proxy first)")
+                        default=True,
+                        help="P3 cost lever (ON by default): run the first content section first to "
+                             "warm the shared paper prefix so the rest hit the prefix-cache (saves "
+                             "~6 pct eff-cost on cold proxies, costs one section of serial latency)")
+    parser.add_argument("--no-warm-content-cache", dest="warm_content_cache", action="store_false",
+                        help="Disable P3 warming — run all three content sections fully concurrently "
+                             "(use when latency matters or the proxy is demonstrably warm)")
     return parser.parse_args()
 
 

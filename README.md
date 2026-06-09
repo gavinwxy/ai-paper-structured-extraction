@@ -121,20 +121,21 @@ reprocess. Common flags:
 | `--max-retries N` | `3` | retries per LLM call (re-issues on malformed JSON) |
 | `--force` | off | ignore resumability, reprocess everything |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
-| `--warm-content-cache` | off | run the first content section first to warm the shared paper prefix, so the other two hit the prompt cache instead of racing it cold (see below) |
+| `--no-warm-content-cache` | on (warming) | disable content-cache warming; run the three content sections fully concurrently instead of warming the shared prefix first (see below) |
 
 Run `.venv/bin/python -m production --help` for the full set.
 
-**`--warm-content-cache`** (cost lever, opt-in). The three content sections (problem/method/evidence)
-share a byte-identical paper-inclusive prompt prefix but normally fire concurrently, so the provider's
-automatic prefix-cache is cold when they race and the paper is re-sent uncached up to 3×. With this
-flag the cheapest section (`problem`) runs to completion first to warm that prefix; the other two then
-cache it. On a **cold** proxy this recovers ~25 pts of content-section prompt into cache (≈6% of
-effective $), validated 12/12 papers; on an already-warm proxy it is redundant. It never worsens cache
-(only `method`/`evidence` improve) but costs ~one section of serial latency per paper, so it is OFF by
-default — enable it for cost-priority / cold-start batches. Inspect `relations` cached% in the
-telemetry to tell whether a proxy is warm (high ⇒ flag redundant); see
-`tools/token_cost_report.py --cache`.
+**Content-cache warming** (cost lever, **on by default**; disable with `--no-warm-content-cache`).
+The three content sections (problem/method/evidence) share a byte-identical paper-inclusive prompt
+prefix but would otherwise fire concurrently, so the provider's automatic prefix-cache is cold when
+they race and the paper is re-sent uncached up to 3×. Warming runs the cheapest section (`problem`)
+to completion first to warm that prefix; the other two then cache it. On a **cold** proxy this
+recovers ~25 pts of content-section prompt into cache (≈6% of effective cost / ≈3–4% real $ at the
+deepseek-v4-pro rate card), validated 12/12 papers; on an already-warm proxy it is redundant but
+harmless (it never worsens cache — only `method`/`evidence` improve). It costs ~one section of serial
+latency per paper, so pass `--no-warm-content-cache` for latency-priority runs or when the proxy is
+demonstrably warm. Inspect `relations` cached% in the telemetry to tell whether a proxy is warm
+(high ⇒ warming redundant); see `tools/token_cost_report.py --cache`.
 
 ### End-to-end smoke test (single papers)
 
