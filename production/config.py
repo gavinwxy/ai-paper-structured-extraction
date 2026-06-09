@@ -50,14 +50,16 @@ class Config:
     # halved). Gates: evidence prompt module selection, the assembly Finding<->Measure edge-drop, and
     # the renderer blob path. Disable with --no-blob-primary-evidence for the section-ir-0.11 behavior.
     blob_primary_evidence: bool = True
-    # Blob-primary references (section-ir-0.12, default OFF during rollout — mirror the blob-evidence
-    # rollout: validate on the benchmark, then flip ON). References is now the #1 single-stage cost
-    # ($0.132/20-paper benchmark, ~98% completion), of which ~58% is verbatim re-transcription of the
-    # bibliography and ~60% of refs are background with a near-empty relation. When True the references
-    # pass uses the references-extraction-blob prompt: the LLM transcribes a structured entry ONLY for
-    # graph-linked references (a structural role builds_on/uses/compares_to or a non-empty provides_name)
-    # and leaves background refs in the code-sliced verbatim bibliography blob (extraction_notes.
-    # references_blob). reconcile_reference_units is unchanged (it only needs the linked subset). Gates:
-    # references prompt selection (worker), the assembly blob slice, and the renderer full-bibliography
-    # path. Disable with --no-blob-primary-references for the section-ir-0.11 full-transcription behavior.
-    blob_primary_references: bool = False
+    # Blob-primary references (section-ir-0.12, default ON since the benchmark A/B win — mirror the
+    # blob-evidence rollout). References was the #1 single-stage cost ($0.132/20-paper benchmark, ~98%
+    # completion), of which ~58% was verbatim re-transcription of the bibliography and ~60% of refs are
+    # background with a near-empty relation. When True the references pass uses the
+    # references-extraction-blob prompt: the LLM transcribes a structured entry ONLY for graph-linked
+    # references (a structural role builds_on/uses/compares_to or a non-empty provides_name) and leaves
+    # background refs in the code-sliced verbatim bibliography blob (extraction_notes.references_blob).
+    # reconcile_reference_units is unchanged (it only needs the linked subset). A 20-paper warm A/B cut
+    # references $0.132->$0.050 (-62%, completion 148K->55K tok) for -12.2% of total cost, 20/20 valid,
+    # 0 link loss (links 95% retained, reference edges +20%). Gates: references prompt selection (worker),
+    # the assembly blob slice, and the renderer full-bibliography path. Disable with
+    # --no-blob-primary-references for the section-ir-0.11 full-transcription behavior.
+    blob_primary_references: bool = True

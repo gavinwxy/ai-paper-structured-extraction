@@ -84,10 +84,10 @@ def parse_args() -> argparse.Namespace:
                         help="Disable blob-primary evidence — transcribe every score row "
                              "(the section-ir-0.11 evidence behavior)")
     parser.add_argument("--blob-primary-references", dest="blob_primary_references", action="store_true",
-                        default=False,
-                        help="section-ir-0.12 blob-primary references (OFF by default during rollout): "
-                             "the references pass transcribes a structured entry only for graph-linked "
-                             "references (structural role or provided name); background refs stay in the "
+                        default=True,
+                        help="section-ir-0.12 blob-primary references (ON by default): the references "
+                             "pass transcribes a structured entry only for graph-linked references "
+                             "(structural role or provided name); background refs stay in the "
                              "code-sliced verbatim bibliography blob")
     parser.add_argument("--no-blob-primary-references", dest="blob_primary_references", action="store_false",
                         help="Disable blob-primary references — transcribe every reference "
