@@ -34,6 +34,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+try:  # works both as a package import (tools.render_extraction) and as a script (cwd=tools/)
+    from tools.reference_formatter import format_references_blob
+except ImportError:
+    from reference_formatter import format_references_blob
+
 SECTION_ORDER = ["problem", "method", "evidence"]
 SECTION_COLORS = {
     "problem": "#f59e0b",
@@ -960,9 +965,21 @@ def render_references_panel(
     blob_html = ""
     if references_blob:
         title_n = f" &middot; {len(refs)} linked above" if refs else ""
+        # Display-only prettifier: split the run-together verbatim blob into one entry per
+        # reference for readability. Falls back to the raw <pre> when the split isn't confident
+        # ("never worse than raw"); the extraction path never sees this — it always gets the raw blob.
+        formatted = format_references_blob(references_blob)
+        if formatted and formatted.entries:
+            items = ""
+            for marker, body in formatted.entries:
+                mark_html = f'<span class="ref-blob-mark">{escape(marker)}</span> ' if marker else ""
+                items += f'<li class="ref-blob-item">{mark_html}{escape(body)}</li>\n'
+            body_html = f'<ul class="ref-blob-list">{items}</ul>'
+        else:
+            body_html = f'<pre class="ref-blob-body">{escape(references_blob)}</pre>'
         blob_html = (
             f'<div class="ref-blob"><div class="ref-blob-head">Full bibliography (verbatim){title_n}</div>'
-            f'<pre class="ref-blob-body">{escape(references_blob)}</pre></div>\n'
+            f'{body_html}</div>\n'
         )
     label = "Graph-linked references" if references_blob else "References"
     return f"""
@@ -1251,6 +1268,10 @@ a.m-finding:hover { color:#93c5fd; border-color:#3b82f6; }
 .ref-blob { margin-top:10px; padding-top:8px; border-top:1px solid #16233c; }
 .ref-blob-head { font-size:.72rem; color:#64748b; font-weight:600; margin-bottom:5px; }
 .ref-blob-body { font-size:.72rem; color:#94a3b8; white-space:pre-wrap; word-break:break-word; margin:0; font-family:inherit; }
+.ref-blob-list { list-style:none; margin:0; padding:0; }
+.ref-blob-item { font-size:.72rem; color:#94a3b8; line-height:1.5; padding:4px 0 4px 1.7em; text-indent:-1.7em; word-break:break-word; border-bottom:1px solid #0e1726; }
+.ref-blob-item:last-child { border-bottom:none; }
+.ref-blob-mark { color:#64748b; font-family:ui-monospace,monospace; }
 
 /* Citation badges */
 .cite-badges { display:inline-flex; gap:3px; }
