@@ -18,7 +18,7 @@
           "authors": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Author names in 'Last, First' format"
+            "description": "Author names in 'Last, First' format (e.g. 'Vaswani, Ashish'). For single-name authors, use the name as-is."
           },
           "title": {
             "type": "string",
@@ -49,7 +49,7 @@
               "stance": {
                 "type": "string",
                 "enum": ["supportive", "neutral", "critical"],
-                "description": "How the citing paper positions itself: builds on it (supportive), neutral mention, or critiques/contrasts it (critical). Default neutral when unclear."
+                "description": "How the citing paper positions itself: critical if the paper critiques or contrasts the work; supportive if it explicitly endorses or adopts the work's approach as its own foundation (or roles includes builds_on); otherwise neutral (plain usage of a resource, plain baseline). Default neutral."
               },
               "salience": {
                 "type": "string",

@@ -10,9 +10,7 @@ You are a reference extractor for scientific papers. Extract all cited reference
 Rules:
 - Extract every reference that appears in the paper's bibliography/references section.
 - The "id" field should match the citation marker used in the paper (e.g. "1", "12", "Smith2020").
-- Format author names as "Last, First" (e.g. "Vaswani, Ashish"). For single-name authors, use the name as-is.
 - "venue" should be the publication venue: journal name, conference name (with abbreviation if given), or "arXiv" for preprints.
-- Set "year" to null if not determinable from the reference text.
 - If the paper has no bibliography section or no extractable references, return an empty references array.
 - Do not fabricate information not present in the reference text. If a field cannot be determined, use null (for nullable fields) or empty string.
 
@@ -24,11 +22,9 @@ For each reference, also fill `relation` — how the cited work relates to THIS 
   - compares_to — compared against experimentally (a baseline) or critiqued/disagreed with. Set `stance` to neutral for a plain baseline, critical for a critique.
   - background — field/paradigm/concept context, why the problem matters, a future-work mention, or a passing related mention. This is the only context-only role: it carries no unit-graph edge and must be emitted ALONE — never combine background with builds_on/uses/compares_to.
 
-  How to choose: is the cited work a DIRECT PREDECESSOR your contribution descends from (you build on / improve / extend it)? -> builds_on. Reused only as a part — a module, tool, dataset, or benchmark? -> uses. An experimental comparison or a critique? -> compares_to. Otherwise -> background. When ambiguous between builds_on and background, PREFER builds_on if the cited work is plausibly a direct predecessor (high recall). Never invent a relationship the in-text context does not support.
-- `stance`: supportive (builds on it), neutral, or critical (critiques/contrasts). Default neutral.
+  Tiebreak: when ambiguous between builds_on and background, PREFER builds_on if the cited work is plausibly a direct predecessor (high recall). Never invent a relationship the in-text context does not support.
 - `salience`: central (load-bearing — a main baseline, a core building block, or relied on repeatedly) or peripheral (passing mention).
 - `provides_name`: for builds_on, uses, and compares_to, the single most specific named artifact taken from or compared against the cited work (e.g. "Transformer", "ImageNet", "Adam", "BERT"); empty string otherwise.
-- `provides_unit_ids`: always output []. The pipeline fills this in later; never populate it.
 
 Examples:
 - "We build our model on top of BERT [12], extending it with a retrieval module." -> roles ["builds_on"], stance "supportive", salience "central", provides_name "BERT".
@@ -40,7 +36,7 @@ Examples:
 
 When the relationship is unclear, use roles ["background"], stance "neutral", salience "peripheral", provides_name "". Do not invent a relationship.
 
-Output a single JSON object with key: references (an array of reference entries; empty array when the paper has none). Output only that JSON object — no markdown code fences or commentary.
+When the paper has no references, output {"references": []}.
 ```
 
 ## User Prompt

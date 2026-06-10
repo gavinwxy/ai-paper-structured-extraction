@@ -114,8 +114,8 @@ STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
 }
 # One-line gloss per stage-C relation, joined into the schema field description.
 STAGE_C_RELATION_GLOSS: dict[str, str] = {
-    "about": "about = a Finding is about a Method/ExperimentSetup/Measure",
-    "supports": "supports = a Measure, Finding, or Method (a theorem/proof) supports a Finding",
+    "about": "about = a Finding is about a Method or ExperimentSetup (never a Measure — mount table↔finding links via the Measure's finding_ids)",
+    "supports": "supports = a Finding, or a theorem/proof Method, supports a Finding (never Measure→Finding)",
     "motivates": "motivates = a Problem motivates the Method/ExperimentSetup that addresses it",
 }
 
@@ -219,7 +219,7 @@ def scores_schema(description: str) -> dict[str, Any]:
             "required": ["variant", "value", "variance", "system_id", "setup_id"],
             "additionalProperties": False,
             "properties": {
-                "variant": {"type": "string", "description": "System name for this score row as the paper labels it — a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"},
+                "variant": {"type": "string", "description": "Name of the contribution configuration this score row reports, as the paper labels it (e.g. 'Transformer (big)', 'Ours (ResNet-101)'); on a contribution_resource root's rows, the evaluated system's label"},
                 "value": {
                     "type": "string",
                     "description": "Reported score encoded as a string, including numeric values",
@@ -230,7 +230,7 @@ def scores_schema(description: str) -> dict[str, Any]:
                 },
                 "system_id": {
                     "type": "string",
-                    "description": "ID of the Method unit this row reports — the contribution variant or the compared-against baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture).",
+                    "description": "ID of the contribution Method this row reports (e.g. 'mth:transformer'). In prose mode (a paper with no table grids), a transcribed baseline row carries the baseline's Method id instead; on a contribution_resource root's evaluated-system rows, the evaluated Method's id. Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture).",
                 },
                 "setup_id": {
                     "type": "string",
@@ -301,10 +301,10 @@ def objective_function_schema(description: str) -> dict[str, Any]:
     }
 
 
-def provenance_schema() -> dict[str, Any]:
+def provenance_schema(noun: str = "unit") -> dict[str, Any]:
     return {
         "type": "array",
-        "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+        "description": f"Location markers for this {noun}: top-level section anchors such as ['§1', '§2']",
         "items": {"type": "string"},
     }
 
@@ -394,7 +394,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "setup_ids": measure_setup_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
             "objective_class": enum_schema("measure_objective_class", "Optional (FG-6): which axis of a multi-objective evaluation this measure sits on — primary_quality (the headline quality metric, the default — omit), cost_efficiency (latency/compute/memory/params), fairness, safety, or robustness. Set it on the non-primary axes of a trade-off so a cost/fairness/safety measure is not read as uniformly positive evidence."),
-            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here."),
+            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception — prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception — a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused)."),
             # Blob-primary evidence (section-ir-0.12): the measure binds to its source table by
             # marker; code slices the table verbatim so the model never retypes baseline rows.
             "source_table_marker": string_schema(
@@ -415,13 +415,14 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "headline_result": string_schema(
                 "Optional (blob-primary): the contribution method's key one-liner from this "
                 "table (e.g. 'Ours reaches 29.1 BLEU on WMT14 EN-DE, +2.1 over the prior best'). "
-                "Emit it whenever the contribution's headline number is in this table, for "
-                "either table_role."
+                "Emit it on every main_result Measure — each table's own key contribution "
+                "one-liner; on an ablation Measure only when the contribution's headline number "
+                "lives in that table."
             ),
             "finding_ids": id_array_schema(
                 "Optional (blob-primary): ids of the Findings this table evidences (mounted "
                 "directly, replacing the Finding<->Measure edges). Each must be a Finding born "
-                "in this same response."
+                "or materialized (i.e. defined) in this same response."
             ),
         },
     }
@@ -549,8 +550,9 @@ def node_census_schema() -> dict[str, Any]:
                         "the artifact/contribution). State the finding itself: 'value learning is not the main "
                         "bottleneck in offline RL', 'the model matches SOTA with 10x fewer parameters'. Fill it "
                         "whenever the paper establishes a clear headline result (for an analysis/'is X the "
-                        "bottleneck?' paper this IS the payload); omit only for a pure resource/tool release with "
-                        "no empirical result. This stays a summary annotation — do NOT add a Finding node for it."
+                        "bottleneck?' paper this IS the payload); omit when the paper states no clear headline "
+                        "result (typically only a pure resource/tool release). This stays a summary annotation — "
+                        "do NOT add a Finding node for it."
                     ),
                 },
             },
@@ -580,14 +582,15 @@ def node_census_schema() -> dict[str, Any]:
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
                         "gloss": string_schema("One short phrase describing the node"),
-                        "source_scope": string_array_schema("Section markers where the node appears, e.g. ['§3']"),
+                        "source_scope": string_array_schema("Section markers where the node is introduced or defined, e.g. ['§3']"),
                         "cite_keys": string_array_schema(
                             "In-text bibliography citation marker(s) attached to this node, as "
                             "bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' "
                             "for author-year). Fill for builds_on/compared_against/dataset/benchmark "
                             "nodes (drawn from cited prior work or data), e.g. 'we compare against "
-                            "ConvS2S [8]' -> ['8']. Empty [] for the contribution and its components "
-                            "(your own work), for task/metric nodes, and when no citation is attached."
+                            "ConvS2S [8]' -> ['8']. Empty [] for any root (contribution/"
+                            "contribution_resource/contribution_finding) and every component (your "
+                            "own work), for task/metric nodes, and when no citation is attached."
                         ),
                         "salience": inline_enum_schema(
                             SALIENCE_ORDER,
@@ -626,17 +629,12 @@ def relation_pass_schema() -> dict[str, Any]:
                             "type": "string",
                             "enum": STAGE_B_RELATION_ORDER,
                             "description": (
-                                "part_of = internal composition between Methods/ExperimentSetups; "
-                                "builds_on = the contribution extends external prior work it derives from; "
-                                "uses = the contribution depends on an external method/dataset as a tool; "
-                                "assumes = a theorem/result Method holds under a theoretical_setting/structural_class ExperimentSetup; "
-                                "co_contribution = two co-equal contributions of one paper (emit once, not fake part_of); "
-                                "compares_to = contrasted peers; "
-                                "evaluates = a Measure measures a Method."
+                                "One of the seven structural relation types — semantics and "
+                                "direction rules are defined in the system prompt."
                             ),
                         },
                         "target_id": id_schema("Target node id"),
-                        "provenance": provenance_schema(),
+                        "provenance": provenance_schema("edge"),
                     },
                 },
             },

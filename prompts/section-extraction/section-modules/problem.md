@@ -20,8 +20,8 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 |---|---|---|
 | `motivates` | Problem → {Method, ExperimentSetup} | this problem is what the node addresses / why it exists |
 
-- Author a `motivates` edge from the Problem to the root contribution it justifies: point `target_id` at the `node_registry` node whose role is `contribution` (a method) or `contribution_resource` (a dataset/benchmark deliverable). When the problem is instead about a specific dataset or task, point at that ExperimentSetup node. **For an analysis paper whose root is a `contribution_finding`** (a result, not an artifact — and `motivates` cannot point at a Finding), point instead at the primary method/model or task the paper *investigates*: a `builds_on`/`compared_against`/`component` Method, or the `task`/`benchmark` it probes. The closing `resolves` is still drawn automatically from the finding root.
-- Endpoints reference `node_registry` ids; never invent an id, and never point at a Problem or Finding — the target must be a Method or ExperimentSetup node. Give the empty array `[]` only when no registry node maps to the problem.
+- Author one `motivates` edge from the Problem; pick `target_id` by the root's `role` in `node_registry`: (1) `contribution` or `contribution_resource` → that node. (2) `contribution_finding` (`motivates` cannot target a Finding) → the Method or ExperimentSetup the paper investigates: a `builds_on`/`compared_against`/`component` Method, or the `task`/`benchmark` it probes. (3) If the problem is specifically about one dataset/task, target that `exp:` node instead.
+- `source_id` is the Problem unit you define in this section. `target_id` must be an existing `node_registry` id of type Method or ExperimentSetup — never a Problem or Finding, never invented. Emit `[]` only when no registry node maps.
 - You do **not** author the closing `resolves` edge (the finding that answers this problem). That edge is added automatically downstream, from the contribution the problem motivates and the finding that is about it.
 
 ## Extraction focus
@@ -34,7 +34,7 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 
 - Do not emit several Problem units for one problem (no background/gap/motivation split) — that is the old over-tagged shape; collapse it into one focused statement.
 - Do not create a Finding unit for the contribution here; the contribution finding belongs in the evidence section.
-- Do not create Method units here; a system named as background belongs in the `description`. (Comparison baselines are `compared_against` Methods in the method section, and score rows in the evidence section — not here.)
+- Do not create Method units here; a system named as background belongs in the `description`. (Comparison baselines are `compared_against` Methods in the method section — not here; the baseline's number is preserved by the evidence stage, in the verbatim source table or as a score row.)
 - Do not create a Problem for paper-structural remarks ("this paper is organized as follows").
 
 ## Worked example

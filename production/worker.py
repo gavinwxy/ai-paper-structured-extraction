@@ -23,6 +23,7 @@ from section_pipeline import (
     load_section_schema,
     load_section_module,
     load_references_schema_for_mode,
+    slice_metadata_input,
     strip_blob_evidence_schema,
     build_response_format,
     schema_to_prompt_spec,
@@ -40,6 +41,7 @@ from section_pipeline import (
     validate_section_ir,
     parse_sections,
     _parse_llm_json,
+    _retry_feedback_suffix,
     _validate_section_result_shape,
     NODE_CENSUS_PROMPT_PATH,
     RELATION_PASS_PROMPT_PATH,
@@ -256,7 +258,7 @@ async def _call_and_parse(
         raw = await llm.call(
             model=model,
             system_prompt=system_prompt,
-            user_content=user_content,
+            user_content=user_content if last_error is None else user_content + _retry_feedback_suffix(last_error),
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
@@ -335,7 +337,7 @@ async def _run_metadata(
 ) -> dict[str, Any]:
     """Run metadata extraction."""
     system_prompt, user_template = load_prompt(METADATA_PROMPT_PATH)
-    user_prompt = user_template.replace("{{paper_content}}", paper_content)
+    user_prompt = user_template.replace("{{paper_content}}", slice_metadata_input(paper_content))
     schema = json.loads(METADATA_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="metadata_output", model=config.model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
@@ -481,7 +483,7 @@ async def _extract_single_content_section(
             raw = await llm.call(
                 model=config.model,
                 system_prompt=system_prompt,
-                user_content=user_prompt,
+                user_content=user_prompt if last_error is None else user_prompt + _retry_feedback_suffix(last_error),
                 temperature=config.temperature,
                 max_tokens=config.max_tokens,
                 response_format=resp_fmt,

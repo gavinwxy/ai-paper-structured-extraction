@@ -55,7 +55,7 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
                 "items": {
                   "type": "string"
                 }
@@ -99,7 +99,7 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
                 "items": {
                   "type": "string"
                 }

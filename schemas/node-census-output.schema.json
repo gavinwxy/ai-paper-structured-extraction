@@ -27,7 +27,7 @@
         },
         "headline_result": {
           "type": "string",
-          "description": "Optional (FG-9): one sentence stating the paper's headline established RESULT \u2014 the answer the evidence demonstrates \u2014 as distinct from central_contribution (which names the artifact/contribution). State the finding itself: 'value learning is not the main bottleneck in offline RL', 'the model matches SOTA with 10x fewer parameters'. Fill it whenever the paper establishes a clear headline result (for an analysis/'is X the bottleneck?' paper this IS the payload); omit only for a pure resource/tool release with no empirical result. This stays a summary annotation \u2014 do NOT add a Finding node for it."
+          "description": "Optional (FG-9): one sentence stating the paper's headline established RESULT \u2014 the answer the evidence demonstrates \u2014 as distinct from central_contribution (which names the artifact/contribution). State the finding itself: 'value learning is not the main bottleneck in offline RL', 'the model matches SOTA with 10x fewer parameters'. Fill it whenever the paper establishes a clear headline result (for an analysis/'is X the bottleneck?' paper this IS the payload); omit when the paper states no clear headline result (typically only a pure resource/tool release). This stays a summary annotation \u2014 do NOT add a Finding node for it."
         }
       }
     },
@@ -83,14 +83,14 @@
             "items": {
               "type": "string"
             },
-            "description": "Section markers where the node appears, e.g. ['\u00a73']"
+            "description": "Section markers where the node is introduced or defined, e.g. ['\u00a73']"
           },
           "cite_keys": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "In-text bibliography citation marker(s) attached to this node, as bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' for author-year). Fill for builds_on/compared_against/dataset/benchmark nodes (drawn from cited prior work or data), e.g. 'we compare against ConvS2S [8]' -> ['8']. Empty [] for the contribution and its components (your own work), for task/metric nodes, and when no citation is attached."
+            "description": "In-text bibliography citation marker(s) attached to this node, as bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' for author-year). Fill for builds_on/compared_against/dataset/benchmark nodes (drawn from cited prior work or data), e.g. 'we compare against ConvS2S [8]' -> ['8']. Empty [] for any root (contribution/contribution_resource/contribution_finding) and every component (your own work), for task/metric nodes, and when no citation is attached."
           },
           "salience": {
             "type": "string",

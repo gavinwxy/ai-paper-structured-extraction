@@ -60,7 +60,7 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
                 "items": {
                   "type": "string"
                 }
@@ -116,7 +116,7 @@
                   "properties": {
                     "variant": {
                       "type": "string",
-                      "description": "System name for this score row as the paper labels it \u2014 a method-family variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"
+                      "description": "Name of the contribution configuration this score row reports, as the paper labels it (e.g. 'Transformer (big)', 'Ours (ResNet-101)'); on a contribution_resource root's rows, the evaluated system's label"
                     },
                     "value": {
                       "type": "string",
@@ -128,7 +128,7 @@
                     },
                     "system_id": {
                       "type": "string",
-                      "description": "ID of the Method unit this row reports \u2014 the contribution variant or the compared-against baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture)."
+                      "description": "ID of the contribution Method this row reports (e.g. 'mth:transformer'). In prose mode (a paper with no table grids), a transcribed baseline row carries the baseline's Method id instead; on a contribution_resource root's evaluated-system rows, the evaluated Method's id. Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture)."
                     },
                     "setup_id": {
                       "type": "string",
@@ -155,7 +155,7 @@
                     }
                   }
                 },
-                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here."
+                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception \u2014 prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception \u2014 a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused)."
               },
               "source_table_marker": {
                 "type": "string",
@@ -175,7 +175,7 @@
               },
               "headline_result": {
                 "type": "string",
-                "description": "Optional (blob-primary): the contribution method's key one-liner from this table (e.g. 'Ours reaches 29.1 BLEU on WMT14 EN-DE, +2.1 over the prior best'). Emit it whenever the contribution's headline number is in this table, for either table_role."
+                "description": "Optional (blob-primary): the contribution method's key one-liner from this table (e.g. 'Ours reaches 29.1 BLEU on WMT14 EN-DE, +2.1 over the prior best'). Emit it on every main_result Measure \u2014 each table's own key contribution one-liner; on an ablation Measure only when the contribution's headline number lives in that table."
               },
               "finding_ids": {
                 "type": "array",
@@ -183,7 +183,7 @@
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$"
                 },
-                "description": "Optional (blob-primary): ids of the Findings this table evidences (mounted directly, replacing the Finding<->Measure edges). Each must be a Finding born in this same response."
+                "description": "Optional (blob-primary): ids of the Findings this table evidences (mounted directly, replacing the Finding<->Measure edges). Each must be a Finding born or materialized (i.e. defined) in this same response."
               }
             }
           }
@@ -216,7 +216,7 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
                 "items": {
                   "type": "string"
                 }
@@ -277,7 +277,7 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
                 "items": {
                   "type": "string"
                 }
@@ -346,7 +346,7 @@
                   "about",
                   "supports"
                 ],
-                "description": "about = a Finding is about a Method/ExperimentSetup/Measure; supports = a Measure, Finding, or Method (a theorem/proof) supports a Finding."
+                "description": "about = a Finding is about a Method or ExperimentSetup (never a Measure \u2014 mount table\u2194finding links via the Measure's finding_ids); supports = a Finding, or a theorem/proof Method, supports a Finding (never Measure\u2192Finding)."
               },
               "target_id": {
                 "type": "string",
@@ -355,7 +355,7 @@
               },
               "provenance": {
                 "type": "array",
-                "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
                 "items": {
                   "type": "string"
                 }

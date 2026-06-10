@@ -36,7 +36,7 @@
               "compares_to",
               "evaluates"
             ],
-            "description": "part_of = internal composition between Methods/ExperimentSetups; builds_on = the contribution extends external prior work it derives from; uses = the contribution depends on an external method/dataset as a tool; assumes = a theorem/result Method holds under a theoretical_setting/structural_class ExperimentSetup; co_contribution = two co-equal contributions of one paper (emit once, not fake part_of); compares_to = contrasted peers; evaluates = a Measure measures a Method."
+            "description": "One of the seven structural relation types \u2014 semantics and direction rules are defined in the system prompt."
           },
           "target_id": {
             "type": "string",
@@ -45,7 +45,7 @@
           },
           "provenance": {
             "type": "array",
-            "description": "Location markers for this unit: top-level section anchors such as ['\\u00a71', '\\u00a72']",
+            "description": "Location markers for this edge: top-level section anchors such as ['\u00a71', '\u00a72']",
             "items": {
               "type": "string"
             }

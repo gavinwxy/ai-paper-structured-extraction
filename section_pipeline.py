@@ -734,6 +734,19 @@ LEGACY_SCORES_DESCRIPTION = (
     "Flat array of reported scores under this measure — one row per system, covering the "
     "method family's own variants and every compared-against baseline"
 )
+LEGACY_VARIANT_DESCRIPTION = (
+    "System name for this score row as the paper labels it — a method-family "
+    "variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"
+)
+LEGACY_SYSTEM_ID_DESCRIPTION = (
+    "ID of the Method unit this row reports — the contribution variant or the compared-against "
+    "baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this "
+    "row's system (e.g. an ensemble-of-baselines the census did not capture)."
+)
+LEGACY_RELATION_DESCRIPTION = (
+    "about = a Finding is about a Method/ExperimentSetup/Measure; supports = a Measure, "
+    "Finding, or Method (a theorem/proof) supports a Finding."
+)
 
 
 def strip_blob_evidence_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -741,9 +754,10 @@ def strip_blob_evidence_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     The committed schema is the blob-primary contract; with the flag off it would still reach the
     model (as strict ``response_format`` or as the json_object prompt contract) and contradict the
-    full-transcription module — advertising marker fields ``evidence.md`` never mentions and a
-    ``scores`` description that says baselines do NOT belong in scores. Stripping the blob fields
-    and restoring the 0.11 scores description makes the opt-out arm a true pre-blob baseline.
+    full-transcription module — advertising marker fields ``evidence.md`` never mentions, plus
+    ``scores``/``variant``/``system_id``/``relation`` descriptions that say baselines do NOT
+    belong in scores and ban the Finding↔Measure edges the legacy module authors. Stripping the
+    blob fields and restoring the 0.11 descriptions makes the opt-out arm a true pre-blob baseline.
     """
     out = copy.deepcopy(schema)
 
@@ -756,6 +770,13 @@ def strip_blob_evidence_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 scores = props.get("scores")
                 if isinstance(scores, dict) and "description" in scores:
                     scores["description"] = LEGACY_SCORES_DESCRIPTION
+                variant = props.get("variant")
+                if isinstance(variant, dict) and "description" in variant and isinstance(props.get("system_id"), dict):
+                    variant["description"] = LEGACY_VARIANT_DESCRIPTION
+                    props["system_id"]["description"] = LEGACY_SYSTEM_ID_DESCRIPTION
+                relation = props.get("relation")
+                if isinstance(relation, dict) and relation.get("enum") == ["about", "supports"]:
+                    relation["description"] = LEGACY_RELATION_DESCRIPTION
             required = node.get("required")
             if isinstance(required, list):
                 node["required"] = [r for r in required if r not in BLOB_EVIDENCE_FIELDS]
@@ -772,29 +793,53 @@ def strip_blob_evidence_schema(schema: dict[str, Any]) -> dict[str, Any]:
 def load_references_schema_for_mode(blob_primary_references: bool) -> dict[str, Any]:
     """Load the references schema, adjusted to the mode's transcription contract.
 
-    One schema file serves both prompts, but its ``roles`` guidance ends with full-transcription
-    advice ("use background only when no stronger role fits") that contradicts the blob prompt's
-    "never emit background — skip it". In blob mode the model-visible description says so instead;
-    the ``background`` enum value itself stays (a stray background entry decodes fine and simply
-    produces no edge — tolerant beats a strict-mode hard reject).
+    One schema file serves both prompts, but several descriptions carry full-transcription
+    wording that contradicts the blob prompt's "never emit background — skip it": the ``roles``
+    guidance ("use background only when no stronger role fits", "emit it alone"), the
+    ``provides_name`` empty-string clause ("for background"), and the ``salience`` gloss
+    ("passing mention" — under blob rules an emitted reference is never a passing mention).
+    In blob mode the model-visible descriptions say so instead; the ``background`` enum value
+    itself stays (a stray background entry decodes fine and simply produces no edge — tolerant
+    beats a strict-mode hard reject).
     """
     schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
     if not blob_primary_references:
         return schema
     try:
-        roles = schema["properties"]["references"]["items"]["properties"]["relation"]["properties"]["roles"]
+        relation_props = schema["properties"]["references"]["items"]["properties"]["relation"]["properties"]
     except (KeyError, TypeError):
         return schema
-    desc = roles.get("description")
-    if isinstance(desc, str):
-        roles["description"] = desc.replace(
-            "When ambiguous between builds_on and background, prefer builds_on if the cited work "
-            "is plausibly a direct predecessor (high recall); use background only when no stronger "
-            "role fits.",
-            "Do NOT emit background-only references at all — skip them; they stay in the verbatim "
-            "bibliography blob. When ambiguous between builds_on and background, prefer builds_on "
-            "if the cited work is plausibly a direct predecessor (high recall).",
-        )
+
+    def _rewrite(field: str, old: str, new: str) -> None:
+        prop = relation_props.get(field)
+        if isinstance(prop, dict) and isinstance(prop.get("description"), str):
+            prop["description"] = prop["description"].replace(old, new)
+
+    _rewrite(
+        "roles",
+        "When ambiguous between builds_on and background, prefer builds_on if the cited work "
+        "is plausibly a direct predecessor (high recall); use background only when no stronger "
+        "role fits.",
+        "Do NOT emit background-only references at all — skip them; they stay in the verbatim "
+        "bibliography blob. When ambiguous between builds_on and background, prefer builds_on "
+        "if the cited work is plausibly a direct predecessor (high recall).",
+    )
+    _rewrite(
+        "roles",
+        "background is the only context-only role (no edge) and is mutually exclusive — emit it "
+        "alone, never alongside a structural role.",
+        "background carries no edge and is never emitted as an entry.",
+    )
+    _rewrite(
+        "salience",
+        "peripheral = passing mention.",
+        "peripheral = structurally linked but minor (a secondary baseline or small reused part).",
+    )
+    _rewrite(
+        "provides_name",
+        "Empty string for background or when no concrete artifact is named.",
+        "Empty string when no concrete artifact is named.",
+    )
     return schema
 
 
@@ -1659,14 +1704,7 @@ def render_content_user_prompt(
 {section_guidance}
 </section_focus>
 
-Extract ONLY the {section_type} section, following `section_focus`:
-- Materialize the census nodes this section owns into full units, reusing each `node_id` verbatim as the unit `id`, and create the born units this section is responsible for.
-- Place each unit in the typed array matching its type, with only the fields its contract names.
-- Reference any node in `node_registry` by id; the structural `relations` are already established — do not restate them.
-- Emit only the edges your `section_focus` authorizes this section to author (problem: `motivates`; evidence: `about`/`supports`; method: none), in `relations`.
-- Use the full paper as source context; extract only this section's role.
-
-Output a single JSON object with key: section.""".strip()
+Extract ONLY the {section_type} section, following `section_focus`; use the full paper as source context. Output a single JSON object with key: section.""".strip()
 
 
 def build_prompt_cache_key(model: str, paper_content: str) -> str:
@@ -3071,6 +3109,20 @@ def _parse_llm_json(raw: str) -> dict[str, Any]:
     return parsed
 
 
+def _retry_feedback_suffix(error: Exception) -> str:
+    """Suffix appended to the user prompt on a parse/shape retry.
+
+    At temperature 0 a byte-identical retry mostly reproduces the same rejected response;
+    naming the failure turns the retry into a correction. Appended at the very end so the
+    original prompt remains a full prefix-cache hit.
+    """
+    reason = re.sub(r"\s+", " ", str(error)).strip()[:200]
+    return (
+        f"\n\nRETRY: your previous response was rejected: {reason}. "
+        "Re-emit the complete JSON object, fixing exactly this."
+    )
+
+
 def _call_llm(
     client: Any,
     model: str,
@@ -3170,6 +3222,41 @@ def run_relation_pass(
     return _parse_llm_json(raw)
 
 
+# Metadata fields (title/authors/year/venue) live on the first pages; artifact URLs can sit
+# anywhere (a github link in the conclusion, a dataset DOI in an appendix). Slicing to the head
+# plus every URL-bearing line keeps both reachable while dropping the body haystack that has
+# misattributed venues from related-work mentions on full text.
+METADATA_HEAD_CHARS = 12_000
+_METADATA_URL_RE = re.compile(r"https?://|www\.|doi\.org|github", re.IGNORECASE)
+
+
+def slice_metadata_input(paper_content: str) -> str:
+    """Slice the metadata-pass input: paper head plus all later URL-bearing lines.
+
+    Keeps the first ``METADATA_HEAD_CHARS`` characters (extended to the end of the line so no
+    URL is split), then every line containing a URL with its preceding line as context.
+    """
+    if len(paper_content) <= METADATA_HEAD_CHARS:
+        return paper_content
+    cut = paper_content.find("\n", METADATA_HEAD_CHARS)
+    if cut == -1:
+        return paper_content
+    head = paper_content[:cut]
+    tail_lines = paper_content[cut + 1 :].splitlines()
+    keep: set[int] = set()
+    for i, line in enumerate(tail_lines):
+        if _METADATA_URL_RE.search(line):
+            keep.update((i - 1, i, i + 1))
+    if not keep:
+        return head
+    kept = [tail_lines[i] for i in sorted(keep) if 0 <= i < len(tail_lines)]
+    return (
+        head
+        + "\n\n[... body omitted for metadata extraction; later lines mentioning URLs follow ...]\n"
+        + "\n".join(kept)
+    )
+
+
 def run_metadata_extraction(
     client: Any,
     model: str,
@@ -3179,7 +3266,7 @@ def run_metadata_extraction(
 ) -> dict[str, Any]:
     """Extract paper metadata (title, authors, resources)."""
     system_prompt, user_template = load_prompt(METADATA_PROMPT_PATH)
-    user_prompt = user_template.replace("{{paper_content}}", paper_content)
+    user_prompt = user_template.replace("{{paper_content}}", slice_metadata_input(paper_content))
     schema = json.loads(METADATA_SCHEMA_PATH.read_text(encoding="utf-8"))
     resp_fmt = build_response_format(schema, name="metadata_output", model=model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
@@ -3539,7 +3626,7 @@ def extract_single_content_section_sync(
                 client,
                 model,
                 system_prompt,
-                user_prompt,
+                user_prompt if last_error is None else user_prompt + _retry_feedback_suffix(last_error),
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=resp_fmt,
