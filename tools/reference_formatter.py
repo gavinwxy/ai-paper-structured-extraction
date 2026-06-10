@@ -57,6 +57,9 @@ _BRACKET_KEY_RE = re.compile(r"\[[A-Za-z][^\]\n]{0,40}?\d{2,4}[a-z]?\)?\]")
 # run-together "pp. 1–7.7. Shafiei" still exposes the "7." marker; never a bare "vol. 3.".
 _DOT_NUM_RE = re.compile(r"(?:(?<=\s)|(?<=\d\.)|^)(\d{1,3})\.(?=\s+[A-Z])", re.MULTILINE)
 _YEAR_RE = re.compile(r"\b(?:19|20)\d\d[a-z]?\b")
+# Non-year bibliographic body signals (arXiv ids, DOIs/URLs, page/volume markers) accepted by the
+# numbered-regime content gate, so the odd year-less entry ("Software available at …") still counts.
+_BIB_SIGNAL_RE = re.compile(r"arxiv|\bdoi\b|https?://|www\.|\bpp?\.\s*\d|\bvol\.?\s*\d", re.IGNORECASE)
 # Sub-format discriminators: a year token preceded by a period ("Anderson. 2019.", year-AFTER the
 # authors) vs preceded by a comma ("Venue, 2021.", year at the END). Whichever dominates picks the cut.
 _PERIOD_YEAR_RE = re.compile(r"[.)]\s+(?:19|20)\d\d[a-z]?\.")
@@ -113,9 +116,11 @@ _CONT_RE = re.compile(
 _LEADING_NUM_RE = re.compile(r"^\d{1,3}\.\s*")
 _HEADER_RE = re.compile(r"^\s*#{1,6}[ \t]*(?:references?|bibliography|references\s+and\s+notes|literature\s+cited)\b[^\n]*\n", re.IGNORECASE)
 # A leading "References"/"Bibliography" word — possibly glued to the first author by OCR
-# ("ReferencesM. Andriushchenko"), so we strip the word itself, not a whole line.
+# ("ReferencesM. Andriushchenko"), so we strip the word itself, not a whole line. The trailing
+# guard refuses a lowercase continuation ((?-i: keeps IGNORECASE from case-folding it), so the
+# glued-capital OCR case still strips while "Referenced works: …" is not chopped to "d works: …".
 _BARE_HEADER_RE = re.compile(
-    r"^\s*(?:references\s+and\s+notes|literature\s+cited|references?|bibliography)[ \t]*",
+    r"^\s*(?:references\s+and\s+notes|literature\s+cited|references?|bibliography)(?-i:(?![a-z]))[ \t]*",
     re.IGNORECASE,
 )
 _MIN_BODY = 15  # a real reference body is longer than this; shorter ones smell like a bad split
@@ -153,12 +158,21 @@ def format_references_blob(blob: str | None) -> FormattedReferences | None:
             return None
         marked = regime != "author-year"
         entries: list[Entry] = split if marked else [(None, b) for b in split]
-        if not _entries_are_sane(entries):
+        # Confidence gates judge the marker-bearing entries only: a marker-less lead entry (text
+        # preserved from before the first marker — see _split_numbered) is kept for losslessness
+        # but is no evidence that the markers actually worked.
+        core = [e for e in entries if e[0] is not None] if marked else entries
+        if not _entries_are_sane(core):
+            return None
+        # Content gate for the numbered regimes: three increasing markers are also what in-text
+        # citations in plain prose look like ("… as shown in [3] … [7] …"), so most entry bodies
+        # must carry a year or another bibliographic token — prose fails, real bibliographies don't.
+        if regime in ("numbered-bracket", "numbered-dot") and not _mostly_bibliographic(core):
             return None
         # Gross under-split net for the weak regimes (no strictly-ordered marker to anchor on): if we
         # produced far fewer entries than year tokens, several references are still jammed together —
         # raw is more honest than a list of mega-entries.
-        if regime in ("author-year", "bracket-key") and _is_gross_undersplit(entries, text):
+        if regime in ("author-year", "bracket-key") and _is_gross_undersplit(core, text):
             return None
         return FormattedReferences(entries=entries, regime=regime, marked=marked)
     except Exception:
@@ -220,8 +234,8 @@ def _split_numbered(text: str, marker_re: re.Pattern) -> list[Entry] | None:
 
     Reference numbers run 1..N strictly increasing, and a reference's own text never contains an
     ``[N]`` cross-citation — so the genuine entry markers are exactly the longest strictly-increasing
-    subsequence of the bracketed numbers. Selecting that subsequence tolerates arbitrary OCR-dropped
-    gaps (a ``[322] -> [332]`` jump is fine) while dropping the rare stray/backward number, and works
+    subsequence of the bracketed numbers. Selecting that subsequence tolerates OCR-dropped gaps of up
+    to +10 (a ``[322] -> [332]`` jump is fine) while dropping the rare stray/backward number, and works
     identically for run-together and line-separated blobs because it keys on the marker, not newlines.
     """
     cands = list(marker_re.finditer(text))
@@ -230,11 +244,26 @@ def _split_numbered(text: str, marker_re: re.Pattern) -> list[Entry] | None:
 
     nums = [int(m.group(1)) for m in cands]
     keep = _longest_increasing(nums)
+    # The increasing-run guard can't reject a TRAILING stray: an in-text citation after the last real
+    # marker ("… [3] C. Three. Improving on ResNet [15] …") has nothing behind it to displace it the
+    # way mid-text strays are displaced. So cap consecutive jumps at +10 (the documented
+    # ``[322] -> [332]`` OCR gap stays fine) and truncate at a wilder one — the dropped tail folds
+    # into the last kept entry's body, a lossless under-split.
+    for j in range(1, len(keep)):
+        if nums[keep[j]] - nums[keep[j - 1]] > 10:
+            keep = keep[:j]
+            break
     if len(keep) < 2:
         return None
     boundaries = [cands[i] for i in keep]
 
     entries: list[Entry] = []
+    # Losslessness beats prettiness: text before the first kept marker (an OCR-mangled first marker
+    # like "[I]", a preamble, or a stray lead the run guard rejected) becomes a marker-less first
+    # entry rather than silently vanishing from the render.
+    lead = _collapse(text[:boundaries[0].start()])
+    if lead:
+        entries.append((None, lead))
     for i, m in enumerate(boundaries):
         nxt = boundaries[i + 1].start() if i + 1 < len(boundaries) else len(text)
         marker = text[m.start():m.end()].strip()
@@ -286,6 +315,11 @@ def _split_bracketed_keys(text: str) -> list[Entry] | None:
         return None
 
     entries: list[Entry] = []
+    # Losslessness beats prettiness: any preamble left before the first key becomes a marker-less
+    # first entry rather than silently vanishing from the render.
+    lead = _collapse(text[:boundaries[0].start()])
+    if lead:
+        entries.append((None, lead))
     for i, m in enumerate(boundaries):
         nxt = boundaries[i + 1].start() if i + 1 < len(boundaries) else len(text)
         marker = text[m.start():m.end()].strip()
@@ -370,7 +404,7 @@ def _subsplit_surname(block: str) -> list[str]:
     editor lists and "vol."/"pp." don't over-split.
     """
     cuts = [m.start() for m in _AY_CUT_SURNAME_RE.finditer(block)
-            if not _ABBR_BEFORE_RE.search(block[:m.start()])]
+            if not _abbr_before(block, m.start())]
     return _slice_at(block, cuts)
 
 
@@ -381,8 +415,18 @@ def _subsplit_yearafter(block: str) -> list[str]:
     middle initial ("Joseph E. Gonzalez") would split the author list.
     """
     cuts = [m.start() for m in _AY_CUT_YEARAFTER_RE.finditer(block)
-            if not _ABBR_BEFORE_RE.search(block[:m.start()])]
+            if not _abbr_before(block, m.start())]
     return _slice_at(block, cuts)
+
+
+def _abbr_before(block: str, pos: int) -> bool:
+    """True when the text just before ``pos`` ends in an abbreviation / lone initial.
+
+    ``_ABBR_BEFORE_RE`` is end-anchored ($), so only the last few characters can ever match — the
+    scan is windowed to 16 chars because rescanning the full ``block[:pos]`` prefix per candidate
+    is O(n²) on a huge run-together blob (a single-line ~190KB bibliography took seconds).
+    """
+    return bool(_ABBR_BEFORE_RE.search(block[max(0, pos - 16):pos]))
 
 
 def _subsplit_year(block: str) -> list[str]:
@@ -421,6 +465,14 @@ def _entries_are_sane(entries: list[Entry]) -> bool:
     to raw rather than show a confidently-wrong under-split."""
     real = [b for _, b in entries if len(b) >= _MIN_BODY]
     return len(real) >= 3
+
+
+def _mostly_bibliographic(entries: list[Entry]) -> bool:
+    """True when a clear majority of entry bodies carry a reference signal (a year, an arXiv id, a
+    DOI/URL, page/volume numbers). Prose citing ``[3] … [7] …`` yields increasing markers but
+    year-less sentence bodies, so it fails this gate and bails to raw."""
+    hits = sum(1 for _, b in entries if _YEAR_RE.search(b) or _BIB_SIGNAL_RE.search(b))
+    return hits >= 0.6 * len(entries)
 
 
 def _is_gross_undersplit(entries: list[Entry], text: str) -> bool:

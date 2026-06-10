@@ -79,13 +79,31 @@ TABLE_BLOCK_RE = re.compile(r"<table\b.*?</table>", re.DOTALL | re.IGNORECASE)
 TABLE_CAPTION_RE = re.compile(r"\*\*\s*Tab(?:le|\.)?[^*\n]*\*\*", re.IGNORECASE)
 # Blob-primary references (section-ir-0.12): the whole reference list is sliced verbatim by code into
 # extraction_notes.references_blob (the backstop that lets the LLM transcribe only graph-linked refs and
-# leave background refs in the blob). REFERENCES_HEADER_RE locates the bibliography section header;
-# MARKDOWN_HEADER_RE bounds its end at the next markdown header (an appendix that follows references).
+# leave background refs in the blob). REFERENCES_HEADER_RE locates bibliography section header
+# candidates — a markdown header with an optional section number (`## 7 References`, `## VI. References`),
+# a bold-line header (`**References**`), or the bare keyword alone on a line (extractors sometimes drop
+# the `#`). False candidates are harmless: _slice_references_blob keeps only the candidate whose body
+# actually looks like a bibliography. MARKDOWN_HEADER_RE / BOLD_HEADER_LINE_RE bound the slice's end at
+# the next header (an appendix that follows references).
+_REFERENCES_HEADER_WORDS = r"(?:references?|bibliography|references\s+and\s+notes|literature\s+cited)"
 REFERENCES_HEADER_RE = re.compile(
-    r"^#{1,6}[ \t]*(?:references?|bibliography|references\s+and\s+notes|literature\s+cited)\b[ \t]*$",
+    r"^(?:#{1,6}[ \t]*(?:[0-9]+(?:\.[0-9]+)*|[IVXLCDM]+)?\.?[ \t]*" + _REFERENCES_HEADER_WORDS + r"[.:]?"
+    r"|\*\*[ \t]*" + _REFERENCES_HEADER_WORDS + r"[ \t]*\*\*"
+    r"|" + _REFERENCES_HEADER_WORDS + r")[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 MARKDOWN_HEADER_RE = re.compile(r"^#{1,6}[ \t]+\S", re.MULTILINE)
+# A line that is nothing but a short bold span NAMING A SECTION — the heading style of papers whose
+# extractor emits `**Appendix**` instead of `# Appendix`. Used only to bound the end of the references
+# blob. Restricted to a heading keyword on purpose: an arbitrary bold span matches a reference entry
+# whose title sits alone on its own bold line (`**BERT: Pre-training…**`), which would truncate or
+# drop the bibliography — so only a recognized post-references section word ends the slice.
+BOLD_HEADER_LINE_RE = re.compile(
+    r"^\*\*[ \t]*(?:appendix|appendices|supplement(?:ary|al)?(?:\s+\w+)*|acknowledge?ments?|"
+    r"author\s+contributions?|funding|ethics|conflicts?\s+of\s+interest|data\s+availability)\b"
+    r"[^*\n]{0,60}\*\*[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 SECTION_TYPES = {"problem", "method", "evidence"}
 SECTION_ORDER = ["problem", "method", "evidence"]
@@ -478,10 +496,11 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
     },
 }
 ALLOWED_SECTION_FIELDS = {"section_type", "anchor_id", "covers_entries", "units"}
-# Unit fields that hold a list of unit-id references (rewritten on dedup). In 0.9
-# only Measure.setup_ids remains a reference-list field (it points at the section-local
-# ExperimentSetup units the measure is scoped by).
-REFERENCE_LIST_FIELDS = ("setup_ids",)
+# Unit fields that hold a list of unit-id references (rewritten on dedup/canonicalize/sanitize):
+# Measure.setup_ids points at the section-local ExperimentSetup units the measure is scoped by;
+# Measure.finding_ids (section-ir-0.12 blob-primary evidence) mounts the Findings a table
+# evidences — it must follow every id rewrite or _mount_findings_on_measures drops it as stale.
+REFERENCE_LIST_FIELDS = ("setup_ids", "finding_ids")
 
 
 def load_prompt(path: Path) -> tuple[str, str]:
@@ -659,6 +678,16 @@ class ValidationError(Exception):
         super().__init__(f"Section-IR validation failed:\n- {details}")
 
 
+class TruncationError(RuntimeError):
+    """Raised when the model stops on finish_reason=length.
+
+    Subclasses RuntimeError (not ValueError) so parse-retry loops — which catch only
+    (JSONDecodeError, ValueError) — do NOT re-retry it. A same-budget retry of a truncation is
+    futile at temperature 0, so it fails fast to the caller at ~1x cost instead of ~4x. Shared by
+    the sync path here and the async production client (production/llm.py imports it).
+    """
+
+
 def build_response_format(schema: dict, name: str = "response", model: str = "") -> dict:
     """Build the ``response_format`` for the model's structured-output mode.
 
@@ -689,6 +718,84 @@ def load_section_schema(section_type: str) -> dict:
         raise ValueError(f"No schema file registered for section_type: {section_type}")
     path = SCHEMAS_DIR / filename
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# The Measure fields that exist only under blob-primary evidence, and the pre-blob (0.11) scores
+# description they displace. The committed evidence schema is blob-flavored (the default mode);
+# the opt-out arm derives its legacy contract from it at runtime rather than keeping two files.
+BLOB_EVIDENCE_FIELDS = (
+    "source_table_marker",
+    "caption_marker",
+    "table_role",
+    "headline_result",
+    "finding_ids",
+)
+LEGACY_SCORES_DESCRIPTION = (
+    "Flat array of reported scores under this measure — one row per system, covering the "
+    "method family's own variants and every compared-against baseline"
+)
+
+
+def strip_blob_evidence_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Derive the legacy (``--no-blob-primary-evidence``) evidence schema from the committed one.
+
+    The committed schema is the blob-primary contract; with the flag off it would still reach the
+    model (as strict ``response_format`` or as the json_object prompt contract) and contradict the
+    full-transcription module — advertising marker fields ``evidence.md`` never mentions and a
+    ``scores`` description that says baselines do NOT belong in scores. Stripping the blob fields
+    and restoring the 0.11 scores description makes the opt-out arm a true pre-blob baseline.
+    """
+    out = copy.deepcopy(schema)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict):
+                for field in BLOB_EVIDENCE_FIELDS:
+                    props.pop(field, None)
+                scores = props.get("scores")
+                if isinstance(scores, dict) and "description" in scores:
+                    scores["description"] = LEGACY_SCORES_DESCRIPTION
+            required = node.get("required")
+            if isinstance(required, list):
+                node["required"] = [r for r in required if r not in BLOB_EVIDENCE_FIELDS]
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(out)
+    return out
+
+
+def load_references_schema_for_mode(blob_primary_references: bool) -> dict[str, Any]:
+    """Load the references schema, adjusted to the mode's transcription contract.
+
+    One schema file serves both prompts, but its ``roles`` guidance ends with full-transcription
+    advice ("use background only when no stronger role fits") that contradicts the blob prompt's
+    "never emit background — skip it". In blob mode the model-visible description says so instead;
+    the ``background`` enum value itself stays (a stray background entry decodes fine and simply
+    produces no edge — tolerant beats a strict-mode hard reject).
+    """
+    schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
+    if not blob_primary_references:
+        return schema
+    try:
+        roles = schema["properties"]["references"]["items"]["properties"]["relation"]["properties"]["roles"]
+    except (KeyError, TypeError):
+        return schema
+    desc = roles.get("description")
+    if isinstance(desc, str):
+        roles["description"] = desc.replace(
+            "When ambiguous between builds_on and background, prefer builds_on if the cited work "
+            "is plausibly a direct predecessor (high recall); use background only when no stronger "
+            "role fits.",
+            "Do NOT emit background-only references at all — skip them; they stay in the verbatim "
+            "bibliography blob. When ambiguous between builds_on and background, prefer builds_on "
+            "if the cited work is plausibly a direct predecessor (high recall).",
+        )
+    return schema
 
 
 def load_section_module(section_type: str, blob_primary_evidence: bool = False) -> str:
@@ -1756,7 +1863,8 @@ def _sanitize_unit_ids(
     born-unit ids (Finding/Problem/config ExperimentSetup) a model emitted with uppercase or
     punctuation, e.g. ``fnd:increasing_K_modest`` -> ``fnd:increasing_k_modest``. Every reference
     is rewritten to the new id — relation endpoints, score-row system_id/setup_id,
-    Measure.setup_ids, and section anchors — and collisions are suffixed so ids stay unique.
+    Measure.setup_ids/finding_ids, and section anchors — and collisions are suffixed so ids stay
+    unique.
     """
     warnings: list[str] = []
 
@@ -1798,9 +1906,10 @@ def _sanitize_unit_ids(
             for unit in section.get("units", []) or []:
                 if unit.get("type") != "Measure":
                     continue
-                setup_ids = unit.get("setup_ids")
-                if isinstance(setup_ids, list):
-                    unit["setup_ids"] = [remap.get(x, x) for x in setup_ids]
+                for field in REFERENCE_LIST_FIELDS:
+                    values = unit.get(field)
+                    if isinstance(values, list):
+                        unit[field] = [remap.get(x, x) for x in values]
                 for row in unit.get("scores", []) or []:
                     if not isinstance(row, dict):
                         continue
@@ -1835,14 +1944,30 @@ def _drop_empty_scores_measures(
         kept: list[dict[str, Any]] = []
         for unit in units:
             scores = unit.get("scores")
+            has_scores = isinstance(scores, list) and bool(scores)
             has_marker = bool(unit.get("source_table_marker"))
-            if unit.get("type") == "Measure" and not (isinstance(scores, list) and scores) and not has_marker:
+            if unit.get("type") == "Measure" and not has_scores and not has_marker:
                 warnings.append(f"dropped Measure {unit.get('id')!r} with empty scores")
                 if dropped_out is not None and isinstance(unit.get("id"), str):
                     dropped_out.append(
                         {"item_id": unit["id"], "reason": "Measure dropped: empty scores (no extractable rows)"}
                     )
             else:
+                # The marker exception is meant for ablation tables; a main_result table (the
+                # default when table_role is omitted) whose contribution rows were never
+                # transcribed leaves the headline numbers queryable only inside the verbatim
+                # blob — the prompt calls that an error, so make the omission loud here.
+                if (
+                    unit.get("type") == "Measure"
+                    and not has_scores
+                    and has_marker
+                    and unit.get("table_role", "main_result") != "ablation"
+                ):
+                    warnings.append(
+                        f"Measure {unit.get('id')!r} has a main_result source table but empty "
+                        "scores — the contribution's own rows were not transcribed and exist "
+                        "only in the verbatim table blob"
+                    )
                 kept.append(unit)
         section["units"] = kept
     return warnings
@@ -2051,6 +2176,9 @@ def _repair_unit_enums(sections: list[dict[str, Any]]) -> list[str]:
                 _drop_invalid_optional(
                     unit, "objective_class", MEASURE_OBJECTIVE_CLASSES, "Measure", uid
                 )
+                # 0.12 blob-primary: also optional, also filled freely; dropping it falls back
+                # to the main_result default instead of hard-failing the paper on e.g. "main".
+                _drop_invalid_optional(unit, "table_role", MEASURE_TABLE_ROLES, "Measure", uid)
                 scores = unit.get("scores")
                 if isinstance(scores, list):
                     for row in scores:
@@ -2230,7 +2358,8 @@ def _slice_source_tables(paper_content: str) -> dict[str, dict[str, str]]:
     references via ``source_table_marker``), so a Measure's marker self-checks (it must be a key here)
     and the renderer can resolve the blob by marker. Each entry is ``{marker, caption, html}``. When a
     single `[§N]` block holds more than one ``<table>`` the blobs are concatenated under that one
-    marker (lossless for the by-value verifier; flagged elsewhere as an abnormal block).
+    marker (lossless for the by-value verifier). Capture blind spots — unbalanced ``<table>`` markup,
+    nested tables, markdown pipe tables — are reported by ``_table_capture_warnings`` at assembly.
     """
     if not isinstance(paper_content, str) or "<table" not in paper_content.lower():
         return {}
@@ -2277,14 +2406,24 @@ def build_table_index(paper_content: str) -> str:
     with no marker instead of inventing one.
     """
     tables = _slice_source_tables(paper_content)
-    if not tables:
+    # An anchorless table (one that precedes the first [§N] block marker) is captured under marker ""
+    # for the by-value verifier, but no emittable marker can address it — keep it out of the index so
+    # the model is never invited to point at it.
+    addressable = {marker: t for marker, t in tables.items() if marker}
+    if not addressable:
+        no_grid = (
+            "This paper has NO addressable <table> grids (its results are in prose, figures, or "
+            "markdown pipe tables that are not captured as table blobs)."
+            if tables or _has_pipe_table(paper_content)
+            else "This paper has NO <table> grids (its results are in prose or figures)."
+        )
         return (
-            "This paper has NO <table> grids (its results are in prose or figures). Do NOT emit any "
-            "source_table_marker; transcribe the contribution's reported numbers directly as scores[] "
-            "rows, as for a prose result."
+            f"{no_grid} Do NOT emit any source_table_marker; there is no table blob backstop, so "
+            "transcribe ALL reported comparison rows — the contribution method's own rows AND every "
+            "compared-against baseline row — directly as scores[] rows, as for a prose result."
         )
     lines: list[str] = []
-    for marker, t in tables.items():
+    for marker, t in addressable.items():
         cap = (t.get("caption") or "").strip().strip("*").strip()
         preview = " | ".join(c for c in _table_cell_texts(t.get("html", ""))[:8] if c)
         label = cap or (f"columns: {preview}" if preview else "(no caption)")
@@ -2298,6 +2437,53 @@ def build_table_index(paper_content: str) -> str:
     return header + "\n" + "\n".join(lines)
 
 
+def _has_pipe_table(paper_content: str) -> bool:
+    """Whether the paper contains a GFM markdown pipe table (a `| --- | --- |` separator row) —
+    a grid TABLE_BLOCK_RE cannot capture, so its rows have no blob backstop."""
+    if not isinstance(paper_content, str):
+        return False
+    return bool(re.search(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{0,}\s*\|?\s*$", paper_content, re.MULTILINE))
+
+
+def _table_capture_warnings(paper_content: str, source_tables: dict[str, dict[str, str]]) -> list[str]:
+    """Audit the deterministic table capture for blind spots and report them loudly.
+
+    TABLE_BLOCK_RE is a non-greedy, parser-less slicer, so three real-paper shapes silently escape
+    it: an unclosed ``<table>`` (never matched at all), a nested ``<table>`` (the outer match stops at
+    the inner ``</table>``, dropping the outer's trailing rows), and markdown pipe tables (not HTML at
+    all). All three mean rows exist that no blob carries — flag them so a paper whose baselines are
+    unrecoverable is visible instead of silently thinner.
+    """
+    if not isinstance(paper_content, str):
+        return []
+    warnings: list[str] = []
+    lowered = paper_content.lower()
+    opens, closes = lowered.count("<table"), lowered.count("</table>")
+    if opens != closes:
+        warnings.append(
+            f"table capture: unbalanced <table> markup ({opens} opening vs {closes} closing tags); "
+            "some table rows may be missing from extraction_notes.source_tables"
+        )
+    nested = sorted(
+        marker
+        for marker, t in source_tables.items()
+        # A clean block (or a same-marker concatenation of clean blocks) has equal counts; a nested
+        # table truncated at the inner </table> leaves an extra opening tag inside the capture.
+        if (t.get("html") or "").lower().count("<table") > (t.get("html") or "").lower().count("</table>")
+    )
+    if nested:
+        warnings.append(
+            f"table capture: nested <table> markup under marker(s) {nested!r}; the outer "
+            "table's trailing rows after the inner table are not captured"
+        )
+    if not source_tables and _has_pipe_table(paper_content):
+        warnings.append(
+            "table capture: paper uses markdown pipe tables, which are not captured as table blobs; "
+            "no source-table backstop exists for its result rows"
+        )
+    return warnings
+
+
 def _slice_references_blob(paper_content: str) -> str:
     """Slice the paper's bibliography section verbatim, for blob-primary references.
 
@@ -2306,24 +2492,47 @@ def _slice_references_blob(paper_content: str) -> str:
     ~40% with a structural role or a provided name) and leave every background reference in this blob.
     The renderer shows it as the complete bibliography beneath the structured linked entries.
 
-    The section runs from the bibliography header (``# References`` / ``Bibliography`` / ``References and
-    Notes`` …) to the next markdown header (an appendix that follows references) or end-of-file. Takes
-    the LAST header match, since the only ``# References`` header is the bibliography itself and any
-    earlier mention would be body prose. Returns ``""`` when no bibliography header is present.
+    Each candidate section runs from a bibliography header match to the next markdown (or bold-line)
+    header — an appendix that follows references — or end-of-file. Among the candidates, the one whose
+    body is densest in reference signals (4-digit years / ``[N]`` markers) wins: a duplicate trailing
+    ``# References`` boilerplate header (empty body) or a body-prose mention can never beat the real
+    bibliography, and a candidate with fewer than 3 signals is rejected outright. Returns ``""`` when
+    no candidate passes — the assembly gate records that as an uncertain_assignments warning.
     """
     if not isinstance(paper_content, str) or not paper_content:
         return ""
-    matches = list(REFERENCES_HEADER_RE.finditer(paper_content))
-    if not matches:
+    best_score, best_span = 0, None
+    for head in REFERENCES_HEADER_RE.finditer(paper_content):
+        bounds = [
+            m.start()
+            for m in (
+                MARKDOWN_HEADER_RE.search(paper_content, head.end()),
+                BOLD_HEADER_LINE_RE.search(paper_content, head.end()),
+            )
+            if m
+        ]
+        end = min(bounds) if bounds else len(paper_content)
+        score = _reference_density(paper_content[head.end():end])
+        if score > best_score:
+            best_score, best_span = score, (head.start(), end)
+    if best_span is None or best_score < 3:
         return ""
-    head = matches[-1]
-    nxt = MARKDOWN_HEADER_RE.search(paper_content, head.end())
-    end = nxt.start() if nxt else len(paper_content)
-    blob = paper_content[head.start():end]
+    blob = paper_content[best_span[0]:best_span[1]]
     # Drop any stray markdown image the extractor misplaced into the reference run (a figure is never a
     # reference) so the verbatim bibliography reads clean; references carry no images of their own.
     blob = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", blob)
     return blob.strip()
+
+
+def _reference_density(text: str) -> int:
+    """How strongly ``text`` reads as a bibliography: the larger of its 4-digit-year count and its
+    ``[N]`` numeric-marker count. Counted over the whole body (not per line) so a run-together
+    single-line bibliography scores as well as a one-entry-per-line one."""
+    if not text:
+        return 0
+    years = len(re.findall(r"\b(?:19|20)\d{2}\b", text))
+    markers = len(re.findall(r"\[\d{1,4}\]", text))
+    return max(years, markers)
 
 
 def _attach_model_captions(
@@ -2337,7 +2546,9 @@ def _attach_model_captions(
     location, chosen with the table in view, instead of the slicer's "nearest preceding **Table k**"
     proximity heuristic. Here we slice that block verbatim from the segmented paper and overwrite the
     table entry's ``caption`` (and record ``caption_marker``). Falls back silently to the heuristic
-    caption when the marker is missing; warns when it points at a block that does not exist.
+    caption when the marker is missing; warns when it points at a block that does not exist, at the
+    table block itself, or at a block too long to be a caption — and on conflicting captions for one
+    table the first writer wins so the outcome doesn't depend on unit order.
     """
     blocks = parse_sections(paper_content)  # {N: block_text}, block_text keeps its leading [§N]
     warnings: list[str] = []
@@ -2356,8 +2567,28 @@ def _attach_model_captions(
                 )
                 continue
             caption = SECTION_MARKER_RE.sub("", block_text, count=1).strip()
-            source_tables[tmarker]["caption"] = caption
-            source_tables[tmarker]["caption_marker"] = cmarker
+            if cmarker == tmarker or "<table" in caption.lower():
+                warnings.append(
+                    f"measure {unit.get('id')!r} caption_marker {cmarker} points at a table block, "
+                    "not a caption; kept the heuristic caption"
+                )
+                continue
+            if len(caption) > 600:
+                warnings.append(
+                    f"measure {unit.get('id')!r} caption_marker {cmarker} block is {len(caption)} "
+                    "chars — too long for a caption; truncated to 600"
+                )
+                caption = caption[:600] + "…"
+            entry = source_tables[tmarker]
+            prior = entry.get("caption_marker")
+            if prior and prior != cmarker:
+                warnings.append(
+                    f"conflicting caption_marker for table {tmarker}: kept {prior}, "
+                    f"ignored {cmarker} from measure {unit.get('id')!r}"
+                )
+                continue
+            entry["caption"] = caption
+            entry["caption_marker"] = cmarker
     return warnings
 
 
@@ -2741,6 +2972,11 @@ def assemble_extraction(
     headline_result = spine_summary.get("headline_result") or "" if isinstance(spine_summary, dict) else ""
     document_role = _derive_document_role(census, sections)
     source_tables = _slice_source_tables(paper_content)
+    capture_warns = _table_capture_warnings(paper_content, source_tables)
+    if capture_warns:
+        uncertain = extraction_notes.setdefault("uncertain_assignments", [])
+        if isinstance(uncertain, list):
+            uncertain.extend(capture_warns)
     if source_tables:
         # Blob-primary: override each table's heuristic caption with the model-chosen caption block
         # (the model's caption_marker is the authoritative location; code slices it verbatim), so the
@@ -2761,10 +2997,21 @@ def assemble_extraction(
                 extraction_notes["score_fidelity"] = fidelity
     # Blob-primary references: capture the full bibliography verbatim so the references pass can emit
     # only graph-linked entries and leave background refs here (the display + completeness backstop).
+    # The mode marker lets the renderer distinguish "legacy full transcription" from "blob mode whose
+    # slice failed" — in the latter case the structured list is graph-linked-only and must say so.
     if blob_primary_references:
+        extraction_notes["blob_primary_references"] = True
         references_blob = _slice_references_blob(paper_content)
         if references_blob:
             extraction_notes["references_blob"] = references_blob
+        else:
+            uncertain = extraction_notes.setdefault("uncertain_assignments", [])
+            if isinstance(uncertain, list):
+                uncertain.append(
+                    "blob-primary references: no bibliography section could be sliced from the paper "
+                    "(no header matched or no candidate looked reference-dense); background references "
+                    "are not captured and the structured list covers graph-linked entries only"
+                )
     return {
         "document": build_document_unit(
             paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result
@@ -2862,7 +3109,9 @@ def _call_llm(
     choice = response.choices[0]
     if choice.finish_reason == "length":
         content = choice.message.content or ""
-        raise ValueError(
+        # TruncationError (a RuntimeError) so the section retry loop — which catches only
+        # (JSONDecodeError, ValueError) — fails fast instead of re-running a doomed call.
+        raise TruncationError(
             f"LLM response truncated (finish_reason=length, got {len(content)} chars). "
             f"Increase max_tokens or reduce prompt size."
         )
@@ -2944,11 +3193,18 @@ def run_references_extraction(
     paper_content: str,
     temperature: float = 0.0,
     max_tokens: int = 16_384,
+    blob_primary_references: bool = True,
 ) -> dict[str, Any]:
-    """Extract paper reference list into structured entries."""
-    system_prompt, user_template = load_prompt(REFERENCES_PROMPT_PATH)
+    """Extract paper reference list into structured entries.
+
+    With ``blob_primary_references`` (the production default) the blob prompt is used — the model
+    transcribes only graph-linked references and skips background ones (assembly slices the full
+    bibliography verbatim as the backstop). Pass False for the legacy full-transcription pass.
+    """
+    prompt_path = REFERENCES_BLOB_PROMPT_PATH if blob_primary_references else REFERENCES_PROMPT_PATH
+    system_prompt, user_template = load_prompt(prompt_path)
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
-    schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
+    schema = load_references_schema_for_mode(blob_primary_references)
     resp_fmt = build_response_format(schema, name="references_output", model=model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
@@ -3159,6 +3415,60 @@ def reconcile_reference_units(
                             f"Backfilled {contribution_id} -[{edge_rel}]-> {target_id} "
                             f"from reference {ref.get('id')!r} role {role_name!r}"
                         )
+
+    # Audit the blob-mode recall tax: a materialized node carrying cite_keys was, by census
+    # judgment, graph-relevant — when no structured reference links it, either the references
+    # pass skipped that ref as background (the silent under-linking class of blob-primary mode)
+    # or its key failed to join. Make that visible instead of losing it without a trace.
+    linked_unit_ids = {
+        uid
+        for ref in ref_list
+        if isinstance(ref, dict) and isinstance(ref.get("relation"), dict)
+        for uid in ref["relation"].get("provides_unit_ids") or []
+        if isinstance(uid, str)
+    }
+    unlinked = sorted(
+        {
+            uid
+            for uids in citekey_to_ids.values()
+            for uid in uids
+            if uid not in linked_unit_ids
+        }
+    )
+    if unlinked:
+        shown = ", ".join(unlinked[:10]) + (" …" if len(unlinked) > 10 else "")
+        warnings.append(
+            f"{len(unlinked)} census-cited unit(s) have no linking reference (the cited work was "
+            f"likely skipped as background, or its cite key failed to join): {shown}"
+        )
+
+    # Membership check against the verbatim bibliography (blob mode only): a structured reference
+    # whose marker/author never appears in the blob is suspect — a hallucinated entry can still
+    # link via the name fallback and backfill a spurious edge, so make it visible. Flag, never
+    # drop: reference formats are heterogeneous, and a tolerant check can false-alarm.
+    notes = extraction.get("extraction_notes")
+    blob = notes.get("references_blob") if isinstance(notes, dict) else None
+    if isinstance(blob, str) and blob:
+        blob_lower = blob.lower()
+        for ref in ref_list:
+            if not isinstance(ref, dict):
+                continue
+            rid = ref.get("id")
+            if not isinstance(rid, str) or not rid.strip():
+                continue
+            token = rid.strip().strip("[]")
+            if token.isdigit():
+                present = f"[{token}]" in blob or bool(
+                    re.search(rf"(?m)^\s*\[?{token}[\].)]", blob)
+                )
+            else:
+                author = re.match(r"[^\W\d_]+", token, re.UNICODE)
+                present = bool(author) and author.group(0).lower() in blob_lower
+            if not present:
+                warnings.append(
+                    f"reference {rid!r} does not appear in the bibliography blob "
+                    "(possible hallucinated entry or key mismatch)"
+                )
     return warnings
 
 
@@ -3192,7 +3502,7 @@ def extract_single_content_section_sync(
     max_retries: int = MAX_SECTION_RETRIES,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
-    blob_primary_evidence: bool = False,
+    blob_primary_evidence: bool = True,
 ) -> dict[str, Any]:
     """Extract one content section (stage C) using the synchronous LLM client."""
     system_prompt, _ = load_prompt(SECTION_EXTRACTION_PROMPT_PATH)
@@ -3200,6 +3510,10 @@ def extract_single_content_section_sync(
     if blob_primary_evidence and section_type == "evidence":
         section_module = f"{section_module}\n\n## Source-table index\n{build_table_index(paper_content)}"
     section_schema = load_section_schema(section_type)
+    if section_type == "evidence" and not blob_primary_evidence:
+        # The committed evidence schema is the blob-primary contract; strip it back to the 0.11
+        # shape so the opt-out arm's model never sees marker fields or the blob scores wording.
+        section_schema = strip_blob_evidence_schema(section_schema)
     resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=model)
 
     # For json_object models (DeepSeek), the schema cannot constrain decoding, so fold its
@@ -3263,9 +3577,14 @@ def run_content_extraction_sync(
     max_tokens: int = DEFAULT_SECTION_MAX_TOKENS,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
-    blob_primary_evidence: bool = False,
+    blob_primary_evidence: bool = True,
+    blob_primary_references: bool = True,
 ) -> dict[str, Any]:
-    """Run the four content sections (stage C) over a shared prefix, then assemble 0.7 output."""
+    """Run the four content sections (stage C) over a shared prefix, then assemble 0.7 output.
+
+    Both blob flags default ON to match the production worker — a paper run through this sync
+    path produces the same 0.12-shaped output as ``python -m production``.
+    """
     parsed_sections = parse_sections(paper_content)
     sections_included = _sort_section_refs({f"§{section_id}" for section_id in parsed_sections})
     sections_omitted: list[str] = []
@@ -3323,6 +3642,7 @@ def run_content_extraction_sync(
         sections_included=sections_included,
         sections_omitted=sections_omitted,
         blob_primary_evidence=blob_primary_evidence,
+        blob_primary_references=blob_primary_references,
     )
 
 
@@ -3339,9 +3659,13 @@ def run_pipeline(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     strict: bool = True,
-    blob_primary_evidence: bool = False,
+    blob_primary_evidence: bool = True,
+    blob_primary_references: bool = True,
 ) -> dict[str, Any]:
-    """Run census + metadata + references in parallel, then the relation pass, content fill, and validation."""
+    """Run census + metadata + references in parallel, then the relation pass, content fill, and validation.
+
+    Both blob flags default ON to match the production worker, so this entry point and
+    ``python -m production`` produce the same 0.12-shaped output."""
     pipeline_warnings: list[str] = []
     cache_key = prompt_cache_key if prompt_cache_key is not None else build_prompt_cache_key(model, paper_content)
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -3354,7 +3678,8 @@ def run_pipeline(
             run_metadata_extraction, client, model, paper_content, temperature=temperature, max_tokens=max_tokens
         )
         references_future = executor.submit(
-            run_references_extraction, client, model, paper_content, temperature=temperature, max_tokens=max_tokens
+            run_references_extraction, client, model, paper_content, temperature=temperature,
+            max_tokens=max_tokens, blob_primary_references=blob_primary_references,
         )
         raw_census = census_future.result()
         try:
@@ -3396,6 +3721,7 @@ def run_pipeline(
         prompt_cache_key=cache_key,
         prompt_cache_retention=prompt_cache_retention,
         blob_primary_evidence=blob_primary_evidence,
+        blob_primary_references=blob_primary_references,
     )
     if references is not None:
         pipeline_warnings.extend(reconcile_reference_units(references, extraction, census))
@@ -3622,8 +3948,8 @@ def _validate_unit_fields(
         if objective_class is not None and objective_class not in MEASURE_OBJECTIVE_CLASSES:
             issues.append(f"Measure {uid} has invalid objective_class: {objective_class}")
         # 0.12 blob-primary fields (all optional). Structure/enum/referential checks here; marker
-        # resolution against extraction_notes.source_tables is enforced loudly in assembly
-        # (_validate_finding_mounts), which is where source_tables is in hand.
+        # resolution against extraction_notes.source_tables is enforced loudly later in
+        # validate_section_ir, where the assembled extraction_notes are in hand.
         table_role = unit.get("table_role")
         if table_role is not None and table_role not in MEASURE_TABLE_ROLES:
             issues.append(f"Measure {uid} has invalid table_role: {table_role}")

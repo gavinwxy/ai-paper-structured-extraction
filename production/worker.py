@@ -1,4 +1,4 @@
-"""Per-paper async extraction pipeline (section-ir-0.9) with intermediate saves.
+"""Per-paper async extraction pipeline (section-ir-0.12) with intermediate saves.
 
 Three stages: node census (A) -> relation pass (B) -> per-section content fill (C),
 then deterministic assembly and validation.
@@ -22,6 +22,8 @@ from section_pipeline import (
     load_relation_pass_schema,
     load_section_schema,
     load_section_module,
+    load_references_schema_for_mode,
+    strip_blob_evidence_schema,
     build_response_format,
     schema_to_prompt_spec,
     _augment_prompt_for_json_object,
@@ -46,7 +48,6 @@ from section_pipeline import (
     REFERENCES_PROMPT_PATH,
     REFERENCES_BLOB_PROMPT_PATH,
     METADATA_SCHEMA_PATH,
-    REFERENCES_SCHEMA_PATH,
     SECTION_ORDER,
     MAX_SECTION_RETRIES,
 )
@@ -276,7 +277,7 @@ async def _call_and_parse(
 
 
 async def _run_census(
-    paper_id: str, paper_content: str, cache_key: str, config: Config, llm: LLMClient,
+    paper_id: str, paper_content: str, cache_key: str | None, config: Config, llm: LLMClient,
 ) -> dict[str, Any]:
     """Run the node census (stage A)."""
     system_prompt, user_template = load_prompt(NODE_CENSUS_PROMPT_PATH)
@@ -359,7 +360,9 @@ async def _run_references(
     prompt_path = REFERENCES_BLOB_PROMPT_PATH if config.blob_primary_references else REFERENCES_PROMPT_PATH
     system_prompt, user_template = load_prompt(prompt_path)
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
-    schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
+    # Mode-adjusted: in blob mode the roles description says to skip background refs outright,
+    # instead of contradicting the blob prompt with full-transcription guidance.
+    schema = load_references_schema_for_mode(config.blob_primary_references)
     resp_fmt = build_response_format(schema, name="references_output", model=config.model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
 
@@ -451,6 +454,10 @@ async def _extract_single_content_section(
     if config.blob_primary_evidence and section_type == "evidence":
         section_module = f"{section_module}\n\n## Source-table index\n{build_table_index(paper_content)}"
     section_schema = load_section_schema(section_type)
+    if section_type == "evidence" and not config.blob_primary_evidence:
+        # The committed evidence schema is the blob-primary contract; strip it back to the 0.11
+        # shape so the opt-out arm's model never sees marker fields or the blob scores wording.
+        section_schema = strip_blob_evidence_schema(section_schema)
     resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=config.model)
 
     # json_object models (DeepSeek): fold the schema contract into section_focus so the shared

@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import webbrowser
 from collections import defaultdict
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -185,8 +187,8 @@ def build_unit_index(data: dict) -> dict[str, dict]:
     not rendered as a card, so any edge that touches it stays non-clickable (a dangling
     pill) instead of becoming a link that scrolls to nothing."""
     idx: dict[str, dict] = {}
-    for section in data.get("sections", []):
-        for u in section.get("units", []):
+    for section in data.get("sections") or []:
+        for u in section.get("units") or []:
             if isinstance(u, dict) and u.get("id"):
                 idx[u["id"]] = u
     return idx
@@ -195,9 +197,9 @@ def build_unit_index(data: dict) -> dict[str, dict]:
 def build_unit_section_map(data: dict) -> dict[str, str]:
     """id -> section_type, used to colour cross-section relation pills."""
     unit_section: dict[str, str] = {}
-    for section in data.get("sections", []):
+    for section in data.get("sections") or []:
         st = section.get("section_type", "problem")
-        for unit in section.get("units", []):
+        for unit in section.get("units") or []:
             if isinstance(unit, dict) and unit.get("id"):
                 unit_section.setdefault(unit["id"], st)
     return unit_section
@@ -213,7 +215,7 @@ def build_edge_index(data: dict, unit_index: dict) -> tuple[dict, dict, dict]:
     in_edges: dict[str, list] = defaultdict(list)
     neighbors: dict[str, set] = defaultdict(set)
     seen: set[tuple] = set()
-    for e in data.get("relations", []):
+    for e in data.get("relations") or []:
         if not isinstance(e, dict):
             continue
         rel = e.get("relation")
@@ -234,13 +236,13 @@ def build_edge_index(data: dict, unit_index: dict) -> tuple[dict, dict, dict]:
 
 
 def collect_all_links(data: dict) -> list[dict]:
-    return [lk for lk in data.get("relations", []) if isinstance(lk, dict)]
+    return [lk for lk in data.get("relations") or [] if isinstance(lk, dict)]
 
 
 def build_metric_subjects(data: dict) -> dict[str, list[str]]:
     """Measure id -> every Method it `evaluates`."""
     subjects: dict[str, list[str]] = {}
-    for lk in data.get("relations", []):
+    for lk in data.get("relations") or []:
         if isinstance(lk, dict) and lk.get("relation") == "evaluates":
             src, tgt = lk.get("source_id"), lk.get("target_id")
             if isinstance(src, str) and isinstance(tgt, str) and tgt not in subjects.get(src, []):
@@ -251,8 +253,8 @@ def build_metric_subjects(data: dict) -> dict[str, list[str]]:
 def build_metric_datasets(data: dict, unit_index: dict[str, dict]) -> dict[str, list[str]]:
     """Measure id -> ExperimentSetup units it ran on (via score-row `setup_id` / `setup_ids`)."""
     out: dict[str, list[str]] = {}
-    for section in data.get("sections", []):
-        for u in section.get("units", []):
+    for section in data.get("sections") or []:
+        for u in section.get("units") or []:
             if not isinstance(u, dict) or u.get("type") != "Measure":
                 continue
             mid = u.get("id", "")
@@ -286,7 +288,9 @@ def classify_methods(data: dict, unit_index: dict[str, dict]) -> dict[str, str]:
     part_src: set[str] = set()
     part_tgt: set[str] = set()
     compares: set[str] = set()
-    for lk in data.get("relations", []):
+    for lk in data.get("relations") or []:
+        if not isinstance(lk, dict):
+            continue
         rel, s, t = lk.get("relation"), lk.get("source_id"), lk.get("target_id")
         if rel == "part_of":
             part_src.add(s)
@@ -333,7 +337,7 @@ def _unit_label(unit: dict | None, limit: int = 70) -> str:
 
 def group_sections_by_type(data: dict) -> dict[str, list[dict]]:
     groups: dict[str, list[dict]] = {s: [] for s in SECTION_ORDER}
-    for section in data.get("sections", []):
+    for section in data.get("sections") or []:
         st = section.get("section_type", "problem")
         groups.setdefault(st, []).append(section)
     return groups
@@ -498,14 +502,17 @@ def render_unit_relations(uid: str, out_edges: dict, in_edges: dict, unit_index:
 
 # --- Unit cards ---
 
-META_FIELDS = {"id", "type", "provenance", "role"}
+# `source_table_marker`/`caption_marker`/`table_role` are the 0.12 blob-addressing metadata —
+# consumed by the evidence-section metric blocks, suppressed (never dumped raw) on plain cards.
+META_FIELDS = {"id", "type", "provenance", "role", "source_table_marker", "caption_marker", "table_role"}
 # Scalar fields shown as pills. Includes the 0.10 optional payloads: Measure `objective_class`
 # (FG-6) and the Finding quantitative payload `polarity`/`effect_size`/`scope` (FG-11), each shown
 # only when populated.
 TAG_FIELDS = ("method_kind", "comparison_direction", "objective_class", "unit",
               "polarity", "effect_size", "scope")
 PROSE_FIELDS = ("description", "implementation_notes")
-RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setup_ids", "statement", "name"}
+RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", "setup_ids", "statement", "name",
+               "headline_result", "finding_ids"}
 
 
 def _role_badge(unit: dict, roles_final: dict) -> str:
@@ -573,6 +580,10 @@ def render_unit_card(
         rich += render_formulas(unit.get("formulas"))
         rich += render_objective(unit.get("objective_function"))
     elif utype == "Measure":
+        # 0.12 fields on a Measure that landed outside the evidence section (where
+        # render_metric_block would own them): same pill/chip treatment, never a raw dump.
+        if unit.get("headline_result"):
+            rich += f"<div class='m-headline'>{escape(str(unit['headline_result']))}</div>"
         scores_html = render_scores(unit.get("scores"), baseline_keys, unit_index=unit_index, baseline_ids=baseline_ids)
         if scores_html:
             rich += f"<div class='fg'><div class='fl'>Scores</div>{scores_html}</div>"
@@ -580,6 +591,10 @@ def render_unit_card(
             names = [(unit_index.get(s, {}).get("description") or unit_index.get(s, {}).get("name") or s)
                      for s in unit["setup_ids"]]
             rich += render_chips("Setups", names)
+        if unit.get("finding_ids"):
+            names = [(unit_index.get(f, {}).get("statement") or unit_index.get(f, {}).get("name") or f)
+                     for f in unit["finding_ids"]]
+            rich += render_chips("Findings", names)
 
     handled = META_FIELDS | RICH_FIELDS | set(TAG_FIELDS) | set(PROSE_FIELDS) | used_label_fields
     leftover = {k: v for k, v in unit.items() if k not in handled and v not in (None, "", [], {})}
@@ -607,21 +622,88 @@ def render_unit_card(
     </div>"""
 
 
+# Void elements may legally appear unclosed inside a table blob (the HTML5 void list).
+_BLOB_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+# Tags that execute or escape the wrapper — never allowed in a verbatim table blob.
+_BLOB_REJECT_TAGS = {"script", "style", "iframe", "object", "embed"}
+# A raw `<` a browser would tokenise as markup (tag / end tag / comment / decl / PI).
+_BLOB_MARKUP_RE = re.compile(r"<[a-zA-Z/!?]")
+
+
+class _TableBlobAuditor(HTMLParser):
+    """Structural audit for a verbatim source-table blob: every opened tag must be closed (void
+    elements exempt), nothing executable (script-ish tags, ``on*`` handler attributes), and no stray
+    ``<`` the browser would tokenise as markup — an unclosed ``<div>`` or half-emitted tag in an
+    OCR-mangled table would otherwise swallow the rest of the page."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.stack: list[str] = []
+        self.ok = True
+
+    def _check_tag(self, tag: str, attrs: list) -> None:
+        if tag in _BLOB_REJECT_TAGS or any(str(a or "").lower().startswith("on") for a, _ in attrs):
+            self.ok = False
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        self._check_tag(tag, attrs)
+        if tag not in _BLOB_VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list) -> None:
+        self._check_tag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _BLOB_VOID_TAGS:
+            return  # browsers ignore a stray </br> & co
+        if self.stack and self.stack[-1] == tag:
+            self.stack.pop()
+        else:
+            self.ok = False  # close without a matching open, or misnested
+
+    def handle_data(self, data: str) -> None:
+        if _BLOB_MARKUP_RE.search(data):
+            self.ok = False  # raw `<` the parser did not consume as a complete construct
+
+
+def _table_blob_is_safe(blob: str) -> bool:
+    """True when the blob is balanced, non-executable table markup safe to insert verbatim."""
+    # An unterminated comment swallows everything after it — check explicitly.
+    i = 0
+    while (start := blob.find("<!--", i)) != -1:
+        end = blob.find("-->", start + 4)
+        if end == -1:
+            return False
+        i = end + 3
+    auditor = _TableBlobAuditor()
+    try:
+        auditor.feed(blob)
+        auditor.close()
+    except Exception:
+        return False
+    return auditor.ok and not auditor.stack
+
+
 def render_table_prettify(html: str, caption: str = "", marker: str = "") -> str:
     """Render a verbatim source ``<table>`` blob inside a namespaced ``kb-measure-table`` wrapper.
 
     The wrapper scopes all styling via descendant selectors (``.kb-measure-table table`` …) so the
     paper's own table classes/inline styles cannot collide with the viewer's. The table HTML is the
-    paper's own markup, inserted as-is — these are trusted local papers and the whole point is to show
-    the verbatim grid; the caption (the model-chosen block, sliced verbatim in assembly) is shown as a
-    label with its surrounding ``**`` markdown stripped.
+    paper's own markup, inserted as-is once it passes a structural audit (balanced tags, nothing
+    executable); a mangled blob would swallow the rest of the page, so it falls back to an escaped
+    ``<pre>`` instead — never worse than raw. The caption (the model-chosen block, sliced verbatim in
+    assembly) is shown as a label with its surrounding ``**`` markdown stripped.
     """
     if not html:
         return ""
     cap = (caption or "").strip().strip("*").strip()
     cap_html = f"<div class='kb-mt-cap'>{escape(cap)}</div>" if cap else ""
     src_html = f"<span class='kb-mt-src'>source {escape(marker)}</span>" if marker else ""
-    return f"<div class='kb-measure-table'>{cap_html}<div class='kb-mt-wrap'>{html}</div>{src_html}</div>"
+    body = html if _table_blob_is_safe(html) else f"<pre class='kb-mt-raw'>{escape(html)}</pre>"
+    return f"<div class='kb-measure-table'>{cap_html}<div class='kb-mt-wrap'>{body}</div>{src_html}</div>"
 
 
 def render_metric_block(
@@ -679,6 +761,10 @@ def render_metric_block(
                 if rendered_markers is not None:
                     rendered_markers.add(marker)
                 blob_html = render_table_prettify(entry.get("html", ""), entry.get("caption", ""), marker)
+        else:
+            # A marker that doesn't resolve (or resolves to an empty blob): under blob-primary the
+            # baselines live only in that table, so say so instead of silently rendering nothing.
+            blob_html = f"<div class='m-tableref'>source table {escape(marker)} unavailable</div>"
 
     # Mounted findings (0.12) — the table→finding link, replacing the Finding↔Measure edges.
     finding_links = []
@@ -724,8 +810,8 @@ def _arc_chip(unit: dict, kind: str, mark: str = "") -> str:
 
 def render_discovery_arc(data: dict, unit_index: dict, roles_final: dict, edges: list[dict]) -> str:
     problems = [
-        u for s in data.get("sections", []) if s.get("section_type") == "problem"
-        for u in s.get("units", []) if u.get("type") == "Problem"
+        u for s in data.get("sections") or [] if s.get("section_type") == "problem"
+        for u in s.get("units") or [] if isinstance(u, dict) and u.get("type") == "Problem"
     ]
     problem = problems[0] if problems else None
 
@@ -790,7 +876,7 @@ def section_render_order(grouped: dict) -> list[str]:
 def render_nav(grouped: dict, has_refs: bool) -> str:
     links = ""
     for st in section_render_order(grouped):
-        cnt = sum(len(s.get("units", [])) for s in grouped.get(st, []))
+        cnt = sum(len(s.get("units") or []) for s in grouped.get(st, []))
         if cnt:
             color = SECTION_COLORS.get(st, "#64748b")
             label = SECTION_LABELS.get(st, st.replace("_", " ").title())
@@ -826,14 +912,19 @@ def render_section(
     subtitle = SECTION_SUBTITLES.get(section_type, "")
     source_tables = source_tables or {}
 
-    # Dedup units across sections of the same type.
+    # Dedup units across sections of the same type (id-less units are kept, never deduped).
     seen: set[str] = set()
     units: list[dict] = []
     for section in sections:
-        for u in section.get("units", []):
-            if isinstance(u, dict) and u.get("id") not in seen:
-                seen.add(u.get("id"))
-                units.append(u)
+        for u in section.get("units") or []:
+            if not isinstance(u, dict):
+                continue
+            uid = u.get("id")
+            if uid in seen:
+                continue
+            if uid:
+                seen.add(uid)
+            units.append(u)
 
     count = len(units)
     common = dict(
@@ -876,11 +967,12 @@ def render_section(
     </section>"""
 
 
-def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
+def render_metadata_panel(metadata: dict | None, doc: dict | None) -> str:
+    doc = doc or {}
     title = (metadata or {}).get("title") or doc.get("title", "Untitled")
     authors_html = resources_html = ""
     if metadata:
-        authors = metadata.get("authors", [])
+        authors = metadata.get("authors") or []
         if authors:
             parts = []
             for a in authors:
@@ -891,7 +983,7 @@ def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
                     if affils else escape(name)
                 )
             authors_html = f'<div class="authors">{" &middot; ".join(parts)}</div>'
-        resources = metadata.get("resources", [])
+        resources = metadata.get("resources") or []
         res_parts = []
         for r in resources:
             url = r.get("url", "")
@@ -920,8 +1012,9 @@ def render_metadata_panel(metadata: dict | None, doc: dict) -> str:
 
 def render_references_panel(
     references: dict | None, unit_index: dict | None = None, references_blob: str | None = None,
+    blob_primary: bool = False,
 ) -> str:
-    refs = references.get("references", []) if isinstance(references, dict) else []
+    refs = (references.get("references") or []) if isinstance(references, dict) else []
     # Blob-primary references: the structured `refs` are only the graph-linked entries; the full
     # bibliography is the code-sliced verbatim blob, shown beneath them. With neither, nothing to render.
     if not refs and not references_blob:
@@ -929,14 +1022,16 @@ def render_references_panel(
     unit_index = unit_index or {}
     rows, linked = "", 0
     for r in refs:
+        if not isinstance(r, dict):
+            continue
         rid = r.get("id", "")
         authors = r.get("authors") or []
         author_str = f"{authors[0]} et al." if len(authors) > 3 else ", ".join(authors)
         title = r.get("title") or ""
         venue = r.get("venue", "")
         year = r.get("year", "")
-        year_str = f", {year}" if year else ""
-        venue_str = f" &mdash; {escape(venue)}{escape(str(year_str))}" if venue else ""
+        venue_year = ", ".join(escape(str(v)) for v in (venue, year) if v)
+        venue_str = f" &mdash; {venue_year}" if venue_year else ""
         relation = r.get("relation") or {}
         unit_ids = relation.get("provides_unit_ids") or []
         roles = relation.get("roles") or []
@@ -981,7 +1076,15 @@ def render_references_panel(
             f'<div class="ref-blob"><div class="ref-blob-head">Full bibliography (verbatim){title_n}</div>'
             f'{body_html}</div>\n'
         )
-    label = "Graph-linked references" if references_blob else "References"
+    elif blob_primary:
+        # Blob-primary was on but no bibliography could be sliced from the paper: the structured
+        # list is graph-linked entries only, so flag the gap instead of looking like a complete list.
+        blob_html = (
+            '<div class="ref-blob"><div class="ref-blob-head ref-blob-warn">Graph-linked references only '
+            '&mdash; the full verbatim bibliography could not be sliced from the paper, so background '
+            'references are not shown.</div></div>\n'
+        )
+    label = "Graph-linked references" if (references_blob or blob_primary) else "References"
     return f"""
     <section class="sec collapsed refs-sec" id="references">
       <div class="sec-head">
@@ -1026,13 +1129,13 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
                     cite_by_unit[uid].append(rid)
 
     grouped = group_sections_by_type(data)
-    doc = data.get("document", {})
-    notes = data.get("extraction_notes", {})
+    doc = data.get("document") or {}
+    notes = data.get("extraction_notes") or {}
     ir_version = notes.get("ir_version", "")
     source_tables = notes.get("source_tables") if isinstance(notes.get("source_tables"), dict) else {}
 
     total_units = sum(1 for u in unit_index.values() if u.get("type") != "Document")
-    total_sections = len(data.get("sections", []))
+    total_sections = len(data.get("sections") or [])
     total_links = len(all_links)
     plan_coverage = notes.get("plan_coverage", {})
     cov_value = (
@@ -1061,12 +1164,13 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
 
     references_html = render_references_panel(
         references, unit_index, references_blob=notes.get("references_blob"),
+        blob_primary=notes.get("blob_primary_references") is True,
     )
 
     notes_html = ""
-    for ua in notes.get("uncertain_assignments", []):
+    for ua in notes.get("uncertain_assignments") or []:
         notes_html += f"<li>{escape(str(ua))}</li>"
-    for item in notes.get("uncovered_items", []):
+    for item in notes.get("uncovered_items") or []:
         if isinstance(item, dict):
             notes_html += f"<li>uncovered {escape(str(item.get('item_id', '')))}: {escape(str(item.get('reason', '')))}</li>"
         else:
@@ -1250,6 +1354,7 @@ a.m-finding:hover { color:#93c5fd; border-color:#3b82f6; }
 .kb-mt-cap { font-size:.72rem; color:#94a3b8; margin-bottom:5px; font-weight:600; }
 .kb-mt-src { display:inline-block; margin-top:4px; font-size:.6rem; color:#5b6b85; font-family:ui-monospace,monospace; }
 .kb-mt-wrap { overflow-x:auto; border:1px solid #25324a; border-radius:6px; }
+.kb-mt-raw { margin:0; padding:6px 8px; font-size:.72rem; color:#94a3b8; white-space:pre-wrap; word-break:break-word; }
 .kb-measure-table table { border-collapse:collapse; font-size:.74rem; width:100%; color:#cbd5e1; }
 .kb-measure-table th, .kb-measure-table td { border:1px solid #1e293b; padding:3px 7px; text-align:left; white-space:nowrap; }
 .kb-measure-table th { background:#16233c; color:#94a3b8; font-weight:700; }
@@ -1267,6 +1372,7 @@ a.m-finding:hover { color:#93c5fd; border-color:#3b82f6; }
 .ref-link:hover { text-decoration:underline; }
 .ref-blob { margin-top:10px; padding-top:8px; border-top:1px solid #16233c; }
 .ref-blob-head { font-size:.72rem; color:#64748b; font-weight:600; margin-bottom:5px; }
+.ref-blob-warn { color:#fbbf24; }
 .ref-blob-body { font-size:.72rem; color:#94a3b8; white-space:pre-wrap; word-break:break-word; margin:0; font-family:inherit; }
 .ref-blob-list { list-style:none; margin:0; padding:0; }
 .ref-blob-item { font-size:.72rem; color:#94a3b8; line-height:1.5; padding:4px 0 4px 1.7em; text-indent:-1.7em; word-break:break-word; border-bottom:1px solid #0e1726; }

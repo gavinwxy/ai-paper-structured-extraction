@@ -56,8 +56,13 @@ def aggregate(papers: list[dict]) -> dict[str, dict]:
         for stage, e in by_stage.items():
             a = agg.setdefault(stage, {k: 0 for k in NUMERIC})
             for k in NUMERIC:
-                a[k] += int(e.get(k, 0) or 0)
+                a[k] += tok(e, k)
     return agg
+
+
+def tok(entry: dict, key: str) -> int:
+    """Tolerant token-field read: telemetry from intermediate pipeline versions may lack keys."""
+    return int(entry.get(key, 0) or 0)
 
 
 def eff_cost(uncached: int, completion: int) -> int:
@@ -117,8 +122,9 @@ def report(run_dir: Path, rates: tuple[float, float, float] | None) -> None:
     sc = sum(r["cached"] for r in rows)
     su = sum(r["uncached"] for r in rows)
     scomp = sum(r["completion"] for r in rows)
+    hit_total = f"{sc/sp*100:>6.0f}%" if sp else f"{'n/a':>7}"
     tail = (f"{'TOTAL':<18}{fmt(sp):>9}{fmt(sc):>9}{fmt(su):>9}{fmt(scomp):>8}"
-            f"{sc/sp*100:>6.0f}%{100:>6.0f}%")
+            f"{hit_total}{100:>6.0f}%")
     if rates:
         tail += f"{tot_usd:>9.3f}"
     print(tail)
@@ -148,14 +154,14 @@ def cache_diagnosis(run_dir: Path) -> None:
         cs = [by_stage.get(s) for s in CONTENT_STAGES if by_stage.get(s)]
         if len(cs) < 2:
             continue
-        cached_vals = [c["cached_prompt_tokens"] for c in cs]
-        uncached_vals = [c["prompt_tokens"] - c["cached_prompt_tokens"] for c in cs]
+        cached_vals = [tok(c, "cached_prompt_tokens") for c in cs]
+        uncached_vals = [tok(c, "prompt_tokens") - tok(c, "cached_prompt_tokens") for c in cs]
         if len(set(cached_vals)) == 1:
             constant_cache += 1
             sys_prefix_samples.append(cached_vals[0])
         # warm-once model: keep the largest-completion section first (it must run anyway),
         # the other (n-1) sections then cache the SHARED paper-inclusive prefix.
-        order = sorted(range(len(cs)), key=lambda i: cs[i]["completion_tokens"], reverse=True)
+        order = sorted(range(len(cs)), key=lambda i: tok(cs[i], "completion_tokens"), reverse=True)
         recovered = [uncached_vals[i] for i in order[1:]]   # non-first sections
         sys_pref = min(cached_vals)
         # SHARED - SYS for a non-first section = its current uncached - its variable tail.
@@ -167,6 +173,9 @@ def cache_diagnosis(run_dir: Path) -> None:
         per_paper.append((pid, sys_pref, uncached_vals))
 
     n = len(per_paper)
+    if not n:
+        print("no paper has >=2 content-section stages in its telemetry; skipping diagnosis")
+        return
     print(f"content sections with IDENTICAL cached-prefix across all 3: {constant_cache}/{n} papers")
     if sys_prefix_samples:
         lo, hi = min(sys_prefix_samples), max(sys_prefix_samples)
@@ -181,9 +190,12 @@ def cache_diagnosis(run_dir: Path) -> None:
     agg = aggregate(papers)
     tot_eff = sum(eff_cost(a["prompt_tokens"] - a["cached_prompt_tokens"],
                            a["completion_tokens"]) for a in agg.values())
-    print(f"\n  vs total eff-cost proxy {fmt(tot_eff)}:  "
-          f"upper {total_redundant_uncached/tot_eff*100:.1f}%  |  "
-          f"realistic {realistic_saving/tot_eff*100:.1f}%")
+    if tot_eff:
+        print(f"\n  vs total eff-cost proxy {fmt(tot_eff)}:  "
+              f"upper {total_redundant_uncached/tot_eff*100:.1f}%  |  "
+              f"realistic {realistic_saving/tot_eff*100:.1f}%")
+    else:
+        print("\n  vs total eff-cost proxy: n/a (run has zero uncached-prompt and completion tokens)")
     print("  (saving is uncached prompt -> cached; in $ terms scale by in_rate vs out_rate)")
 
 

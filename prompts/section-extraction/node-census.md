@@ -60,7 +60,7 @@ Each node in `nodes[]` has:
   - `mea:` for `metric`.
   - `fnd:` for `contribution_finding` (the result-deliverable root; it is a Finding).
   - Convert acronyms to lowercase (`map`, not `mAP`; `bleu`, not `BLEU`). This id is reused verbatim as the final unit id, so choose it carefully and never reuse one.
-- `role` — one of the eleven roles above.
+- `role` — one of the twelve roles above.
 - `name` — the node's name as the paper refers to it.
 - `gloss` — one short phrase describing the node (not a full sentence). For a method role, what it is; for a metric, what it measures; for a testbed node, what it is.
 - `source_scope` — the `§N` section markers where the node is introduced or defined, e.g. `["§3"]`.

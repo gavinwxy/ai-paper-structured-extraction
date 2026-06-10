@@ -15,7 +15,7 @@ You receive:
 - `paper`: the full paper text
 - `spine_summary`: global contribution and argument-flow context from the census
 - `node_registry`: every census node (id, type, name, gloss, salience, and its `role`/`cluster`; `role: contribution` marks the primary method), so you can reference any node by id
-- `relations`: the global structural edges already established (part_of, compares_to, evaluates) — already done, do not restate them
+- `relations`: the global structural edges already established (part_of, builds_on, uses, assumes, co_contribution, compares_to, evaluates) — already done, do not restate them
 - `section_focus`: the complete contract for the current section — its allowed unit types and their fields, the controlled vocabularies it uses, the relations it may author, a worked example, and section-specific rules
 
 `section_focus` is authoritative for everything specific to the current section. This shared prompt covers only what is common to all sections.
@@ -80,7 +80,7 @@ Plus the type-specific fields named in `section_focus`, directly on the unit —
 
 ## Relations
 
-The structural edges (`part_of`, `compares_to`, `evaluates`) are already in `relations` — do not restate them. The only edges a content section authors are these, and `section_focus` tells you which (if any) your section authors — the problem section authors `motivates`; the evidence section authors the Finding-centric `about`/`supports`:
+The structural edges (`part_of`, `builds_on`, `uses`, `assumes`, `co_contribution`, `compares_to`, `evaluates`) are already in `relations` — do not restate them. The only edges a content section authors are these, and `section_focus` tells you which (if any) your section authors — the problem section authors `motivates`; the evidence section authors the Finding-centric `about`/`supports`:
 
 | relation | source → target | meaning |
 |---|---|---|

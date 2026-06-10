@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Generate per-section typed-array schemas plus the node-census and relation-pass schemas.
 
-section-ir-0.9: the pipeline is three stages — node census (stage A), relation pass
-(stage B), and per-section content fill (stage C). This script is the single source for
-every structured-output schema, generated from the controlled vocabularies in
-``section_pipeline.py`` so the schemas never drift from the runtime contract.
+section-ir-0.12: the pipeline is three stages — node census (stage A), relation pass
+(stage B), and per-section content fill (stage C). This script generates every
+structured-output schema from the controlled vocabularies in ``section_pipeline.py``.
+It is authoritative only while kept in sync with ``schemas/*.json``: schema changes are
+sometimes hand-edited into the committed schemas first (e.g. blob-primary evidence), so
+port any hand-edit back here, then VERIFY after running this script that
+``git diff schemas/`` shows only the changes you intended (regeneration clobbers
+anything not ported).
 
 Each unit carries two classificatory axes: a generic ``type`` (the scientific-method-anchored
 scope) and a fine-grained ``role`` (the discipline-specific differentia). Problem and Measure
@@ -28,6 +32,7 @@ from section_pipeline import (  # noqa: E402
     FINDING_POLARITIES,
     FINDING_ROLES,
     MEASURE_OBJECTIVE_CLASSES,
+    MEASURE_TABLE_ROLES,
     METHOD_KINDS,
     METHOD_ROLES,
     NODE_ROLES,
@@ -53,7 +58,12 @@ SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
 # not forced to emit the field. Normal algorithmic methods still fill it (method.md asks for it);
 # making it schema-optional is additive (every existing 0.9 output already carries it).
 OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Measure": {"comparison_direction", "objective_class"},
+    # Blob-primary evidence (section-ir-0.12): the table-binding fields
+    # (source_table_marker/caption_marker/table_role/headline_result/finding_ids) are all
+    # optional — a prose-derived measure carries none of them.
+    "Measure": {"comparison_direction", "objective_class",
+                "source_table_marker", "caption_marker", "table_role", "headline_result",
+                "finding_ids"},
     "Method": {"method_kind", "inputs", "outputs", "formulas", "objective_function",
                "implementation_notes"},
     "ExperimentSetup": {"description"},
@@ -120,6 +130,7 @@ ENUM_ORDER: dict[str, list[str]] = {
     "finding_polarity": ["positive", "negative", "neutral", "mixed"],
     "score_value_kind": ["numeric", "symbolic", "asymptotic", "qualitative", "curve"],
     "measure_objective_class": ["primary_quality", "cost_efficiency", "fairness", "safety", "robustness"],
+    "measure_table_role": ["main_result", "ablation"],
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
@@ -132,6 +143,7 @@ ENUM_VALUES: dict[str, set[str]] = {
     "finding_polarity": FINDING_POLARITIES,
     "score_value_kind": SCORE_VALUE_KINDS,
     "measure_objective_class": MEASURE_OBJECTIVE_CLASSES,
+    "measure_table_role": MEASURE_TABLE_ROLES,
 }
 
 
@@ -173,6 +185,14 @@ def string_array_schema(description: str) -> dict[str, Any]:
     return {
         "type": "array",
         "items": {"type": "string"},
+        "description": description,
+    }
+
+
+def id_array_schema(description: str) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {"type": "string", "pattern": ID_PATTERN},
         "description": description,
     }
 
@@ -374,7 +394,35 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "setup_ids": measure_setup_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
             "objective_class": enum_schema("measure_objective_class", "Optional (FG-6): which axis of a multi-objective evaluation this measure sits on — primary_quality (the headline quality metric, the default — omit), cost_efficiency (latency/compute/memory/params), fairness, safety, or robustness. Set it on the non-primary axes of a trade-off so a cost/fairness/safety measure is not read as uniformly positive evidence."),
-            "scores": scores_schema("Flat array of reported scores under this measure — one row per system, covering the method family's own variants and every compared-against baseline"),
+            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here."),
+            # Blob-primary evidence (section-ir-0.12): the measure binds to its source table by
+            # marker; code slices the table verbatim so the model never retypes baseline rows.
+            "source_table_marker": string_schema(
+                "Optional (blob-primary): the [§N] block id of the <table> this measure reads "
+                "(e.g. '§53'). Code slices that table verbatim — you never retype it. Omit for "
+                "a prose-derived measure."
+            ),
+            "caption_marker": string_schema(
+                "Optional (blob-primary): the [§N] block id of the table's caption (e.g. '§52'). "
+                "Code slices the caption verbatim. Omit when there is no caption block."
+            ),
+            "table_role": enum_schema(
+                "measure_table_role",
+                "Optional (blob-primary): main_result (a headline comparison — emit the "
+                "contribution method's own score rows) or ablation (component/sensitivity study "
+                "— emit no score rows; the source table carries it). Defaults to main_result.",
+            ),
+            "headline_result": string_schema(
+                "Optional (blob-primary): the contribution method's key one-liner from this "
+                "table (e.g. 'Ours reaches 29.1 BLEU on WMT14 EN-DE, +2.1 over the prior best'). "
+                "Emit it whenever the contribution's headline number is in this table, for "
+                "either table_role."
+            ),
+            "finding_ids": id_array_schema(
+                "Optional (blob-primary): ids of the Findings this table evidences (mounted "
+                "directly, replacing the Finding<->Measure edges). Each must be a Finding born "
+                "in this same response."
+            ),
         },
     }
     return schemas
@@ -475,11 +523,12 @@ def node_census_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Node Census Output",
         "description": (
-            "Stage A of section-ir-0.9: a flat census of every argumentatively load-bearing "
+            "Stage A of section-ir-0.12: a flat census of every argumentatively load-bearing "
             "node, each tagged with one granular role (its type is derived from the role), with "
             "no relations. The census emits Method nodes, the substrate ExperimentSetup nodes "
-            "(dataset/benchmark/task), and Measure nodes. Problem and Finding are not nodes, and "
-            "configuration ExperimentSetup units (splits/protocols) are born during content fill."
+            "(dataset/benchmark/task), and Measure nodes. Problem is not a node; the only "
+            "Finding node is the optional contribution_finding. Configuration ExperimentSetup "
+            "units (splits/protocols) are born during content fill."
         ),
         "required": ["spine_summary", "nodes"],
         "additionalProperties": False,
@@ -557,7 +606,7 @@ def relation_pass_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Relation Pass Output",
         "description": (
-            "Stage B of section-ir-0.9: structural edges over the full node set. Sees every "
+            "Stage B of section-ir-0.12: structural edges over the full node set. Sees every "
             "node, so cross-section composition and measure-subject binding are captured here "
             "with no forward references."
         ),

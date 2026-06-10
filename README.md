@@ -122,7 +122,8 @@ reprocess. Common flags:
 | `--force` | off | ignore resumability, reprocess everything |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
 | `--no-warm-content-cache` | on (warming) | disable content-cache warming; run the three content sections fully concurrently instead of warming the shared prefix first (see below) |
-| `--blob-primary-evidence` | off (rollout) | section-ir-0.12 blob-primary evidence: point at result tables by `[§N]` marker and transcribe only the contribution method's rows; baselines + ablation grids stay in the code-sliced verbatim table blob (see below) |
+| `--no-blob-primary-evidence` | on (blob mode) | disable section-ir-0.12 blob-primary evidence and revert to full transcription: with blob mode on, the evidence pass points at result tables by `[§N]` marker and transcribes only the contribution method's rows; baselines + ablation grids stay in the code-sliced verbatim table blob (see below) |
+| `--no-blob-primary-references` | on (blob mode) | disable section-ir-0.12 blob-primary references and revert to full transcription: with blob mode on, the references pass transcribes only graph-linked references; the full bibliography is code-sliced verbatim into `extraction_notes.references_blob` and background refs live there (see below) |
 
 Run `.venv/bin/python -m production --help` for the full set.
 
@@ -138,8 +139,8 @@ latency per paper, so pass `--no-warm-content-cache` for latency-priority runs o
 demonstrably warm. Inspect `relations` cached% in the telemetry to tell whether a proxy is warm
 (high ⇒ warming redundant); see `tools/token_cost_report.py --cache`.
 
-**Blob-primary evidence** (completion-cost lever, **off by default during rollout**; enable with
-`--blob-primary-evidence`). Result-collection data is the heaviest part of the output (score rows
+**Blob-primary evidence** (completion-cost lever, **on by default**; disable with
+`--no-blob-primary-evidence`). Result-collection data is the heaviest part of the output (score rows
 dominate completion tokens), and most of those rows are *baselines* — competitor numbers the LLM
 laboriously (and sometimes lossily) retypes. In blob-primary mode the evidence pass instead **points**
 at each result table by its `[§N]` block marker (`source_table_marker`/`caption_marker`); code slices
@@ -149,8 +150,20 @@ transcribes only the **contribution method's own** rows (`table_role: main_resul
 (`table_role: ablation`), emits a `headline_result` one-liner as a durable text backstop, and mounts
 the findings a table evidences via `Measure.finding_ids` (replacing the `Finding`↔`Measure` edges).
 The contribution rows stay structured and verifier-checked, so the queryable high-value core is
-intact at near-zero cost. Gated behind the flag until the corpus is re-run, then flipped on by
-default (mirroring the warm-cache rollout).
+intact at near-zero cost. Validated in two A/Bs (−12.9% and −11.2% total cost, 20/20 valid, no loss)
+before the default flip. With the flag off, the evidence schema is stripped back to the 0.11 shape
+at runtime (no blob fields, legacy `scores` wording), so the opt-out arm is a true pre-blob baseline.
+
+**Blob-primary references** (completion-cost lever, **on by default**; disable with
+`--no-blob-primary-references`). The references analog of blob-primary evidence: code slices the
+full bibliography verbatim into `extraction_notes.references_blob` (header located among broadened
+candidates — numbered/bold/bare headers included — and the densest-in-references candidate wins);
+the LLM transcribes only the **graph-linked** references (those with a structural role —
+`builds_on`/`uses`/`compares_to` — or a provided name, ~40% of refs), and background references
+live in the blob. The renderer shows the structured linked entries above the verbatim bibliography.
+Validated in a warm A/B (references pass −62%, total −12.2%, 20/20 valid, no link loss). When no
+bibliography can be sliced, assembly records an `uncertain_assignments` warning and the renderer
+flags the structured list as graph-linked-only.
 
 ### End-to-end smoke test (single papers)
 
@@ -470,15 +483,26 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 Current IR version: **`section-ir-0.12`** (`extraction_notes.input_mode = node_census_pipeline`).
 
-0.12 is the **blob-primary evidence** revision: a results Measure may point at its source `<table>`
-by `[§N]` marker (`source_table_marker`/`caption_marker`) and carry only the contribution method's
-own score rows (`table_role: main_result`) or none at all (`table_role: ablation`), with the
-compared-against baselines and whole ablation grids left in the code-sliced verbatim table blob
-rather than transcribed. A `headline_result` one-liner backstops the contribution number and
-`finding_ids` mounts the Findings a table evidences (replacing the Finding↔Measure edges). It is
-additive over 0.11 (every new Measure field is optional) except the `ir_version` string and the
-relaxed rule that a Measure with a `source_table_marker` may carry empty `scores`; gated behind
-`--blob-primary-evidence` until the corpus is re-run.
+0.12 is the **blob-primary** revision, in three parts (the first two **on by default**, with
+`--no-blob-primary-evidence` / `--no-blob-primary-references` opting out):
+
+- **Blob-primary evidence**: a results Measure may point at its source `<table>` by `[§N]` marker
+  (`source_table_marker`/`caption_marker`) and carry only the contribution method's own score rows
+  (`table_role: main_result`) or none at all (`table_role: ablation`), with the compared-against
+  baselines and whole ablation grids left in the code-sliced verbatim table blob rather than
+  transcribed. A `headline_result` one-liner backstops the contribution number and `finding_ids`
+  mounts the Findings a table evidences (replacing the Finding↔Measure edges).
+- **Blob-primary references**: the references pass transcribes only graph-linked references; the
+  full bibliography is code-sliced verbatim into `extraction_notes.references_blob`
+  (`extraction_notes.blob_primary_references` marks the mode) and background refs live there.
+- **Lean formulas**: the per-symbol `{symbol, description}` glossary was dropped from Method
+  `formulas[]`/`objective_function` (~25% of method output, prose with no graph consumer); the
+  equations themselves are kept.
+
+0.12 is additive over 0.11 for every new Measure field (all optional), **except**: the `ir_version`
+string, the relaxed rule that a Measure with a `source_table_marker` may carry empty `scores`, and
+the lean-formulas drop (a 0.11 `formulas[].symbols` array is no longer in the schema — runtime
+validation still tolerates it).
 
 0.11 **unifies** the references-stage citation roles onto the unit-graph edge vocabulary — a
 citation role is an edge-in-waiting: `extends`→`builds_on`, `uses_component`→`uses`,

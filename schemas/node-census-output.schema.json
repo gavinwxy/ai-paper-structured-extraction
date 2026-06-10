@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Node Census Output",
-  "description": "Stage A of section-ir-0.9: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), and Measure nodes. Problem and Finding are not nodes, and configuration ExperimentSetup units (splits/protocols) are born during content fill.",
+  "description": "Stage A of section-ir-0.12: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), and Measure nodes. Problem is not a node; the only Finding node is the optional contribution_finding. Configuration ExperimentSetup units (splits/protocols) are born during content fill.",
   "required": [
     "spine_summary",
     "nodes"

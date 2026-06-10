@@ -10,18 +10,13 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from section_pipeline import _is_deepseek_model
+# TruncationError is shared with the sync path so both transports raise one type: a RuntimeError
+# (not ValueError) the worker's parse-retry loops — which catch only (JSONDecodeError, ValueError) —
+# do NOT re-retry. A same-budget retry of a truncation is futile at temperature 0, so it fails fast
+# to the paper-level handler at ~1x cost instead of ~4x.
+from section_pipeline import TruncationError, _is_deepseek_model, _supports_prompt_cache_kwargs
 
 logger = logging.getLogger(__name__)
-
-
-class TruncationError(RuntimeError):
-    """Raised when the model stops on finish_reason=length.
-
-    Subclasses RuntimeError (not ValueError) so the worker's parse-retry loops — which catch only
-    (JSONDecodeError, ValueError) — do NOT re-retry it. A same-budget retry of a truncation is
-    futile at temperature 0, so it fails fast to the paper-level handler at ~1x cost instead of ~4x.
-    """
 
 
 class LLMClient:
@@ -150,10 +145,14 @@ class LLMClient:
         # quality lift on this corpus). Gated to deepseek so other models are untouched.
         if _is_deepseek_model(model):
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        if prompt_cache_key:
-            kwargs["prompt_cache_key"] = prompt_cache_key
-        if prompt_cache_retention:
-            kwargs["prompt_cache_retention"] = prompt_cache_retention
+        # The explicit prompt-cache routing kwargs are OpenAI-proxy features; the official DeepSeek
+        # API rejects unknown params (its caching is automatic). The worker already passes None for
+        # deepseek — this guard keeps a future caller from 400-ing every call.
+        if _supports_prompt_cache_kwargs(model):
+            if prompt_cache_key:
+                kwargs["prompt_cache_key"] = prompt_cache_key
+            if prompt_cache_retention:
+                kwargs["prompt_cache_retention"] = prompt_cache_retention
 
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
