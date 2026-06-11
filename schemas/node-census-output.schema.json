@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Node Census Output",
-  "description": "Stage A of section-ir-0.12: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), and Measure nodes. Problem is not a node; the only Finding node is the optional contribution_finding. Configuration ExperimentSetup units (splits/protocols) are born during content fill.",
+  "description": "Stage A of section-ir-0.13: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), Measure nodes, and the single research-problem Problem node (RF-08). The only Finding node is the optional contribution_finding. Configuration ExperimentSetup units (splits/protocols) are born during content fill.",
   "required": [
     "spine_summary",
     "nodes"
@@ -28,6 +28,24 @@
         "headline_result": {
           "type": "string",
           "description": "Optional (FG-9): one sentence stating the paper's headline established RESULT \u2014 the answer the evidence demonstrates \u2014 as distinct from central_contribution (which names the artifact/contribution). State the finding itself: 'value learning is not the main bottleneck in offline RL', 'the model matches SOTA with 10x fewer parameters'. Fill it whenever the paper establishes a clear headline result (for an analysis/'is X the bottleneck?' paper this IS the payload); omit when the paper states no clear headline result (typically only a pure resource/tool release). This stays a summary annotation \u2014 do NOT add a Finding node for it."
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional (RF-07): 3-6 lowercase free-keyword topic tags for corpus routing (e.g. 'semantic segmentation', 'weak supervision', 'vision transformers'). Specific enough to differentiate papers within one field; not section names."
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional (RF-07): the concrete task(s) the paper addresses or evaluates on, as the community names them (e.g. 'semantic segmentation', 'machine translation', 'offline reinforcement learning')."
+        },
+        "domain": {
+          "type": "string",
+          "description": "Optional (RF-07): ONE coarse research domain, lowercase (e.g. 'computer vision', 'natural language processing', 'reinforcement learning', 'machine learning theory')."
         }
       }
     },
@@ -50,7 +68,7 @@
           "node_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
-            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, exp: for contribution_resource/dataset/benchmark/task/theoretical_setting/structural_class, mea: for metric, fnd: for contribution_finding"
+            "description": "Node id; the prefix follows from the role's type \u2014 mth: for contribution/component/builds_on/compared_against, exp: for contribution_resource/dataset/benchmark/task/theoretical_setting/structural_class, mea: for metric, fnd: for contribution_finding, prb: for problem"
           },
           "role": {
             "type": "string",
@@ -66,9 +84,10 @@
               "task",
               "theoretical_setting",
               "structural_class",
-              "metric"
+              "metric",
+              "problem"
             ],
-            "description": "Argumentative role, in search-cluster order. the_method: the root \u2014 contribution (a method/system), contribution_resource (a dataset/benchmark deliverable), or contribution_finding (a result/finding deliverable for an analysis paper with no novel method/resource) \u2014 plus component. prior_art: builds_on and compared_against. testbed: dataset, benchmark, task, theoretical_setting, structural_class. yardsticks: metric."
+            "description": "Argumentative role, in search-cluster order. the_method: the root \u2014 contribution (a method/system), contribution_resource (a dataset/benchmark deliverable), or contribution_finding (a result/finding deliverable for an analysis paper with no novel method/resource) \u2014 plus component. prior_art: builds_on and compared_against. testbed: dataset, benchmark, task, theoretical_setting, structural_class. yardsticks: metric. the_problem: problem (the single research problem the paper addresses)."
           },
           "name": {
             "type": "string",
@@ -90,7 +109,7 @@
             "items": {
               "type": "string"
             },
-            "description": "In-text bibliography citation marker(s) attached to this node, as bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' for author-year). Fill for builds_on/compared_against/dataset/benchmark nodes (drawn from cited prior work or data), e.g. 'we compare against ConvS2S [8]' -> ['8']. Empty [] for any root (contribution/contribution_resource/contribution_finding) and every component (your own work), for task/metric nodes, and when no citation is attached."
+            "description": "In-text bibliography citation marker(s) attached to this node, as bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' for author-year). Fill for builds_on/compared_against/dataset/benchmark nodes (drawn from cited prior work or data), e.g. 'we compare against ConvS2S [8]' -> ['8']. Empty [] for any root (contribution/contribution_resource/contribution_finding) and every component (your own work), for task/metric/problem nodes, and when no citation is attached."
           },
           "salience": {
             "type": "string",

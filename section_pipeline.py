@@ -153,6 +153,11 @@ TYPED_ARRAY_KEYS: dict[str, str] = {
 # Census node concepts. The census emits a flat list of referenceable nodes; each
 # node_id is reused verbatim as the final unit id once a content section materializes it.
 NODE_TYPES = {"Method", "ExperimentSetup", "Measure", "Finding"}
+# The IR version this pipeline emits, and the versions the validator accepts (the retrofit
+# tooling re-validates 0.12-era outputs in place, so the previous version stays accepted).
+IR_VERSION = "section-ir-0.13"
+ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13"}
+
 NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Method": "mth:",
     "ExperimentSetup": "exp:",
@@ -161,6 +166,9 @@ NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     # the census plans); all other Findings are born in the evidence section with `fnd:` ids too,
     # but are not census nodes.
     "Finding": "fnd:",
+    # `prb:` (RF-08, section-ir-0.13): the census plans the research problem as a recallable node;
+    # the problem section materializes it (reusing the id) and authors its content + motivates edge.
+    "Problem": "prb:",
 }
 SALIENCE_LEVELS = {"must", "should"}
 # Census node role — the single granular tag the census emits per node. It is the
@@ -187,6 +195,9 @@ NODE_ROLES = {
     "theoretical_setting", # testbed: the regime/assumptions a theorem holds under (FG-2, 0.10)
     "structural_class",    # testbed: the structural family a result ranges over (graph class, etc.)
     "metric",             # yardsticks: a reported performance measure
+    "problem",            # the_problem: the research problem the paper addresses (RF-08, 0.13) —
+                          # planned by the census so it is recallable/salience-tagged; the problem
+                          # section materializes it (id reuse) and authors its motivates edge
 }
 # role -> coarse node type. Total and unambiguous: a node's type is a strict coarsening of
 # its role, so the census carries only `role` and the pipeline derives `type` from it.
@@ -203,6 +214,7 @@ ROLE_TO_TYPE: dict[str, str] = {
     "theoretical_setting": "ExperimentSetup",
     "structural_class": "ExperimentSetup",
     "metric": "Measure",
+    "problem": "Problem",
 }
 # role -> search cluster (carried into the registry as context for the relation pass).
 ROLE_CLUSTER: dict[str, str] = {
@@ -218,6 +230,7 @@ ROLE_CLUSTER: dict[str, str] = {
     "theoretical_setting": "testbed",
     "structural_class": "testbed",
     "metric": "yardsticks",
+    "problem": "the_problem",
 }
 # The single document-level root is the node whose role is `contribution` (a Method) or
 # `contribution_resource` (an ExperimentSetup — when the paper's primary deliverable is a dataset/
@@ -431,7 +444,8 @@ UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Measure": "mea:",
 }
 ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
-    "Document": {"id", "type", "doc_id", "title", "role", "thesis", "headline_result", "provenance"},
+    "Document": {"id", "type", "doc_id", "title", "role", "thesis", "headline_result", "provenance",
+                 "topics", "tasks", "domain"},
     "Problem": {"id", "type", "description", "provenance"},
     "Method": {
         "id",
@@ -1570,6 +1584,17 @@ def validate_census(census: dict[str, Any]) -> list[str]:
             not isinstance(headline_result, str) or not headline_result.strip()
         ):
             issues.append("Census spine_summary headline_result must be a non-empty string when present")
+        # RF-07 facets (optional): topics/tasks are lists of non-empty strings, domain a string.
+        for facet in ("topics", "tasks"):
+            value = spine_summary.get(facet)
+            if value is not None and (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) or not item.strip() for item in value)
+            ):
+                issues.append(f"Census spine_summary {facet} must be a list of non-empty strings when present")
+        domain = spine_summary.get("domain")
+        if domain is not None and (not isinstance(domain, str) or not domain.strip()):
+            issues.append("Census spine_summary domain must be a non-empty string when present")
 
     nodes = census.get("nodes")
     if not isinstance(nodes, list):
@@ -1763,6 +1788,9 @@ def build_document_unit(
     thesis: str = "",
     document_role: str = "research_article",
     headline_result: str = "",
+    topics: list[str] | None = None,
+    tasks: list[str] | None = None,
+    domain: str = "",
 ) -> dict[str, Any]:
     """Build a deterministic Document unit from the paper preamble.
 
@@ -1773,6 +1801,8 @@ def build_document_unit(
     `headline_result` (FG-9, optional) is the census `spine_summary.headline_result` — the paper's
     headline established result for a result-centric paper — lifted on so the finding is first-class
     on the document; omitted entirely when the census did not state one (ordinary artifact paper).
+    `topics`/`tasks`/`domain` (RF-07, optional) are the census facet annotations — corpus routing
+    keys for an agent — lifted on only when present and non-empty.
     """
     first_marker = paper_content.find("[§")
     preamble = paper_content[:first_marker] if first_marker >= 0 else paper_content[:500]
@@ -1793,6 +1823,16 @@ def build_document_unit(
     }
     if isinstance(headline_result, str) and headline_result.strip():
         document["headline_result"] = headline_result.strip()
+    if isinstance(topics, list):
+        cleaned = [t.strip() for t in topics if isinstance(t, str) and t.strip()]
+        if cleaned:
+            document["topics"] = cleaned
+    if isinstance(tasks, list):
+        cleaned = [t.strip() for t in tasks if isinstance(t, str) and t.strip()]
+        if cleaned:
+            document["tasks"] = cleaned
+    if isinstance(domain, str) and domain.strip():
+        document["domain"] = domain.strip()
     return document
 
 
@@ -1805,7 +1845,8 @@ MARKER_NAMESPACES: dict[str, str] = {
     ),
     "sections[].units[].provenance": (
         "chunk_marker — machine [§N] block ids of the pipeline input; ids present in "
-        "extraction_notes.source_tables resolve to verbatim html, all others are opaque"
+        "extraction_notes.source_tables resolve to verbatim html, ids present in "
+        "extraction_notes.span_index resolve to a verbatim text prefix, all others are opaque"
     ),
     "relations[].provenance": "chunk_marker (same namespace as unit provenance)",
     "sections[].units[].source_table_marker": (
@@ -1846,7 +1887,7 @@ def build_extraction_notes(
     must_nodes = census_must_node_ids(census)
     covered = must_nodes & materialized_ids
     notes: dict[str, Any] = {
-        "ir_version": "section-ir-0.12",
+        "ir_version": IR_VERSION,
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
         "uncertain_assignments": [],
         "skipped_spans": [],
@@ -1907,7 +1948,7 @@ def build_output_manifest(
     )
     manifest: dict[str, Any] = {
         "manifest_version": 1,
-        "ir_version": "section-ir-0.12",
+        "ir_version": IR_VERSION,
         "files": {
             "01_census.json": (
                 "stage-A skeleton: nodes[] (node_id/role/name/gloss/salience/cite_keys) + "
@@ -1938,7 +1979,11 @@ def build_output_manifest(
             "run_summary.json": "batch-level ops summary at the run root",
             "_catalog.jsonl | _cards.jsonl | _result_rows.jsonl | _entity_index.json": (
                 "corpus-level retrieval artifacts at the run root, present after "
-                "tools/build_agent_index.py (one JSON record per line)"
+                "tools/build_agent_index.py (one JSON record per line). _result_rows mixes "
+                "source='transcribed' (LLM scores, id-joined) with source='table_blob' (numeric "
+                "cells lifted deterministically from the verbatim baseline tables — best-effort "
+                "row/col labels, system_id/is_paper_contribution null, filter "
+                "value_in_transcribed=false for the net-new baseline view)"
             ),
         },
         "contracts": {
@@ -1995,6 +2040,16 @@ def build_output_manifest(
                 "Python-resolved join of the unit's cite_keys to 03_references entry ids "
                 "(normalized cite-key collapse); absent when the unit cites nothing or no entry "
                 "joins"
+            ),
+            "extraction_notes.span_index": (
+                "chunk_marker -> {text, truncated?}: verbatim text prefix of every [§N] input "
+                "block the extraction references (provenance/table markers), for grounding "
+                "quotes without re-reading the paper; fresh runs only — retrofitted corpora "
+                "lack it"
+            ),
+            "document.topics / tasks / domain": (
+                "optional census facet annotations (RF-07): free-keyword topics, task names, and "
+                "one research domain — corpus routing keys; absent on pre-0.13 extractions"
             ),
         },
         "flags": {
@@ -2960,6 +3015,68 @@ def _canon_marker(marker: Any) -> str:
     return f"§{m}" if m else ""
 
 
+SPAN_INDEX_TEXT_CHARS = 240
+
+
+def _build_span_index(
+    sections: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    paper_content: str,
+) -> dict[str, dict[str, Any]]:
+    """RF-11 (agent-readiness): resolve every provenance marker the extraction references to a
+    verbatim text prefix of its `[§N]` input block, so an agent can ground/quote a unit's source
+    span without re-reading the paper. Deterministic, 0 LLM; ~a few KB per paper (referenced
+    markers only, prefix capped at SPAN_INDEX_TEXT_CHARS). Fresh-run only — retrofit tooling has
+    no access to the source markdown."""
+    if not isinstance(paper_content, str) or not paper_content:
+        return {}
+    referenced: set[str] = set()
+
+    def _collect(provenance: Any) -> None:
+        if isinstance(provenance, list):
+            for marker in provenance:
+                canon = _canon_marker(marker)
+                if canon:
+                    referenced.add(canon)
+
+    for section in sections or []:
+        if not isinstance(section, dict):
+            continue
+        for unit in section.get("units") or []:
+            if not isinstance(unit, dict):
+                continue
+            _collect(unit.get("provenance"))
+            for key in ("source_table_marker", "caption_marker"):
+                canon = _canon_marker(unit.get(key) or "")
+                if canon:
+                    referenced.add(canon)
+    for relation in relations or []:
+        if isinstance(relation, dict):
+            _collect(relation.get("provenance"))
+    if not referenced:
+        return {}
+
+    matches = list(SECTION_MARKER_RE.finditer(paper_content))
+    span_index: dict[str, dict[str, Any]] = {}
+    for i, m in enumerate(matches):
+        marker = f"§{m.group(1)}"
+        if marker not in referenced or marker in span_index:
+            continue
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(paper_content)
+        chunk = paper_content[m.end():end].strip()
+        if not chunk:
+            continue
+        entry: dict[str, Any] = {}
+        if len(chunk) > SPAN_INDEX_TEXT_CHARS:
+            cut = chunk.rfind(" ", 0, SPAN_INDEX_TEXT_CHARS)
+            entry["text"] = chunk[: cut if cut > SPAN_INDEX_TEXT_CHARS // 2 else SPAN_INDEX_TEXT_CHARS]
+            entry["truncated"] = True
+        else:
+            entry["text"] = chunk
+        span_index[marker] = entry
+    return span_index
+
+
 class _TableCellParser(HTMLParser):
     """Collect the text of every <td>/<th> cell in a <table> blob — presence only, no grid topology.
 
@@ -3327,6 +3444,10 @@ def assemble_extraction(
     spine_summary = census.get("spine_summary") if isinstance(census, dict) else None
     thesis = spine_summary.get("central_contribution") or "" if isinstance(spine_summary, dict) else ""
     headline_result = spine_summary.get("headline_result") or "" if isinstance(spine_summary, dict) else ""
+    # RF-07 (agent-readiness): the census facet annotations ride onto the Document unit.
+    facet_topics = spine_summary.get("topics") if isinstance(spine_summary, dict) else None
+    facet_tasks = spine_summary.get("tasks") if isinstance(spine_summary, dict) else None
+    facet_domain = spine_summary.get("domain") or "" if isinstance(spine_summary, dict) else ""
     document_role = _derive_document_role(census, sections)
     source_tables = _slice_source_tables(paper_content)
     capture_warns = _table_capture_warnings(paper_content, source_tables)
@@ -3384,9 +3505,14 @@ def assemble_extraction(
                     "(no header matched or no candidate looked reference-dense); background references "
                     "are not captured and the structured list covers graph-linked entries only"
                 )
+    # RF-11 (agent-readiness): ground every referenced provenance marker to a verbatim text prefix.
+    span_index = _build_span_index(sections, relations, paper_content)
+    if span_index:
+        extraction_notes["span_index"] = span_index
     return {
         "document": build_document_unit(
-            paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result
+            paper_content, thesis=thesis, document_role=document_role, headline_result=headline_result,
+            topics=facet_topics, tasks=facet_tasks, domain=facet_domain,
         ),
         "sections": sections,
         "relations": relations,
@@ -3612,6 +3738,8 @@ def run_metadata_extraction(
 # ('020_NeurIPS_2024_<title>') even when the paper body never states them (the LLM metadata pass
 # correctly returns null there — camera-ready PDFs rarely print their own venue/year).
 _DIRNAME_META_RE = re.compile(r"^\d+_([A-Za-z]+)_((?:19|20)\d{2})_")
+# Some corpora omit the venue token ('012_2024_Weakly_Supervised_...') — year is still recoverable.
+_DIRNAME_YEAR_ONLY_RE = re.compile(r"^\d+_((?:19|20)\d{2})_")
 # Hosts that constitute code/data-release evidence regardless of the resource's `type` label
 # (the metadata pass mixes `code` vs `project` for the same repo link).
 _CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "4open.science", "codeberg.org")
@@ -3631,11 +3759,19 @@ def _resource_host(url: Any) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
-def enrich_metadata(metadata: dict[str, Any] | None, paper_id: str) -> dict[str, Any]:
+def enrich_metadata(
+    metadata: dict[str, Any] | None,
+    paper_id: str,
+    default_venue: str | None = None,
+) -> dict[str, Any]:
     """RF-01 + RF-22 (agent-readiness, deterministic, idempotent): backfill `year`/`venue` from
     the paper-id directory naming convention (only when the LLM value is null/empty, stamped with
     `year_source`/`venue_source='dirname'`), normalize resource URLs to carry a scheme, and emit
     `has_code`/`has_data` release-evidence flags.
+
+    `default_venue` covers corpora whose dirnames carry no venue token but whose venue is known
+    at the corpus level (e.g. a CVPR-only crawl); it fills `venue` only as a last resort and is
+    stamped `venue_source='corpus_default'`.
 
     `has_code`/`has_data` are True (positive evidence: a typed resource or a known release host)
     or null (unknown) — never False, because absent resources are absence of evidence, not
@@ -3651,6 +3787,14 @@ def enrich_metadata(metadata: dict[str, Any] | None, paper_id: str) -> dict[str,
         if not metadata.get("year"):
             metadata["year"] = int(match.group(2))
             metadata["year_source"] = "dirname"
+    else:
+        year_match = _DIRNAME_YEAR_ONLY_RE.match(paper_id or "")
+        if year_match and not metadata.get("year"):
+            metadata["year"] = int(year_match.group(1))
+            metadata["year_source"] = "dirname"
+    if default_venue and not metadata.get("venue"):
+        metadata["venue"] = default_venue
+        metadata["venue_source"] = "corpus_default"
     has_code = None
     has_data = None
     resources = metadata.get("resources")
@@ -4860,7 +5004,7 @@ def validate_section_ir(extraction: dict[str, Any], census: dict[str, Any] | Non
                 issues.append(f"extraction_notes missing {key}")
         if notes.get("input_mode") != "node_census_pipeline":
             issues.append(f"extraction_notes has invalid input_mode: {notes.get('input_mode')}")
-        if notes.get("ir_version") != "section-ir-0.12":
+        if notes.get("ir_version") not in ACCEPTED_IR_VERSIONS:
             issues.append(f"extraction_notes has invalid ir_version: {notes.get('ir_version')}")
         sections_used = notes.get("sections_used", [])
         if isinstance(sections_used, list):

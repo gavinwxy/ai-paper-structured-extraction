@@ -88,6 +88,7 @@ NODE_ROLE_ORDER = [
     "builds_on", "compared_against",
     "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
     "metric",
+    "problem",
 ]
 METHOD_ROLE_ORDER = ["contribution", "component", "builds_on", "compared_against"]
 EXPERIMENT_SETUP_ROLE_ORDER = [
@@ -527,12 +528,12 @@ def node_census_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Node Census Output",
         "description": (
-            "Stage A of section-ir-0.12: a flat census of every argumentatively load-bearing "
+            "Stage A of section-ir-0.13: a flat census of every argumentatively load-bearing "
             "node, each tagged with one granular role (its type is derived from the role), with "
             "no relations. The census emits Method nodes, the substrate ExperimentSetup nodes "
-            "(dataset/benchmark/task), and Measure nodes. Problem is not a node; the only "
-            "Finding node is the optional contribution_finding. Configuration ExperimentSetup "
-            "units (splits/protocols) are born during content fill."
+            "(dataset/benchmark/task), Measure nodes, and the single research-problem Problem "
+            "node (RF-08). The only Finding node is the optional contribution_finding. "
+            "Configuration ExperimentSetup units (splits/protocols) are born during content fill."
         ),
         "required": ["spine_summary", "nodes"],
         "additionalProperties": False,
@@ -557,6 +558,21 @@ def node_census_schema() -> dict[str, Any]:
                         "result (typically only a pure resource/tool release). This stays a summary annotation — "
                         "do NOT add a Finding node for it."
                     ),
+                    "topics": string_array_schema(
+                        "Optional (RF-07): 3-6 lowercase free-keyword topic tags for corpus routing "
+                        "(e.g. 'semantic segmentation', 'weak supervision', 'vision transformers'). "
+                        "Specific enough to differentiate papers within one field; not section names."
+                    ),
+                    "tasks": string_array_schema(
+                        "Optional (RF-07): the concrete task(s) the paper addresses or evaluates on, "
+                        "as the community names them (e.g. 'semantic segmentation', 'machine "
+                        "translation', 'offline reinforcement learning')."
+                    ),
+                    "domain": string_schema(
+                        "Optional (RF-07): ONE coarse research domain, lowercase (e.g. 'computer "
+                        "vision', 'natural language processing', 'reinforcement learning', 'machine "
+                        "learning theory')."
+                    ),
                 },
             },
             "nodes": {
@@ -571,7 +587,8 @@ def node_census_schema() -> dict[str, Any]:
                             "Node id; the prefix follows from the role's type — mth: for "
                             "contribution/component/builds_on/compared_against, exp: for "
                             "contribution_resource/dataset/benchmark/task/theoretical_setting/"
-                            "structural_class, mea: for metric, fnd: for contribution_finding"
+                            "structural_class, mea: for metric, fnd: for contribution_finding, "
+                            "prb: for problem"
                         ),
                         "role": enum_schema(
                             "node_role",
@@ -581,7 +598,8 @@ def node_census_schema() -> dict[str, Any]:
                             "deliverable for an analysis paper with no novel method/resource) — "
                             "plus component. prior_art: builds_on and compared_against. testbed: "
                             "dataset, benchmark, task, theoretical_setting, structural_class. "
-                            "yardsticks: metric.",
+                            "yardsticks: metric. the_problem: problem (the single research "
+                            "problem the paper addresses).",
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
                         "gloss": string_schema("One short phrase describing the node"),
@@ -593,7 +611,8 @@ def node_census_schema() -> dict[str, Any]:
                             "nodes (drawn from cited prior work or data), e.g. 'we compare against "
                             "ConvS2S [8]' -> ['8']. Empty [] for any root (contribution/"
                             "contribution_resource/contribution_finding) and every component (your "
-                            "own work), for task/metric nodes, and when no citation is attached."
+                            "own work), for task/metric/problem nodes, and when no citation is "
+                            "attached."
                         ),
                         "salience": inline_enum_schema(
                             SALIENCE_ORDER,

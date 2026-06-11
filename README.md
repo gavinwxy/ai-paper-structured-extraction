@@ -1,7 +1,7 @@
 # Section-IR Extraction Pipeline
 
 A three-stage LLM pipeline that reads a scientific paper (Markdown) and extracts its
-**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.12`):
+**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.13`):
 
 ```
 problem → method → evidence
@@ -501,7 +501,22 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 ## Versioning
 
-Current IR version: **`section-ir-0.12`** (`extraction_notes.input_mode = node_census_pipeline`).
+Current IR version: **`section-ir-0.13`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.13 is the **agent-readiness** revision (RF-07/08/11; additive over 0.12 except the `ir_version`
+string — the validator accepts both):
+
+- **Census facets (RF-07)**: `spine_summary` gains optional `topics` (3-6 lowercase keyword tags),
+  `tasks` (community task names), and `domain` (one coarse research domain); assembly lifts them
+  onto the Document unit (`document.topics/tasks/domain`) and `tools/build_agent_index.py` lifts
+  them into `_catalog.jsonl` for corpus routing.
+- **Problem census node (RF-08)**: the research problem is a stage-A census node (role `problem`,
+  `prb:` id, a fifth `the_problem` search cluster) so it is recallable and salience-tagged; the
+  problem section materializes it under the census id and still authors the full `description` +
+  `motivates` edge. Stage B gives `prb:` nodes no edge (same discipline as the `fnd:` root).
+- **Span index (RF-11)**: assembly emits `extraction_notes.span_index` — a verbatim text prefix of
+  every `[§N]` input block the extraction references (provenance/table markers) — so an agent can
+  ground a unit's source span without re-reading the paper. Deterministic, fresh runs only.
 
 0.12 is the **blob-primary** revision, in three parts (the first two **on by default**, with
 `--no-blob-primary-evidence` / `--no-blob-primary-references` opting out):

@@ -27,7 +27,7 @@ You emit only these seven structural relation types:
 | `compares_to` | {Method,ExperimentSetup,Measure} → same | two interchangeable peers the paper contrasts (variant vs variant, dataset vs dataset) |
 | `evaluates` | Measure → Method | the measure's primary subject is that method — the `contribution` it validates or the `component` an ablation isolates; **not** a `compared_against` baseline (its link is `compares_to`) |
 
-A measure binds to the dataset/split it was computed on **not** here, but in the evidence stage via each score row's `setup_id` — so emit no metric→dataset edge. Do not emit `about` or `supports` — authored later during content extraction. The node list may contain one `fnd:` node (a `contribution_finding` root): give it NO edge in this pass — its links are authored later. Every edge you emit connects `mth:`/`exp:`/`mea:` nodes only.
+A measure binds to the dataset/split it was computed on **not** here, but in the evidence stage via each score row's `setup_id` — so emit no metric→dataset edge. Do not emit `about` or `supports` — authored later during content extraction. The node list may contain one `fnd:` node (a `contribution_finding` root) and one `prb:` node (the research problem): give them NO edge in this pass — the finding's links and the problem's `motivates` edge are authored later during content extraction. Every edge you emit connects `mth:`/`exp:`/`mea:` nodes only.
 
 ---
 
@@ -78,7 +78,7 @@ Establish the structural relations between the nodes below, using the paper as e
 {{nodes_json}}
 </nodes>
 
-Emit only structural edges (part_of, builds_on, uses, assumes, co_contribution, compares_to, evaluates) between the given node_ids. Connect components to their parent methods with part_of, link each builds_on/uses prior-art node with the matching dependency edge (never part_of), bind a theorem/result node to the theoretical_setting/structural_class it holds under with assumes, link two co-equal contributions of the paper with co_contribution (not fake part_of), and measures to the methods they evaluate. Do not invent nodes or emit Finding-centric edges, and do not bind measures to datasets here (that is the score row's setup_id in the evidence stage).
+Emit only structural edges (part_of, builds_on, uses, assumes, co_contribution, compares_to, evaluates) between the given node_ids. Connect components to their parent methods with part_of, link each builds_on/uses prior-art node with the matching dependency edge (never part_of), bind a theorem/result node to the theoretical_setting/structural_class it holds under with assumes, link two co-equal contributions of the paper with co_contribution (not fake part_of), and measures to the methods they evaluate. Do not invent nodes, and give any `fnd:`/`prb:` node NO edge (their links are authored later); do not bind measures to datasets here (that is the score row's setup_id in the evidence stage).
 
 Output a single JSON object with key: relations.
 ```

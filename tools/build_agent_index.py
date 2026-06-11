@@ -7,7 +7,10 @@ emits the missing access layers (issues/agent-usability-report-2026-06-11.md, RF
   <root>/_manifest.json      RF-19  data dictionary / file contracts (same as fresh runs emit)
   <root>/_catalog.jsonl      RF-20  one routing record per paper (title/venue/year/spine/facets)
   <root>/_cards.jsonl        RF-06  one denormalized retrieval card per unit (embed_text ready)
-  <root>/_result_rows.jsonl  RF-09  one flat (system, dataset, metric, value) row per score
+  <root>/_result_rows.jsonl  RF-09  one flat (system, dataset, metric, value) row per score —
+                                    source='transcribed' (LLM scores, full setup/system join) +
+                                    source='table_blob' (numeric cells lifted from the verbatim
+                                    baseline tables; best-effort row/col labels, no id join)
   <root>/_entity_index.json  RF-10  cross-paper citation clusters on normalized reference title
 
 By default it first RETROFITS each paper dir in place with the same deterministic enrichments
@@ -27,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +45,7 @@ from section_pipeline import (  # noqa: E402
     STAGE_B_RELATIONS_NOTE,
     _annotate_quantitative_payload,
     _normalize_name,
+    _numeric_keys,
     _parse_value_num,
     build_output_manifest,
     enrich_metadata,
@@ -107,13 +112,15 @@ def _census_index(census: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 # Retrofit (in-place, additive, idempotent)
 # ---------------------------------------------------------------------------
 
-def retrofit_paper(paper_dir: Path, *, flatten_sections: bool) -> dict[str, Any]:
+def retrofit_paper(
+    paper_dir: Path, *, flatten_sections: bool, default_venue: str | None = None
+) -> dict[str, Any]:
     """Apply the deterministic agent-readiness enrichments to one already-extracted paper dir."""
     stats = {"paper": paper_dir.name, "changed_files": []}
 
     metadata = _load(paper_dir / "02_metadata.json")
     before = _dumps(metadata)
-    metadata = enrich_metadata(metadata, paper_dir.name)
+    metadata = enrich_metadata(metadata, paper_dir.name, default_venue=default_venue)
     if _dumps(metadata) != before:
         save_json(paper_dir / "02_metadata.json", metadata)
         stats["changed_files"].append("02_metadata.json")
@@ -220,6 +227,11 @@ def build_catalog_row(
     return {
         "paper_id": paper_id,
         "title": metadata.get("title") or document.get("title"),
+        # RF-07 census facets (0.13+; null on older extractions)
+        "topics": document.get("topics"),
+        "tasks": document.get("tasks"),
+        "domain": document.get("domain"),
+        "paper_type": document.get("role"),
         "venue": metadata.get("venue"),
         "year": metadata.get("year"),
         "venue_source": metadata.get("venue_source"),
@@ -320,6 +332,7 @@ def build_result_rows(paper_id: str, extraction: dict[str, Any]) -> list[dict[st
                 value_num = _parse_value_num(score.get("value"))
             rows.append({
                 "paper_id": paper_id,
+                "source": "transcribed",
                 "measure_id": unit.get("id"),
                 "metric": metric,
                 "metric_norm": _normalize_name(metric),
@@ -339,6 +352,227 @@ def build_result_rows(paper_id: str, extraction: dict[str, Any]) -> list[dict[st
                 "direction": direction,
                 "table_role": table_role,
             })
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# RF-09 second half: lift baseline rows out of the verbatim table blobs
+# ---------------------------------------------------------------------------
+
+class _TableGridParser(HTMLParser):
+    """Parse table html into per-table grids of cell dicts {text, is_header, rowspan, colspan}.
+
+    A source_tables entry may concatenate several <table> blobs under one marker — each becomes
+    its own grid. Best-effort on malformed markup (a dangling row is flushed, a cell outside a
+    <tr> opens an implicit row)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.grids: list[list[list[dict[str, Any]]]] = []
+        self._rows: list[list[dict[str, Any]]] = []
+        self._row: list[dict[str, Any]] | None = None
+        self._cell: dict[str, Any] | None = None
+        self._buf: list[str] = []
+
+    @staticmethod
+    def _span(value: Any) -> int:
+        try:
+            return max(1, int(str(value)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _flush_table(self) -> None:
+        if self._row:
+            self._rows.append(self._row)
+            self._row = None
+        if self._rows:
+            self.grids.append(self._rows)
+            self._rows = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            self._flush_table()
+        elif tag == "tr":
+            if self._row:
+                self._rows.append(self._row)
+            self._row = []
+        elif tag in ("td", "th"):
+            amap = dict(attrs)
+            self._cell = {
+                "is_header": tag == "th",
+                "rowspan": self._span(amap.get("rowspan", 1)),
+                "colspan": self._span(amap.get("colspan", 1)),
+            }
+            self._buf = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._cell is not None:
+            self._cell["text"] = " ".join("".join(self._buf).split())
+            if self._row is None:
+                self._row = []
+            self._row.append(self._cell)
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self._rows.append(self._row)
+            self._row = None
+        elif tag == "table":
+            self._flush_table()
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._buf.append(data)
+
+
+def _parse_table_grids(table_html: str) -> list[list[list[dict[str, Any]]]]:
+    parser = _TableGridParser()
+    try:
+        parser.feed(table_html or "")
+        parser.close()
+    except Exception:
+        return []
+    parser._flush_table()
+    return [g for g in parser.grids if g]
+
+
+def _expand_grid(rows: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """Expand rowspan/colspan into a rectangular grid (cell objects shared across spanned slots)."""
+    grid: list[list[dict[str, Any]]] = []
+    pending: dict[int, tuple[dict[str, Any], int]] = {}  # col -> (cell, rows remaining below)
+    for raw_row in rows:
+        out: list[dict[str, Any]] = []
+        col = 0
+
+        def _fill() -> None:
+            nonlocal col
+            while col in pending:
+                cell, remaining = pending.pop(col)
+                out.append(cell)
+                if remaining > 1:
+                    pending[col] = (cell, remaining - 1)
+                col += 1
+
+        _fill()
+        for cell in raw_row:
+            _fill()
+            for _ in range(cell["colspan"]):
+                out.append(cell)
+                if cell["rowspan"] > 1:
+                    pending[col] = (cell, cell["rowspan"] - 1)
+                col += 1
+            _fill()
+        grid.append(out)
+    return grid
+
+
+def _split_header(grid: list[list[dict[str, Any]]]) -> tuple[list[str | None], int]:
+    """Detect leading header rows; return (per-column labels, body start index).
+
+    A row is a header when its cells are <th>-tagged, or (parser fallback — many corpora emit
+    headers as plain <td>) when at most ~25% of its non-empty cells parse as numbers, limited to
+    the first 3 rows so a qualitative body never swallows the whole table."""
+    n_header = 0
+    for i, row in enumerate(grid[:3]):
+        texts = [c["text"] for c in row if c["text"]]
+        if not texts:
+            break
+        numeric = sum(1 for t in texts if _parse_value_num(t) is not None)
+        all_th = all(c["is_header"] for c in row if c["text"])
+        if all_th or numeric <= max(0, len(texts) // 4):
+            n_header = i + 1
+        else:
+            break
+    width = max((len(r) for r in grid), default=0)
+    labels: list[str | None] = []
+    for col in range(width):
+        parts: list[str] = []
+        for row in grid[:n_header]:
+            if col < len(row):
+                text = row[col]["text"]
+                if text and (not parts or parts[-1] != text):
+                    parts.append(text)
+        labels.append(" / ".join(parts) if parts else None)
+    return labels, n_header
+
+
+def _transcribed_value_keys(extraction: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for _stype, unit in _iter_units(extraction):
+        if unit.get("type") != "Measure":
+            continue
+        for score in unit.get("scores") or []:
+            if isinstance(score, dict):
+                keys.update(_numeric_keys(str(score.get("value", ""))))
+    return keys
+
+
+def lift_blob_rows(paper_id: str, extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    """RF-09 second half: parse extraction_notes.source_tables html into flat typed rows.
+
+    In blob-primary mode the contribution rows are LLM-transcribed (source='transcribed') and the
+    baseline/competitor grid stays verbatim html — opaque to a leaderboard query. This lifts every
+    numeric data cell into the same row shape, best-effort: row_label = the row's first non-numeric
+    cell, col_label from the detected header rows. `value_in_transcribed` marks cells whose value
+    also appears in a structured score (likely the same number seen twice — filter on it for the
+    unmatched-baseline view). Lifted rows never claim a system join: system_id/ is_paper_contribution
+    stay null."""
+    notes = extraction.get("extraction_notes") or {}
+    source_tables = notes.get("source_tables") if isinstance(notes, dict) else None
+    if not isinstance(source_tables, dict) or not source_tables:
+        return []
+    transcribed = _transcribed_value_keys(extraction)
+    rows: list[dict[str, Any]] = []
+    for marker, table in sorted(source_tables.items()):
+        if not isinstance(table, dict):
+            continue
+        caption = (table.get("caption") or "").strip() or None
+        for grid_rows in _parse_table_grids(table.get("html", "")):
+            grid = _expand_grid(grid_rows)
+            labels, body_start = _split_header(grid)
+            for row in grid[body_start:]:
+                seen: set[int] = set()  # colspan/rowspan expansion shares cell objects
+                row_label = None
+                label_cell_id = None
+                for cell in row[:2]:
+                    if cell["text"] and _parse_value_num(cell["text"]) is None:
+                        row_label = cell["text"]
+                        label_cell_id = id(cell)
+                        break
+                for col, cell in enumerate(row):
+                    if id(cell) in seen or id(cell) == label_cell_id:
+                        continue
+                    seen.add(id(cell))
+                    text = cell["text"]
+                    if not text:
+                        continue
+                    value_num = _parse_value_num(text)
+                    if value_num is None:
+                        continue
+                    keys = _numeric_keys(text)
+                    rows.append({
+                        "paper_id": paper_id,
+                        "source": "table_blob",
+                        "measure_id": None,
+                        "metric": labels[col] if col < len(labels) else None,
+                        "metric_norm": _normalize_name(labels[col]) if col < len(labels) and labels[col] else None,
+                        "unit": None,
+                        "dataset": None,
+                        "dataset_norm": None,
+                        "setup": None,
+                        "setup_id": None,
+                        "system": row_label,
+                        "system_id": None,
+                        "system_role": None,
+                        "is_paper_contribution": None,
+                        "variant": None,
+                        "value_raw": text,
+                        "value_num": value_num,
+                        "variance": None,
+                        "direction": None,
+                        "table_role": "baseline",
+                        "table_marker": marker or None,
+                        "table_caption": caption,
+                        "value_in_transcribed": bool(keys) and any(k in transcribed for k in keys),
+                    })
     return rows
 
 
@@ -408,6 +642,9 @@ def main() -> int:
                     help="Only build corpus artifacts; do not touch per-paper files")
     ap.add_argument("--flatten-sections", action="store_true",
                     help="Also rewrite legacy {'section': {...}}-wrapped 05_sections files flat")
+    ap.add_argument("--default-venue", default=None,
+                    help="Corpus-level venue fallback when dirnames carry no venue token "
+                         "(stamped venue_source='corpus_default'); e.g. --default-venue CVPR")
     args = ap.parse_args()
 
     if not args.root.is_dir():
@@ -432,7 +669,8 @@ def main() -> int:
 
     for pdir in paper_dirs:
         if not args.no_retrofit:
-            stats = retrofit_paper(pdir, flatten_sections=args.flatten_sections)
+            stats = retrofit_paper(pdir, flatten_sections=args.flatten_sections,
+                                   default_venue=args.default_venue)
             if stats["changed_files"]:
                 retrofit_changed += 1
 
@@ -458,6 +696,7 @@ def main() -> int:
         catalog.append(row)
         cards.extend(build_cards(pdir.name, row.get("title"), census, extraction))
         result_rows.extend(build_result_rows(pdir.name, extraction))
+        result_rows.extend(lift_blob_rows(pdir.name, extraction))
         per_paper_refs.append((pdir.name, references))
         n_refs = len((references or {}).get("references") or []) if isinstance(references, dict) else 0
         catalog[-1]["n_references"] = n_refs
@@ -476,13 +715,21 @@ def main() -> int:
     save_json(args.root / "_entity_index.json", entity_index)
 
     n_numeric = sum(1 for r in result_rows if r["value_num"] is not None)
+    n_transcribed = sum(1 for r in result_rows if r["source"] == "transcribed")
+    n_lifted = sum(1 for r in result_rows if r["source"] == "table_blob")
+    n_lifted_new = sum(
+        1 for r in result_rows
+        if r["source"] == "table_blob" and not r.get("value_in_transcribed")
+    )
     multi = [e for e in entity_index["entities"] if len({p["paper_id"] for p in e["papers"]}) > 1]
     print(f"papers indexed       : {len(catalog)}")
     if not args.no_retrofit:
         print(f"papers retrofitted   : {retrofit_changed} changed")
     print(f"catalog rows         : {len(catalog)} -> _catalog.jsonl")
     print(f"unit cards           : {len(cards)} -> _cards.jsonl")
-    print(f"result rows          : {len(result_rows)} ({n_numeric} with value_num) -> _result_rows.jsonl")
+    print(f"result rows          : {len(result_rows)} ({n_numeric} with value_num; "
+          f"{n_transcribed} transcribed + {n_lifted} blob-lifted, {n_lifted_new} net-new) "
+          f"-> _result_rows.jsonl")
     print(f"entity clusters      : {entity_index['n_entities']} ({len(multi)} cited by >1 paper) -> _entity_index.json")
     print(f"manifest             : _manifest.json")
     return 0
