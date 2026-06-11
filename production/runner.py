@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -13,6 +14,10 @@ from production.llm import LLMClient
 from production.outputs import is_paper_completed, write_run_summary
 from production.progress import ProgressTracker
 from production.worker import process_paper
+
+# After production.worker: importing it puts the project root on sys.path, which makes the
+# top-level section_pipeline module importable regardless of the caller's cwd.
+from section_pipeline import build_output_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,19 @@ def discover_papers(input_dir: Path) -> list[tuple[str, Path]]:
 async def run_batch(config: Config) -> dict[str, Any]:
     """Main entry point: discover papers, filter already-done, process in parallel."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # RF-19: ship the data dictionary beside the outputs so a consumer (human or agent) pointed
+    # at the run root learns the file contracts without trial-and-error. Overwritten per run —
+    # it documents the flags the freshest papers were produced with.
+    manifest = build_output_manifest(
+        blob_primary_evidence=config.blob_primary_evidence,
+        blob_primary_references=config.blob_primary_references,
+        verify_scores=config.verify_scores,
+        model=config.model,
+    )
+    (config.output_dir / "_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     # Discover papers
     all_papers = discover_papers(config.input_dir)

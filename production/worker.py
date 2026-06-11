@@ -17,6 +17,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from section_pipeline import (
+    STAGE_B_RELATIONS_NOTE,
+    enrich_metadata,
     load_prompt,
     load_node_census_schema,
     load_relation_pass_schema,
@@ -125,6 +127,10 @@ async def _run_paper_pipeline(
         else:
             references = references_result
 
+        # RF-01: dirname venue/year backfill + has_code/has_data — also recovers a usable
+        # metadata record when the LLM metadata pass failed outright (metadata is None here).
+        metadata = enrich_metadata(metadata, paper_id)
+
         census = normalize_census_nodes(census_result)
         census_issues = validate_census(census)
         if census_issues:
@@ -144,7 +150,10 @@ async def _run_paper_pipeline(
         relations = relation_output.get("relations") if isinstance(relation_output, dict) else None
         if not isinstance(relations, list):
             relations = []
-        save_json(paper_dir / "04_relations.json", {"relations": relations})
+        save_json(
+            paper_dir / "04_relations.json",
+            {"relations": relations, "note": STAGE_B_RELATIONS_NOTE},
+        )
         logger.info("[%s] Phase 2 complete (%d structural relations)", paper_id, len(relations))
 
         # Phase 3 (stage C): per-section content fill
@@ -493,7 +502,11 @@ async def _extract_single_content_section(
             )
             result = _parse_llm_json(raw)
             _validate_section_result_shape(result, section_type)
-            save_json(paper_dir / "05_sections" / f"{section_type}.json", result)
+            # RF-02: save the section content flat (top-level section_type/units/...). The legacy
+            # {"section": {...}} wrapper made a naive top-level read return nothing — silent total
+            # loss for any consumer that didn't know the container key. The in-memory contract
+            # (assemble_extraction expects the wrapper) is unchanged.
+            save_json(paper_dir / "05_sections" / f"{section_type}.json", result["section"])
             logger.debug("[%s] section:%s extracted successfully", paper_id, section_type)
             return result
 

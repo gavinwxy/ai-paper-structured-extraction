@@ -12,6 +12,7 @@ from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 PROMPTS_DIR = PROJECT_ROOT / "prompts" / "section-extraction"
@@ -445,13 +446,15 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "objective_function",
         "implementation_notes",
         "cite_keys",
+        "ref_ids",
         "provenance",
     },
     # ExperimentSetup = old Entity ⊎ Setting. `role` is the merged differentia (substrate vs
     # configuration); `name` labels it (a dataset name, a split label); `description` is
     # optional prose. `cite_keys` (the in-text bibliography marker(s)) is copied from the census
     # node onto the unit by _assign_roles_from_census — present only on externally-cited substrate
-    # nodes (dataset/benchmark), absent on born configuration roles.
+    # nodes (dataset/benchmark), absent on born configuration roles. `ref_ids` is the Python-owned
+    # resolved join of those cite_keys to 03_references entry ids (reconcile_reference_units).
     "ExperimentSetup": {
         "id",
         "type",
@@ -459,6 +462,7 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "name",
         "description",
         "cite_keys",
+        "ref_ids",
         "provenance",
     },
     "Measure": {
@@ -481,6 +485,9 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "table_role",
         "headline_result",
         "finding_ids",
+        # Python-owned (assembly, RF-04): False iff the Measure has neither score rows nor a
+        # headline_result — lets a numeric/SOTA index suppress no-payload matches up front.
+        "has_quantitative_payload",
         "provenance",
     },
     "Finding": {
@@ -1789,6 +1796,24 @@ def build_document_unit(
     return document
 
 
+# RF-11-lite (agent-readiness): the §N namespace legend embedded in every extraction's notes and
+# reused verbatim by the retrofit tool (tools/build_agent_index.py) for older corpora.
+MARKER_NAMESPACES: dict[str, str] = {
+    "01_census.json:nodes[].source_scope": (
+        "author_section_label — LLM-echoed paper heading numbers (e.g. §4.2); "
+        "display-only, NOT resolvable against extraction_notes.source_tables"
+    ),
+    "sections[].units[].provenance": (
+        "chunk_marker — machine [§N] block ids of the pipeline input; ids present in "
+        "extraction_notes.source_tables resolve to verbatim html, all others are opaque"
+    ),
+    "relations[].provenance": "chunk_marker (same namespace as unit provenance)",
+    "sections[].units[].source_table_marker": (
+        "chunk_marker — key into extraction_notes.source_tables"
+    ),
+}
+
+
 def build_extraction_notes(
     census: dict[str, Any],
     sections: list[dict[str, Any]],
@@ -1834,6 +1859,10 @@ def build_extraction_notes(
             "must_covered": len(covered),
             "must_total": len(must_nodes),
         },
+        # RF-11-lite (agent-readiness): the two §N namespaces in the outputs collide silently —
+        # name them so a consumer never dereferences a census heading label against the chunk
+        # index (or vice versa). Only source_tables keys resolve to verbatim text.
+        "marker_namespaces": dict(MARKER_NAMESPACES),
     }
     if extra_uncovered:
         listed = {item["item_id"] for item in notes["uncovered_items"]}
@@ -1846,6 +1875,137 @@ def build_extraction_notes(
     if sections_omitted is not None:
         notes["sections_omitted"] = sections_omitted
     return notes
+
+
+# RF-03 (agent-readiness): stamped into 04_relations.json so an index built from the stage-B file
+# can never silently miss the content-pass edges (uses/about/evaluates/resolves live only in 06).
+STAGE_B_RELATIONS_NOTE = (
+    "stage-B structural subset, saved before content extraction; the canonical complete edge set "
+    "is 06_extraction.json relations[] — do not build a graph from this file"
+)
+
+
+def build_output_manifest(
+    *,
+    blob_primary_evidence: bool = True,
+    blob_primary_references: bool = True,
+    verify_scores: bool = True,
+    model: str | None = None,
+    flattened_sections: bool = True,
+) -> dict[str, Any]:
+    """RF-19 (agent-readiness): machine-readable data dictionary shipped beside the outputs.
+
+    Names the contracts a consumer must know before reading the files — which file is canonical,
+    where data lives, what blob-primary means — so an agent pointed at a run directory does not
+    have to discover them by trial-and-error over 100KB JSON trees. Static apart from the run
+    flags; written once per run root (and by tools/build_agent_index.py for older corpora)."""
+    sections_shape = (
+        "flat: section_type/anchor_id/units(+problems/methods/measures arrays) at top level"
+        if flattened_sections
+        else "LEGACY WRAPPED: ALL data lives under the top-level 'section' key — a naive "
+        "top-level read returns nothing"
+    )
+    manifest: dict[str, Any] = {
+        "manifest_version": 1,
+        "ir_version": "section-ir-0.12",
+        "files": {
+            "01_census.json": (
+                "stage-A skeleton: nodes[] (node_id/role/name/gloss/salience/cite_keys) + "
+                "spine_summary {central_contribution, argument_flow, headline_result}. Best "
+                "small first read (~9KB), but NOT complete — the content pass materializes "
+                "additional units (e.g. ExperimentSetups) that only exist in 06"
+            ),
+            "02_metadata.json": (
+                "title/authors/year/venue/resources + derived has_code/has_data; year/venue may "
+                "be backfilled from the corpus directory name (year_source/venue_source='dirname')"
+            ),
+            "03_references.json": (
+                "structured bibliography entries with relation {roles, stance, salience, "
+                "provides_name, provides_unit_ids}; in blob-primary mode this holds graph-linked "
+                "references ONLY — background references live verbatim in "
+                "06:extraction_notes.references_blob"
+            ),
+            "04_relations.json": STAGE_B_RELATIONS_NOTE,
+            "05_sections/": f"raw per-section LLM results ({sections_shape}); superseded by 06",
+            "06_extraction.json": (
+                "CANONICAL assembled section-IR: document, sections[].units[] (Problem/Method/"
+                "ExperimentSetup/Measure/Finding), the complete relations[], extraction_notes "
+                "(source_tables, references_blob, score_fidelity, plan_coverage)"
+            ),
+            "07_validation.json": "validator issues ([] = clean) + valid flag",
+            "extraction.html": "human-facing render — NOT an agent data source",
+            "status.json": "per-paper ops telemetry (timing/tokens) — NOT an agent data source",
+            "run_summary.json": "batch-level ops summary at the run root",
+            "_catalog.jsonl | _cards.jsonl | _result_rows.jsonl | _entity_index.json": (
+                "corpus-level retrieval artifacts at the run root, present after "
+                "tools/build_agent_index.py (one JSON record per line)"
+            ),
+        },
+        "contracts": {
+            "canonical_edge_set": (
+                "06_extraction.json relations[]; 04_relations.json is a strict stage-B subset "
+                "with zero dataset/benchmark edges"
+            ),
+            "blob_primary_evidence": (
+                "score tables: contribution rows are transcribed into Measure.scores[]; baseline/"
+                "competitor rows stay VERBATIM in extraction_notes.source_tables[<marker>].html "
+                "(keyed by Measure.source_table_marker). Empty scores[] + a marker means 'data is "
+                "in the blob', NOT 'no data'"
+                if blob_primary_evidence
+                else "disabled for this run: all rows transcribed into Measure.scores[]"
+            ),
+            "blob_primary_references": (
+                "background (non-graph-linked) references are NOT in 03_references.json; they "
+                "live verbatim in extraction_notes.references_blob"
+                if blob_primary_references
+                else "disabled for this run: 03_references.json is the full transcription"
+            ),
+            "marker_namespaces": (
+                "two §N namespaces collide: census source_scope = LLM-echoed paper heading labels "
+                "(display-only); 06 provenance/source_table_marker = machine [§N] chunk ids (only "
+                "ids present in extraction_notes.source_tables resolve to text). See "
+                "extraction_notes.marker_namespaces"
+            ),
+            "id_scheme": (
+                "unit/node ids are PAPER-LOCAL (doc:/prb:/fnd:/mth:/exp:/mea: prefixes; census "
+                "node_id == 06 unit id). Namespace them with the paper_id before merging corpora — "
+                "generic ids like mea:accuracy recur across papers"
+            ),
+        },
+        "field_semantics": {
+            "scores[].value": "verbatim string transcription (value_raw)",
+            "scores[].value_num": (
+                "Python-parsed float, null when the value is qualitative/unparseable; pair with "
+                "Measure.comparison_direction for best-of (argmin/argmax)"
+            ),
+            "scores[].variance": "string; '' means absent (not zero)",
+            "Measure.has_quantitative_payload": (
+                "false iff the Measure has neither score rows nor a headline_result (suppress in "
+                "numeric indexes)"
+            ),
+            "metadata.has_code / has_data": (
+                "true = positive release evidence; null = unknown; never false"
+            ),
+            "extraction_notes.score_fidelity": (
+                "always present; checked=true means transcribed numeric values were located in the "
+                "verbatim source tables (located_pct); checked=false carries a reason and means "
+                "the numbers are UNVERIFIED, not wrong"
+            ),
+            "units[].ref_ids": (
+                "Python-resolved join of the unit's cite_keys to 03_references entry ids "
+                "(normalized cite-key collapse); absent when the unit cites nothing or no entry "
+                "joins"
+            ),
+        },
+        "flags": {
+            "blob_primary_evidence": blob_primary_evidence,
+            "blob_primary_references": blob_primary_references,
+            "verify_scores": verify_scores,
+        },
+    }
+    if model:
+        manifest["model"] = model
+    return manifest
 
 
 # C0 control characters (incl. the NULL bytes some models emit in place of '·'/'×') that have
@@ -2040,6 +2200,65 @@ def _warn_duplicate_score_rows(sections: list[dict[str, Any]]) -> list[str]:
                     "score row(s) — per-column identity was likely collapsed"
                 )
     return warnings
+
+
+# Scientific-notation score values ('1 × 10−2', '3.2 x 10^-4') must be recognized BEFORE the
+# leading-number fallback, which would otherwise mis-parse the mantissa alone (1.0, 100× off).
+_SCI_NOTATION_RE = re.compile(
+    r"^([+-]?\d+(?:\.\d+)?)\s*[x×*]\s*10\s*(?:\^|\*\*)?\s*\(?([+-]?\d+)\)?"
+)
+_LEADING_NUM_RE = re.compile(r"^([+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))")
+# Symbols that may legitimately precede a number without making the value qualitative prose.
+_NUM_PREFIX_CHARS = "≈~<>≤≥±$ \t"
+
+
+def _parse_value_num(raw: Any) -> float | None:
+    """Parse a transcribed score string to a float, or None when it is not a single number.
+
+    Deliberately conservative (RF-04): '%'/',' / unicode minus / '± var' tails / 'a × 10^b'
+    notation are handled, but a value whose number is preceded by prose ('up to 34.28%') stays
+    None — the string is qualitative and value_raw remains the only faithful representation.
+    """
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip().replace("−", "-").replace("–", "-").lstrip(_NUM_PREFIX_CHARS)
+    if not text:
+        return None
+    sci = _SCI_NOTATION_RE.match(text)
+    if sci:
+        try:
+            return float(sci.group(1)) * (10.0 ** int(sci.group(2)))
+        except (ValueError, OverflowError):
+            return None
+    match = _LEADING_NUM_RE.match(text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _annotate_quantitative_payload(sections: list[dict[str, Any]]) -> None:
+    """RF-04 (agent-readiness, Python-owned, deterministic): stamp every score row with
+    ``value_num`` (float | None) parsed from its string ``value``, and every Measure with
+    ``has_quantitative_payload`` — False iff it has neither score rows nor a headline_result
+    (the dead-weight class a numeric index should suppress). Score rows carry no extra-key
+    whitelist, so value_num needs no schema change; has_quantitative_payload is whitelisted in
+    ALLOWED_FIELDS_BY_TYPE. Idempotent: recomputed from value/headline on every assembly."""
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") != "Measure":
+                continue
+            scores = unit.get("scores")
+            score_rows = [s for s in scores if isinstance(s, dict)] if isinstance(scores, list) else []
+            for score in score_rows:
+                score["value_num"] = _parse_value_num(score.get("value"))
+            headline = unit.get("headline_result")
+            has_headline = isinstance(headline, str) and bool(headline.strip())
+            unit["has_quantitative_payload"] = bool(score_rows) or has_headline
 
 
 def _clean_method_equations(sections: list[dict[str, Any]]) -> list[str]:
@@ -3086,6 +3305,10 @@ def assemble_extraction(
         relations, warns = _dedup_relations(relations)
         assembly_warnings.extend(warns)
 
+    # RF-04 (agent-readiness): annotate after every score/unit mutation above so value_num and
+    # has_quantitative_payload reflect the final rows.
+    _annotate_quantitative_payload(sections)
+
     _assign_covers_entries(sections, all_census_node_ids(census))
 
     # Build notes from the final, repaired sections so coverage reflects assembly mutations.
@@ -3129,6 +3352,21 @@ def assemble_extraction(
             fidelity = _verify_score_fidelity(sections, source_tables, paper_content)
             if fidelity is not None:
                 extraction_notes["score_fidelity"] = fidelity
+    # RF-05 (agent-readiness): score_fidelity is a trust signal an agent gates answers on — always
+    # emit it, with an explicit reason when the check did not run, so "absent" can never be read as
+    # "verified" (or vice versa).
+    if "score_fidelity" not in extraction_notes:
+        if not verify_scores:
+            reason = "score verification disabled"
+        elif not source_tables:
+            reason = "no source tables sliced from the paper"
+        else:
+            reason = "captured tables contain no numeric cells"
+        extraction_notes["score_fidelity"] = {
+            "checked": False,
+            "located_pct": None,
+            "reason": reason,
+        }
     # Blob-primary references: capture the full bibliography verbatim so the references pass can emit
     # only graph-linked entries and leave background refs here (the display + completeness backstop).
     # The mode marker lets the renderer distinguish "legacy full transcription" from "blob mode whose
@@ -3368,6 +3606,72 @@ def run_metadata_extraction(
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
     return _parse_llm_json(raw)
+
+
+# RF-01 (agent-readiness): venue+year live in the corpus directory naming convention
+# ('020_NeurIPS_2024_<title>') even when the paper body never states them (the LLM metadata pass
+# correctly returns null there — camera-ready PDFs rarely print their own venue/year).
+_DIRNAME_META_RE = re.compile(r"^\d+_([A-Za-z]+)_((?:19|20)\d{2})_")
+# Hosts that constitute code/data-release evidence regardless of the resource's `type` label
+# (the metadata pass mixes `code` vs `project` for the same repo link).
+_CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "4open.science", "codeberg.org")
+_DATA_HOSTS = ("zenodo.org", "figshare.com", "kaggle.com")
+
+
+def _resource_host(url: Any) -> str:
+    if not isinstance(url, str) or not url.strip():
+        return ""
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    try:
+        host = urlparse(candidate).netloc.lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def enrich_metadata(metadata: dict[str, Any] | None, paper_id: str) -> dict[str, Any]:
+    """RF-01 + RF-22 (agent-readiness, deterministic, idempotent): backfill `year`/`venue` from
+    the paper-id directory naming convention (only when the LLM value is null/empty, stamped with
+    `year_source`/`venue_source='dirname'`), normalize resource URLs to carry a scheme, and emit
+    `has_code`/`has_data` release-evidence flags.
+
+    `has_code`/`has_data` are True (positive evidence: a typed resource or a known release host)
+    or null (unknown) — never False, because absent resources are absence of evidence, not
+    evidence of absence. A None/failed metadata result still yields a usable record from the
+    dirname alone."""
+    if not isinstance(metadata, dict):
+        metadata = {"title": None, "authors": [], "year": None, "venue": None, "resources": []}
+    match = _DIRNAME_META_RE.match(paper_id or "")
+    if match:
+        if not metadata.get("venue"):
+            metadata["venue"] = match.group(1)
+            metadata["venue_source"] = "dirname"
+        if not metadata.get("year"):
+            metadata["year"] = int(match.group(2))
+            metadata["year_source"] = "dirname"
+    has_code = None
+    has_data = None
+    resources = metadata.get("resources")
+    if isinstance(resources, list):
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+            url = resource.get("url")
+            if isinstance(url, str) and url.strip() and "://" not in url:
+                resource["url"] = f"https://{url.strip()}"
+            host = _resource_host(resource.get("url"))
+            rtype = resource.get("type")
+            if rtype == "code" or any(host == h or host.endswith("." + h) for h in _CODE_HOSTS):
+                has_code = True
+            if rtype in {"data", "dataset"} or any(
+                host == h or host.endswith("." + h) for h in _DATA_HOSTS
+            ):
+                has_data = True
+    metadata["has_code"] = has_code
+    metadata["has_data"] = has_data
+    return metadata
 
 
 def run_references_extraction(
@@ -3785,6 +4089,34 @@ def reconcile_reference_units(
                     f"reference {rid!r} does not appear in the bibliography blob "
                     "(possible hallucinated entry or key mismatch)"
                 )
+
+    # RF-10 first half (agent-readiness): the reverse join. provides_unit_ids links reference→unit;
+    # an agent walking unit→reference had to re-derive the cite-key collapse itself (83.5% literal
+    # join on this corpus, 99.5% normalized). Stamp each cite_keys-bearing unit with the resolved
+    # reference id(s) so the join ships materialized. Runs after stub backfill so stub entries are
+    # joinable too. Python owns ref_ids — recomputed from scratch so replays stay idempotent.
+    refid_by_norm: dict[str, list[str]] = {}
+    for ref in ref_list:
+        if not isinstance(ref, dict) or not isinstance(ref.get("id"), str):
+            continue
+        norm_id = _normalize_cite_key(ref["id"])
+        if norm_id and ref["id"] not in refid_by_norm.setdefault(norm_id, []):
+            refid_by_norm[norm_id].append(ref["id"])
+    for section in extraction.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") not in {"Method", "ExperimentSetup"}:
+                continue
+            unit.pop("ref_ids", None)
+            resolved: list[str] = []
+            for raw_key in unit.get("cite_keys") or []:
+                for rid in refid_by_norm.get(_normalize_cite_key(raw_key), []):
+                    if rid not in resolved:
+                        resolved.append(rid)
+            if resolved:
+                unit["ref_ids"] = resolved
+
     return warnings
 
 
@@ -4008,6 +4340,9 @@ def run_pipeline(
         except Exception as exc:
             references = None
             pipeline_warnings.append(f"references extraction failed: {exc}")
+
+    # RF-01 parity with the production worker (a no-op when paper_id carries no dirname pattern).
+    metadata = enrich_metadata(metadata, paper_id)
 
     census = normalize_census_nodes(raw_census)
     census_issues = validate_census(census)
