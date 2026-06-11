@@ -833,7 +833,8 @@ def load_references_schema_for_mode(blob_primary_references: bool) -> dict[str, 
     _rewrite(
         "salience",
         "peripheral = passing mention.",
-        "peripheral = structurally linked but minor (a secondary baseline or small reused part).",
+        "peripheral = structurally linked but minor; main baselines and the primary "
+        "systems/datasets the paper's experiments run on are central, not peripheral.",
     )
     _rewrite(
         "provides_name",
@@ -2011,6 +2012,36 @@ def _drop_empty_scores_measures(
     return warnings
 
 
+def _warn_duplicate_score_rows(sections: list[dict[str, Any]]) -> list[str]:
+    """Flag a Measure whose scores repeat a (variant, setup_id) pair. Two rows claiming the same
+    system under the same setup mean a distinguishing printed label (backbone, scale, per-class
+    column) was likely collapsed during transcription — e.g. twenty per-class APs all labeled
+    'This paper'. Fires on ANY repeated pair regardless of values (identical duplicate rows are
+    also a labeling failure), at most once per Measure. Observability only: no row is dropped or
+    mutated, and the warning lands in assembly warnings (extraction_notes.uncertain_assignments),
+    never in validator issues — so it cannot flip a paper invalid."""
+    warnings: list[str] = []
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") != "Measure":
+                continue
+            scores = unit.get("scores")
+            if not isinstance(scores, list):
+                continue
+            seen = Counter(
+                (score.get("variant", ""), score.get("setup_id", ""))
+                for score in scores
+                if isinstance(score, dict)
+            )
+            dup_rows = sum(count - 1 for count in seen.values() if count > 1)
+            if dup_rows:
+                warnings.append(
+                    f"Measure {unit.get('id')!r} has {dup_rows} duplicate (variant, setup_id) "
+                    "score row(s) — per-column identity was likely collapsed"
+                )
+    return warnings
+
+
 def _clean_method_equations(sections: list[dict[str, Any]]) -> list[str]:
     """Drop empty optional equation fields on Method units: an ``objective_function`` or a
     ``formulas[]`` entry whose ``expression`` is blank (a stub some json_object models emit when
@@ -2257,6 +2288,68 @@ def _drop_baseline_evaluates(
             continue
         kept.append(relation)
     return kept, warnings
+
+
+def _derive_missing_evaluates(
+    sections: list[dict[str, Any]], relations: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Derive an `evaluates` edge for any Measure left without one, from its own score rows.
+
+    Section-stage Measures (born per table, or census Measures the model re-id'd) post-date the
+    relation pass, so stage B can never bind them; the subject is still deterministically
+    recoverable from the rows' system_id. Mirrors the relation-pass rule: exactly one edge,
+    own methods only (contribution/component), never compared_against. Subject selection is
+    mechanical: collect the distinct own-method system_ids across the rows in row order; a single
+    candidate is the subject; multiple candidates resolve to the unique contribution-role one,
+    or skip with a warning when zero or several contributions tie (never guess).
+    """
+    covered = {
+        rel.get("source_id")
+        for rel in relations
+        if isinstance(rel, dict) and rel.get("relation") == "evaluates"
+    }
+    unit_role: dict[str, tuple[Any, Any]] = {}
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if isinstance(unit, dict) and isinstance(unit.get("id"), str):
+                unit_role[unit["id"]] = (unit.get("type"), unit.get("role"))
+    warnings: list[str] = []
+    derived: list[dict[str, Any]] = []
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict) or unit.get("type") != "Measure":
+                continue
+            uid = unit.get("id")
+            if not isinstance(uid, str) or uid in covered:
+                continue
+            candidates: list[str] = []
+            for score in unit.get("scores", []) or []:
+                sid = score.get("system_id") if isinstance(score, dict) else None
+                if not isinstance(sid, str) or not sid or sid in candidates:
+                    continue
+                if unit_role.get(sid) in (("Method", "contribution"), ("Method", "component")):
+                    candidates.append(sid)
+            if not candidates:
+                # Ablation/blob measures with empty scores, or rows without an own-method
+                # system_id: leave uncovered (never invent a subject).
+                continue
+            target = candidates[0]
+            if len(candidates) > 1:
+                contribs = [c for c in candidates if unit_role[c][1] == "contribution"]
+                if len(contribs) != 1:
+                    warnings.append(
+                        f"Measure {uid} lacks evaluates and own-method rows are ambiguous "
+                        f"{candidates}; left unrepaired"
+                    )
+                    continue
+                target = contribs[0]
+            derived.append(
+                {"source_id": uid, "relation": "evaluates", "target_id": target, "provenance": []}
+            )
+            warnings.append(
+                f"Derived evaluates edge {uid} -> {target} from score-row system_id"
+            )
+    return relations + derived, warnings
 
 
 def _assign_resolves(
@@ -2957,6 +3050,7 @@ def assemble_extraction(
     # re-pointed by _repair_section_anchors instead of being left with a dangling anchor_id.
     dropped_measures: list[dict[str, str]] = []
     assembly_warnings.extend(_drop_empty_scores_measures(sections, dropped_measures))
+    assembly_warnings.extend(_warn_duplicate_score_rows(sections))
     assembly_warnings.extend(_drop_empty_sections(sections))
     assembly_warnings.extend(_normalize_provenance_markers(sections, relations))
     assembly_warnings.extend(_repair_section_anchors(sections))
@@ -2972,6 +3066,8 @@ def assemble_extraction(
     relations, warns = _drop_invalid_relations(relations, sections)
     assembly_warnings.extend(warns)
     relations, warns = _drop_baseline_evaluates(relations, census)
+    assembly_warnings.extend(warns)
+    relations, warns = _derive_missing_evaluates(sections, relations)
     assembly_warnings.extend(warns)
 
     # Blob-primary (0.12): the table↔finding link is the Measure's `finding_ids`, not an edge —
@@ -3394,8 +3490,11 @@ def reconcile_reference_units(
             if name_key and uid not in name_to_ids.setdefault(name_key, []):
                 name_to_ids[name_key].append(uid)
 
-    # Index materialized nodes' citation keys -> unit ids (node_id == unit_id).
+    # Index materialized nodes' citation keys -> unit ids (node_id == unit_id). Also keep the
+    # first raw (un-normalized) cite_key per normalized key: a graph-consistency stub entry
+    # (below) reuses it as the entry id so the id stays joinable on replay.
     citekey_to_ids: dict[str, list[str]] = {}
+    citekey_raw: dict[str, str] = {}
     if isinstance(census, dict):
         for node in census.get("nodes", []) or []:
             if not isinstance(node, dict):
@@ -3405,7 +3504,10 @@ def reconcile_reference_units(
                 continue
             for raw_key in node.get("cite_keys", []) or []:
                 cite_key = _normalize_cite_key(raw_key)
-                if cite_key and nid not in citekey_to_ids.setdefault(cite_key, []):
+                if not cite_key:
+                    continue
+                citekey_raw.setdefault(cite_key, raw_key)
+                if nid not in citekey_to_ids.setdefault(cite_key, []):
                     citekey_to_ids[cite_key].append(nid)
 
     # FG-12 (section-ir-0.10) + vocab unification: also backfill unit-graph edges from each
@@ -3415,7 +3517,10 @@ def reconcile_reference_units(
     # stamped origin="reference". An edge already present (e.g. a natively-authored stage-B
     # compares_to) is not duplicated and stays native (no origin); a non-neutral stance is merged onto
     # it instead. Source attribution to the contribution is a deterministic default — an internal
-    # component's own builds_on/uses to an uncited dependency is not covered.
+    # component's own builds_on/uses to an uncited dependency is not covered — so three guards
+    # (G1 part_of-bound component target, G2 cross-type compares_to, G3 duplicate dependency pair)
+    # suppress the materializations that default is provably wrong or redundant about; the
+    # reference itself stays linked via provides_unit_ids either way.
     relations = extraction.get("relations")
     if not isinstance(relations, list):
         relations = None
@@ -3427,13 +3532,29 @@ def reconcile_reference_units(
                 if isinstance(cid, str) and cid in type_by_id:
                     contribution_id = cid
                 break
+    # Python owns origin="reference" edges (the model never emits `origin`); drop any from a
+    # previous reconcile and regenerate below, so replays (tools/relink_references.py) apply
+    # current guards instead of preserving stale backfills.
+    if relations is not None:
+        relations[:] = [
+            e for e in relations
+            if not (isinstance(e, dict) and e.get("origin") == REFERENCE_EDGE_ORIGIN)
+        ]
     existing_edges: set[tuple] = set()
+    component_ids: set[str] = set()  # sources of native part_of edges: their container is already named
+    dependency_pairs: set[tuple] = set()  # (source, target) pairs already carrying builds_on OR uses
     if relations is not None:
         for existing in relations:
-            if isinstance(existing, dict):
-                existing_edges.add(
-                    (existing.get("source_id"), existing.get("relation"), existing.get("target_id"))
-                )
+            if not isinstance(existing, dict):
+                continue
+            existing_edges.add(
+                (existing.get("source_id"), existing.get("relation"), existing.get("target_id"))
+            )
+            rel_name = existing.get("relation")
+            if rel_name == "part_of" and isinstance(existing.get("source_id"), str):
+                component_ids.add(existing["source_id"])
+            elif rel_name in ("builds_on", "uses"):
+                dependency_pairs.add((existing.get("source_id"), existing.get("target_id")))
 
     for ref in ref_list:
         if not isinstance(ref, dict):
@@ -3463,9 +3584,18 @@ def reconcile_reference_units(
                 f"Linked reference {ref.get('id')!r} to unit(s) {list(linked)} via {detail}"
             )
             # Backfill dependency/comparison edges from this reference's citation roles.
-            if relations is not None and contribution_id:
+            # Stub guard: an entry with no title and no authors is a graph-consistency stub
+            # (appended below from native edges) — link-only, NEVER an edge source; minting
+            # edges from its roles on replay would be circular.
+            is_stub_shaped = not ref.get("title") and not ref.get("authors")
+            if relations is not None and contribution_id and not is_stub_shaped:
                 stance = relation.get("stance")
-                for role_name in relation.get("roles") or []:
+                # Fixed role precedence so builds_on beats uses when one reference carries
+                # both for the same unit (G3 keeps one dependency edge per pair).
+                for role_name in sorted(
+                    (r for r in relation.get("roles") or [] if isinstance(r, str)),
+                    key=lambda r: {"builds_on": 0, "uses": 1, "compares_to": 2}.get(r, 3),
+                ):
                     # A reference role IS the edge it implies (identity); `background` and any other
                     # non-edge role carry no unit-graph edge.
                     if role_name not in REFERENCE_EDGE_ROLES:
@@ -3487,6 +3617,32 @@ def reconcile_reference_units(
                                     ) == key and not existing.get("stance"):
                                         existing["stance"] = stance
                             continue
+                        if target_id in component_ids:
+                            # G1: the component's true user is already named by its native part_of
+                            # edge; the contribution-default source is redundant (own component)
+                            # or wrong (a sibling unit's component, e.g. a co-contribution variant).
+                            warnings.append(
+                                f"Skipped reference backfill {contribution_id} -[{edge_rel}]-> "
+                                f"{target_id}: target is a part_of component (containment binds it)"
+                            )
+                            continue
+                        if edge_rel == "compares_to" and type_by_id.get(target_id) != type_by_id.get(contribution_id):
+                            # G2: compares_to is like-vs-like; a reference that both supplies a
+                            # dataset and is compared against must not land the comparison on the
+                            # dataset unit.
+                            warnings.append(
+                                f"Skipped reference backfill {contribution_id} -[compares_to]-> "
+                                f"{target_id}: target type {type_by_id.get(target_id)!r} != contribution type"
+                            )
+                            continue
+                        if edge_rel in ("builds_on", "uses") and (contribution_id, target_id) in dependency_pairs:
+                            # G3: builds_on and uses are one dependency family per (source, target)
+                            # pair; a native builds_on must not gain a reference-origin uses twin.
+                            warnings.append(
+                                f"Skipped reference backfill {contribution_id} -[{edge_rel}]-> "
+                                f"{target_id}: a builds_on/uses edge already covers this pair"
+                            )
+                            continue
                         edge: dict[str, Any] = {
                             "source_id": contribution_id,
                             "relation": edge_rel,
@@ -3498,6 +3654,8 @@ def reconcile_reference_units(
                             edge["stance"] = stance
                         relations.append(edge)
                         existing_edges.add(key)
+                        if edge_rel in ("builds_on", "uses"):
+                            dependency_pairs.add((contribution_id, target_id))
                         warnings.append(
                             f"Backfilled {contribution_id} -[{edge_rel}]-> {target_id} "
                             f"from reference {ref.get('id')!r} role {role_name!r}"
@@ -3514,6 +3672,77 @@ def reconcile_reference_units(
         for uid in ref["relation"].get("provides_unit_ids") or []
         if isinstance(uid, str)
     }
+
+    # Graph-consistency stub backfill: when the census committed a cite_key, the unit
+    # materialized, AND the unit graph already carries a NATIVE builds_on/uses/compares_to edge
+    # to it, the graph asserts the citation link — repair the references layer to match with a
+    # link-only stub entry (no title/authors), instead of losing the link because the references
+    # pass skipped the work. Roles derive from native edges ONLY (origin != REFERENCE_EDGE_ORIGIN
+    # — deriving from code-backfilled reference edges would be circular); a unit with no native
+    # edge gets no stub (do not invent a role — the unlinked warning below keeps it visible).
+    # Stubs are recognizable by shape (empty title+authors) and the edge backfill above never
+    # uses them as an edge source, so replays stay idempotent.
+    backfilled_ids: list[str] = []
+    existing_norm_ids = {
+        _normalize_cite_key(ref.get("id")) for ref in ref_list if isinstance(ref, dict)
+    }
+    for norm_key, uids in citekey_to_ids.items():
+        stub_targets = [uid for uid in uids if uid not in linked_unit_ids]
+        if not stub_targets:
+            continue
+        raw_id = citekey_raw.get(norm_key, norm_key)
+        if norm_key in existing_norm_ids:
+            # An entry with this key already exists but did not link these units — a join
+            # failure, not a missing entry; warn, never duplicate.
+            warnings.append(
+                f"Reference {raw_id!r} exists but its cite-key join left unit(s) "
+                f"{stub_targets} unlinked; not duplicating the entry"
+            )
+            continue
+        roles = sorted(
+            {
+                e["relation"]
+                for e in (relations or [])
+                if isinstance(e, dict)
+                and e.get("target_id") in stub_targets
+                and e.get("relation") in REFERENCE_EDGE_ROLES
+                and e.get("origin") != REFERENCE_EDGE_ORIGIN
+            }
+        )
+        if not roles:
+            continue
+        ref_list.append(
+            {
+                "id": raw_id,
+                "authors": [],
+                "title": "",
+                "venue": "",
+                "year": None,
+                "relation": {
+                    "roles": roles,
+                    "stance": "neutral",
+                    "salience": "peripheral",
+                    "provides_name": "",
+                    "provides_unit_ids": list(stub_targets),
+                },
+            }
+        )
+        linked_unit_ids.update(stub_targets)
+        backfilled_ids.append(raw_id)
+        warnings.append(
+            f"Backfilled stub reference {raw_id!r} for graph-linked unit(s) "
+            f"{stub_targets} (roles {roles})"
+        )
+    if backfilled_ids:
+        # Surface the backfill in the assembled extraction too (additionalProperties:false on the
+        # references schema forbids an origin field on the entry itself): extraction_notes is the
+        # audit surface every consumer already reads. Append-only so replays stay byte-identical.
+        backfill_notes = extraction.get("extraction_notes")
+        if isinstance(backfill_notes, dict):
+            recorded = backfill_notes.setdefault("backfilled_references", [])
+            if isinstance(recorded, list):
+                recorded.extend(rid for rid in backfilled_ids if rid not in recorded)
+
     unlinked = sorted(
         {
             uid

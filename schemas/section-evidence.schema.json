@@ -155,7 +155,7 @@
                     }
                   }
                 },
-                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception \u2014 prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception \u2014 a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused)."
+                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception \u2014 prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception \u2014 a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused); when rows grade the resource by object/category rather than by system, the headline column's rows (printed row label as variant). Third exception \u2014 a censused metric reported only in figures/prose in a paper that HAS tables: transcribe its prose- or caption-stated numbers here with no source_table_marker (never values read off a figure's axes)."
               },
               "source_table_marker": {
                 "type": "string",
@@ -171,7 +171,7 @@
                   "main_result",
                   "ablation"
                 ],
-                "description": "Optional (blob-primary): main_result (a headline comparison \u2014 emit the contribution method's own score rows) or ablation (component/sensitivity study \u2014 emit no score rows; the source table carries it). Defaults to main_result."
+                "description": "Optional (blob-primary): main_result (a headline comparison \u2014 emit the contribution method's own score rows) or ablation (component/sensitivity study, or a motivation/diagnostic study whose cells are \u0394/gain/correlation quantities of prior or base models (for a contribution_resource root, evaluated-system rows ON the resource count as contribution rows) \u2014 emit no score rows; the source table carries it). Defaults to main_result."
               },
               "headline_result": {
                 "type": "string",

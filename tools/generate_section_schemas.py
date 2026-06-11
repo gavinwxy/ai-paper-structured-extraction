@@ -394,7 +394,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "setup_ids": measure_setup_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
             "objective_class": enum_schema("measure_objective_class", "Optional (FG-6): which axis of a multi-objective evaluation this measure sits on — primary_quality (the headline quality metric, the default — omit), cost_efficiency (latency/compute/memory/params), fairness, safety, or robustness. Set it on the non-primary axes of a trade-off so a cost/fairness/safety measure is not read as uniformly positive evidence."),
-            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception — prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception — a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused)."),
+            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception — prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception — a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused); when rows grade the resource by object/category rather than by system, the headline column's rows (printed row label as variant). Third exception — a censused metric reported only in figures/prose in a paper that HAS tables: transcribe its prose- or caption-stated numbers here with no source_table_marker (never values read off a figure's axes)."),
             # Blob-primary evidence (section-ir-0.12): the measure binds to its source table by
             # marker; code slices the table verbatim so the model never retypes baseline rows.
             "source_table_marker": string_schema(
@@ -409,8 +409,11 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "table_role": enum_schema(
                 "measure_table_role",
                 "Optional (blob-primary): main_result (a headline comparison — emit the "
-                "contribution method's own score rows) or ablation (component/sensitivity study "
-                "— emit no score rows; the source table carries it). Defaults to main_result.",
+                "contribution method's own score rows) or ablation (component/sensitivity study, "
+                "or a motivation/diagnostic study whose cells are Δ/gain/correlation quantities "
+                "of prior or base models (for a contribution_resource root, evaluated-system "
+                "rows ON the resource count as contribution rows) — emit no score rows; the "
+                "source table carries it). Defaults to main_result.",
             ),
             "headline_result": string_schema(
                 "Optional (blob-primary): the contribution method's key one-liner from this "
