@@ -156,13 +156,16 @@ class LLMClient:
 
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
+            # The semaphore is the single global backpressure for the whole batch — it must be
+            # held only for the API call itself. The backoff is captured here and slept after
+            # the slot is released, so a wave of retrying tasks doesn't pin up to
+            # max_concurrency slots in pure sleep and starve unrelated papers' calls.
+            retry_delay = 0
             async with self._semaphore:
                 t0 = time.monotonic()
                 try:
                     response = await self._client.chat.completions.create(**kwargs)
                     elapsed = time.monotonic() - t0
-                    self._call_count += 1
-                    self._total_latency += elapsed
                     self._record_usage(paper_id, stage, getattr(response, "usage", None))
 
                     choice = response.choices[0]
@@ -173,6 +176,8 @@ class LLMClient:
                             f"LLM response truncated (finish_reason=length, got {len(content)} chars)"
                         )
 
+                    self._call_count += 1
+                    self._total_latency += elapsed
                     logger.debug(
                         "[%s] %s call OK (%.1fs, attempt %d)",
                         paper_id, stage, elapsed, attempt + 1,
@@ -182,7 +187,8 @@ class LLMClient:
                 except TruncationError:
                     # A same-budget retry of a truncation is futile at temperature 0 — fail fast
                     # (no sleep, no retry) so the paper-level handler marks it failed at ~1x cost.
-                    elapsed = time.monotonic() - t0
+                    # Stats-wise the call counts exactly once, as an error like any other failed
+                    # attempt (`elapsed` was measured above, before the raise).
                     self._total_latency += elapsed
                     self._error_count += 1
                     logger.error(
@@ -198,17 +204,19 @@ class LLMClient:
                     last_error = exc
 
                     if attempt < self._max_retries:
-                        delay = min(2 ** attempt * 2, 30)
+                        retry_delay = min(2 ** attempt * 2, 30)
                         logger.warning(
                             "[%s] %s attempt %d failed (%.1fs): %s — retrying in %ds",
-                            paper_id, stage, attempt + 1, elapsed, exc, delay,
+                            paper_id, stage, attempt + 1, elapsed, exc, retry_delay,
                         )
-                        await asyncio.sleep(delay)
                     else:
                         logger.error(
                             "[%s] %s failed after %d attempts: %s",
                             paper_id, stage, self._max_retries + 1, exc,
                         )
+
+            if retry_delay:
+                await asyncio.sleep(retry_delay)
 
         raise RuntimeError(
             f"[{paper_id}] {stage} failed after {self._max_retries + 1} attempts"

@@ -627,15 +627,28 @@ _BLOB_VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr",
 }
-# Tags that execute or escape the wrapper — never allowed in a verbatim table blob.
-_BLOB_REJECT_TAGS = {"script", "style", "iframe", "object", "embed"}
+# Blobs are sliced verbatim from untrusted OCR'd paper content, so the audit is an ALLOW-list:
+# table structure + inline formatting only. Any other tag (script, meta, base, link, img, a,
+# form, svg, ...) fails — nothing in a blob may navigate, fetch, or execute on open.
+_BLOB_ALLOWED_TAGS = {
+    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
+    "b", "i", "em", "strong", "u", "s", "small", "sub", "sup", "br", "hr", "span", "p", "div",
+}
+# Attributes that can navigate or fetch. No allowed tag needs a URI attribute, so the NAME is
+# rejected outright — immune to scheme obfuscation a value check would have to chase. `style` is
+# included because CSS url()/image-set() fetch on render without any scheme prefix.
+_BLOB_REJECT_ATTRS = {
+    "href", "src", "srcset", "action", "formaction", "xlink:href", "background",
+    "data", "ping", "poster", "cite", "usemap", "style",
+}
 # A raw `<` a browser would tokenise as markup (tag / end tag / comment / decl / PI).
 _BLOB_MARKUP_RE = re.compile(r"<[a-zA-Z/!?]")
 
 
 class _TableBlobAuditor(HTMLParser):
     """Structural audit for a verbatim source-table blob: every opened tag must be closed (void
-    elements exempt), nothing executable (script-ish tags, ``on*`` handler attributes), and no stray
+    elements exempt), only allow-listed table/inline-formatting tags with no navigating/fetching/
+    executable attributes (``on*`` handlers, URI attributes, inline ``style``), and no stray
     ``<`` the browser would tokenise as markup — an unclosed ``<div>`` or half-emitted tag in an
     OCR-mangled table would otherwise swallow the rest of the page."""
 
@@ -645,8 +658,14 @@ class _TableBlobAuditor(HTMLParser):
         self.ok = True
 
     def _check_tag(self, tag: str, attrs: list) -> None:
-        if tag in _BLOB_REJECT_TAGS or any(str(a or "").lower().startswith("on") for a, _ in attrs):
+        if tag not in _BLOB_ALLOWED_TAGS:
             self.ok = False
+            return
+        for name, _value in attrs:
+            name = str(name or "").lower()
+            if name.startswith("on") or name in _BLOB_REJECT_ATTRS:
+                self.ok = False
+                return
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
         self._check_tag(tag, attrs)
@@ -691,10 +710,10 @@ def render_table_prettify(html: str, caption: str = "", marker: str = "") -> str
     """Render a verbatim source ``<table>`` blob inside a namespaced ``kb-measure-table`` wrapper.
 
     The wrapper scopes all styling via descendant selectors (``.kb-measure-table table`` …) so the
-    paper's own table classes/inline styles cannot collide with the viewer's. The table HTML is the
-    paper's own markup, inserted as-is once it passes a structural audit (balanced tags, nothing
-    executable); a mangled blob would swallow the rest of the page, so it falls back to an escaped
-    ``<pre>`` instead — never worse than raw. The caption (the model-chosen block, sliced verbatim in
+    paper's own table classes cannot collide with the viewer's. The table HTML is the paper's own
+    markup, inserted as-is once it passes a structural audit (balanced allow-listed tags, nothing
+    that navigates/fetches/executes); a mangled or unsafe blob would swallow the rest of the page
+    or phone home on open, so it falls back to an escaped ``<pre>`` instead — never worse than raw. The caption (the model-chosen block, sliced verbatim in
     assembly) is shown as a label with its surrounding ``**`` markdown stripped.
     """
     if not html:

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Generate per-section typed-array schemas plus the node-census and relation-pass schemas.
 
-section-ir-0.12: the pipeline is three stages — node census (stage A), relation pass
-(stage B), and per-section content fill (stage C). This script generates every
-structured-output schema from the controlled vocabularies in ``section_pipeline.py``.
-It is authoritative only while kept in sync with ``schemas/*.json``: schema changes are
-sometimes hand-edited into the committed schemas first (e.g. blob-primary evidence), so
-port any hand-edit back here, then VERIFY after running this script that
-``git diff schemas/`` shows only the changes you intended (regeneration clobbers
-anything not ported).
+The pipeline is three stages — node census (stage A), relation pass (stage B), and
+per-section content fill (stage C); stage descriptions embed the release tag from
+``section_pipeline.IR_VERSION``. This script owns exactly five committed schemas,
+generated from the controlled vocabularies in ``section_pipeline.py``:
+``section-{problem,method,evidence}.schema.json``, ``node-census-output.schema.json``
+and ``relation-pass-output.schema.json``. The other two structured-output contracts —
+``metadata-output.schema.json`` and ``references-output.schema.json`` — are
+hand-maintained and NOT generated here. It is authoritative only while kept in sync
+with the five owned ``schemas/*.json``: schema changes are sometimes hand-edited into
+the committed schemas first (e.g. blob-primary evidence), so port any hand-edit back
+here, then VERIFY after running this script that ``git diff schemas/`` shows only the
+changes you intended (regeneration clobbers anything not ported).
 
 Each unit carries two classificatory axes: a generic ``type`` (the scientific-method-anchored
 scope) and a fine-grained ``role`` (the discipline-specific differentia). Problem and Measure
@@ -31,13 +35,17 @@ from section_pipeline import (  # noqa: E402
     EXPERIMENT_SETUP_ROLES,
     FINDING_POLARITIES,
     FINDING_ROLES,
+    IR_VERSION,
     MEASURE_OBJECTIVE_CLASSES,
     MEASURE_TABLE_ROLES,
     METHOD_KINDS,
     METHOD_ROLES,
     NODE_ROLES,
+    SALIENCE_LEVELS,
     SCORE_VALUE_KINDS,
     SECTION_AUTHORS_RELATIONS,
+    STAGE_B_RELATIONS,
+    STAGE_C_RELATIONS,
 )
 
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
@@ -120,6 +128,22 @@ STAGE_C_RELATION_GLOSS: dict[str, str] = {
     "motivates": "motivates = a Problem motivates the Method/ExperimentSetup that addresses it",
 }
 
+# The relation order lists above ARE the schema enums, and a new relation cannot be
+# auto-placed — stage B's cluster ordering and stage C's per-section routing (plus its
+# gloss) are editorial decisions. So refuse to generate, rather than silently emit an
+# enum that strict-mode decoding would use to reject a relation the runtime accepts.
+if set(STAGE_B_RELATION_ORDER) != STAGE_B_RELATIONS:
+    raise ValueError(
+        "STAGE_B_RELATION_ORDER is out of sync with section_pipeline.STAGE_B_RELATIONS: "
+        f"{sorted(set(STAGE_B_RELATION_ORDER) ^ STAGE_B_RELATIONS)}"
+    )
+_STAGE_C_UNION = {rel for rels in STAGE_C_RELATIONS_BY_SECTION.values() for rel in rels}
+if _STAGE_C_UNION != STAGE_C_RELATIONS:
+    raise ValueError(
+        "STAGE_C_RELATIONS_BY_SECTION is out of sync with section_pipeline.STAGE_C_RELATIONS: "
+        f"{sorted(_STAGE_C_UNION ^ STAGE_C_RELATIONS)}"
+    )
+
 ENUM_ORDER: dict[str, list[str]] = {
     "node_role": NODE_ROLE_ORDER,
     "method_role": METHOD_ROLE_ORDER,
@@ -132,6 +156,7 @@ ENUM_ORDER: dict[str, list[str]] = {
     "score_value_kind": ["numeric", "symbolic", "asymptotic", "qualitative", "curve"],
     "measure_objective_class": ["primary_quality", "cost_efficiency", "fairness", "safety", "robustness"],
     "measure_table_role": ["main_result", "ablation"],
+    "salience": SALIENCE_ORDER,
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
@@ -145,6 +170,7 @@ ENUM_VALUES: dict[str, set[str]] = {
     "score_value_kind": SCORE_VALUE_KINDS,
     "measure_objective_class": MEASURE_OBJECTIVE_CLASSES,
     "measure_table_role": MEASURE_TABLE_ROLES,
+    "salience": SALIENCE_LEVELS,
 }
 
 
@@ -170,14 +196,6 @@ def enum_schema(enum_name: str, description: str) -> dict[str, Any]:
     return {
         "type": "string",
         "enum": ordered_enum(enum_name),
-        "description": description,
-    }
-
-
-def inline_enum_schema(values: list[str], description: str) -> dict[str, Any]:
-    return {
-        "type": "string",
-        "enum": values,
         "description": description,
     }
 
@@ -528,7 +546,7 @@ def node_census_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Node Census Output",
         "description": (
-            "Stage A of section-ir-0.13: a flat census of every argumentatively load-bearing "
+            f"Stage A of {IR_VERSION}: a flat census of every argumentatively load-bearing "
             "node, each tagged with one granular role (its type is derived from the role), with "
             "no relations. The census emits Method nodes, the substrate ExperimentSetup nodes "
             "(dataset/benchmark/task), Measure nodes, and the single research-problem Problem "
@@ -614,8 +632,8 @@ def node_census_schema() -> dict[str, Any]:
                             "own work), for task/metric/problem nodes, and when no citation is "
                             "attached."
                         ),
-                        "salience": inline_enum_schema(
-                            SALIENCE_ORDER,
+                        "salience": enum_schema(
+                            "salience",
                             "must = load-bearing for the contribution; should = adds nuance",
                         ),
                     },
@@ -631,7 +649,7 @@ def relation_pass_schema() -> dict[str, Any]:
         "type": "object",
         "title": "Relation Pass Output",
         "description": (
-            "Stage B of section-ir-0.12: structural edges over the full node set. Sees every "
+            f"Stage B of {IR_VERSION}: structural edges over the full node set. Sees every "
             "node, so cross-section composition and measure-subject binding are captured here "
             "with no forward references."
         ),

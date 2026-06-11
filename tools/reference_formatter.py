@@ -255,22 +255,7 @@ def _split_numbered(text: str, marker_re: re.Pattern) -> list[Entry] | None:
             break
     if len(keep) < 2:
         return None
-    boundaries = [cands[i] for i in keep]
-
-    entries: list[Entry] = []
-    # Losslessness beats prettiness: text before the first kept marker (an OCR-mangled first marker
-    # like "[I]", a preamble, or a stray lead the run guard rejected) becomes a marker-less first
-    # entry rather than silently vanishing from the render.
-    lead = _collapse(text[:boundaries[0].start()])
-    if lead:
-        entries.append((None, lead))
-    for i, m in enumerate(boundaries):
-        nxt = boundaries[i + 1].start() if i + 1 < len(boundaries) else len(text)
-        marker = text[m.start():m.end()].strip()
-        body = _collapse(text[m.end():nxt])
-        if body:
-            entries.append((marker, body))
-    return entries or None
+    return _entries_from_boundaries(text, [cands[i] for i in keep])
 
 
 def _longest_increasing(nums: list[int]) -> list[int]:
@@ -313,19 +298,41 @@ def _split_bracketed_keys(text: str) -> list[Entry] | None:
         boundaries.append(m)
     if len(boundaries) < 2:
         return None
+    return _entries_from_boundaries(text, boundaries)
 
+
+def _entries_from_boundaries(text: str, boundaries: list[re.Match]) -> list[Entry] | None:
+    """Cut ``text`` at the surviving marker boundaries into ``(marker, body)`` entries.
+
+    Losslessness beats prettiness, twice over:
+      * text before the first kept marker (an OCR-mangled first marker like "[I]", a preamble, or a
+        stray lead a guard rejected) becomes a marker-less first entry rather than silently
+        vanishing from the render;
+      * a marker whose own body slice is empty — adjacent markers ("[1][2] …") or a bare trailing
+        marker at end-of-blob — folds into the neighboring entry (forward onto the next entry's
+        marker, backward onto the last entry's body) instead of being dropped with its body.
+    """
     entries: list[Entry] = []
-    # Losslessness beats prettiness: any preamble left before the first key becomes a marker-less
-    # first entry rather than silently vanishing from the render.
     lead = _collapse(text[:boundaries[0].start()])
     if lead:
         entries.append((None, lead))
+    pending = ""  # empty-bodied marker(s) carried forward onto the next entry's marker
     for i, m in enumerate(boundaries):
         nxt = boundaries[i + 1].start() if i + 1 < len(boundaries) else len(text)
         marker = text[m.start():m.end()].strip()
+        if pending:
+            marker = f"{pending} {marker}"
+            pending = ""
         body = _collapse(text[m.end():nxt])
         if body:
             entries.append((marker, body))
+        elif i + 1 < len(boundaries):
+            pending = marker
+        elif entries:
+            prev_marker, prev_body = entries[-1]  # trailing bare marker: a lossless under-split
+            entries[-1] = (prev_marker, f"{prev_body} {marker}")
+        else:
+            entries.append((marker, ""))  # no neighbor at all — keep the bare marker
     return entries or None
 
 

@@ -19,8 +19,11 @@ the same paper scores comparably whichever IR version produced it.
 
 Usage:
     python tools/count_extraction.py <dir-or-file> [<dir-or-file> ...]
-Each argument is a batch directory (walked for ``*extraction.json``, excluding
-``*pipeline.json``) or a single extraction JSON. One summary row per argument.
+Each argument is a batch directory (walked for ``*extraction.json``) or a single
+extraction JSON. One summary row per argument. Each logical paper counts once:
+archived baselines / nested re-runs / backup copies map to the same paper key,
+the shallowest copy wins, and the skipped duplicates are reported on stderr —
+otherwise n_papers inflates and every per-paper average is silently skewed.
 """
 
 from __future__ import annotations
@@ -35,17 +38,44 @@ UNIT_TYPES = ["Method", "ExperimentSetup", "Measure", "Finding", "Problem"]
 FIELD_EDGES = ["subject_id", "target_ids", "evaluated_on", "context_ids", "setup_ids"]
 
 
+def _paper_key(path: Path) -> str:
+    """Logical paper identity for an extraction file.
+
+    Two on-disk layouts exist: per-paper dirs holding the stage-numbered
+    ``06_extraction.json`` (identity = parent dir name) and flat batch dirs
+    holding ``<paper>_extraction.json`` (identity = stem). A stem that is empty
+    or purely numeric once ``extraction`` is stripped is a stage number, not a
+    paper id, so the parent dir names the paper.
+    """
+    base = path.name[: -len(".json")]
+    base = base[: -len("extraction")].rstrip("_-. ")
+    if base and not base.isdigit():
+        return base
+    return path.parent.name
+
+
 def iter_extraction_files(arg: str) -> list[Path]:
     path = Path(arg)
     if path.is_file():
         return [path]
     if not path.is_dir():
         return []
-    return sorted(
-        p
-        for p in path.rglob("*extraction.json")
-        if not p.name.endswith("pipeline.json")
-    )
+    by_key: dict[str, list[Path]] = {}
+    for p in sorted(path.rglob("*extraction.json")):
+        by_key.setdefault(_paper_key(p), []).append(p)
+    files: list[Path] = []
+    for key, copies in by_key.items():
+        # Shallowest copy wins (archives/backups nest deeper); ties break
+        # lexicographically so the choice is deterministic.
+        copies.sort(key=lambda p: (len(p.relative_to(path).parts), str(p)))
+        files.append(copies[0])
+        for dup in copies[1:]:
+            print(
+                f"WARNING: duplicate extraction for paper '{key}': "
+                f"counting {copies[0]}, skipping {dup}",
+                file=sys.stderr,
+            )
+    return sorted(files)
 
 
 def count_one(extraction: dict[str, Any]) -> dict[str, int]:

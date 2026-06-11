@@ -4,7 +4,11 @@
 The per-paper outputs are deep nested trees an agent must open and join file-by-file; this tool
 emits the missing access layers (issues/agent-usability-report-2026-06-11.md, RF-06/09/10/19/20):
 
-  <root>/_manifest.json      RF-19  data dictionary / file contracts (same as fresh runs emit)
+  <root>/_manifest.json      RF-19  data dictionary / file contracts (same as fresh runs emit);
+                                    ir_version reflects the corpus's OBSERVED per-paper
+                                    extraction_notes.ir_version (retrofit-skipped papers count),
+                                    not the current pipeline version — mixed/missing versions
+                                    stamp 'mixed'/'unknown' + an ir_version_observed distribution
   <root>/_catalog.jsonl      RF-20  one routing record per paper (title/venue/year/spine/facets)
   <root>/_cards.jsonl        RF-06  one denormalized retrieval card per unit (embed_text ready)
   <root>/_result_rows.jsonl  RF-09  one flat (system, dataset, metric, value) row per score —
@@ -30,6 +34,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -40,7 +45,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from production.outputs import save_json  # noqa: E402
 from section_pipeline import (  # noqa: E402
+    ACCEPTED_IR_VERSIONS,
     CONTRIBUTION_ROLES,
+    IR_VERSION,
     MARKER_NAMESPACES,
     STAGE_B_RELATIONS_NOTE,
     _annotate_quantitative_payload,
@@ -113,10 +120,33 @@ def _census_index(census: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def retrofit_paper(
-    paper_dir: Path, *, flatten_sections: bool, default_venue: str | None = None
+    paper_dir: Path,
+    *,
+    flatten_sections: bool,
+    default_venue: str | None = None,
+    accepted_versions: set[str] | None = ACCEPTED_IR_VERSIONS,
 ) -> dict[str, Any]:
-    """Apply the deterministic agent-readiness enrichments to one already-extracted paper dir."""
+    """Apply the deterministic agent-readiness enrichments to one already-extracted paper dir.
+
+    Version gate (RF-21): only corpora whose ``extraction_notes.ir_version`` is in
+    ``accepted_versions`` are touched. An out-of-version corpus (e.g. section-ir-0.10) is left
+    completely untouched — otherwise retrofit would re-run the CURRENT ``validate_section_ir`` and
+    overwrite ``07_validation.json`` with ``valid: false`` (its ir_version is not in
+    ACCEPTED_IR_VERSIONS), silently corrupting a previously-valid corpus. Pass ``accepted_versions=
+    None`` to retrofit regardless of version (the deliberate override).
+    """
     stats = {"paper": paper_dir.name, "changed_files": []}
+
+    extraction = _load(paper_dir / "06_extraction.json")
+    if accepted_versions is not None:
+        ir_version = (
+            (extraction.get("extraction_notes") or {}).get("ir_version")
+            if isinstance(extraction, dict)
+            else None
+        )
+        if ir_version not in accepted_versions:
+            stats["skipped"] = f"ir_version {ir_version!r} not in {sorted(accepted_versions)}"
+            return stats
 
     metadata = _load(paper_dir / "02_metadata.json")
     before = _dumps(metadata)
@@ -133,7 +163,6 @@ def retrofit_paper(
 
     census = _load(paper_dir / "01_census.json")
     references = _load(paper_dir / "03_references.json")
-    extraction = _load(paper_dir / "06_extraction.json")
     if isinstance(extraction, dict):
         ext_before = _dumps(extraction)
         refs_before = _dumps(references)
@@ -528,17 +557,31 @@ def lift_blob_rows(paper_id: str, extraction: dict[str, Any]) -> list[dict[str, 
         for grid_rows in _parse_table_grids(table.get("html", "")):
             grid = _expand_grid(grid_rows)
             labels, body_start = _split_header(grid)
-            for row in grid[body_start:]:
+            body = grid[body_start:]
+            # A body cell spanning rows in column 0 is a row-group label (e.g. a 'Weak/Full
+            # supervision' band over method rows) — _expand_grid carries it into every spanned
+            # row, where it would shadow the real per-row name. Treat column 0 as a group column
+            # for the whole table (single-row groups carry rowspan=1, so detection is per-grid).
+            group_col = any(row and row[0]["rowspan"] > 1 for row in body)
+            for row in body:
                 seen: set[int] = set()  # colspan/rowspan expansion shares cell objects
-                row_label = None
-                label_cell_id = None
+                leading: list[dict[str, Any]] = []  # distinct non-numeric cells among row[:2]
                 for cell in row[:2]:
-                    if cell["text"] and _parse_value_num(cell["text"]) is None:
-                        row_label = cell["text"]
-                        label_cell_id = id(cell)
-                        break
+                    if cell["text"] and _parse_value_num(cell["text"]) is None \
+                            and all(cell is not c for c in leading):
+                        leading.append(cell)
+                if group_col and len(leading) == 2:
+                    row_label = f"{leading[0]['text']} / {leading[1]['text']}"
+                    label_cells = leading
+                elif leading:
+                    row_label = leading[0]["text"]
+                    label_cells = leading[:1]
+                else:
+                    row_label = None
+                    label_cells = []
+                label_cell_ids = {id(c) for c in label_cells}
                 for col, cell in enumerate(row):
-                    if id(cell) in seen or id(cell) == label_cell_id:
+                    if id(cell) in seen or id(cell) in label_cell_ids:
                         continue
                     seen.add(id(cell))
                     text = cell["text"]
@@ -635,6 +678,40 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
+def stamp_observed_ir_version(
+    manifest: dict[str, Any], observed_versions: list[str | None]
+) -> str | None:
+    """Replace the manifest's hardcoded current-pipeline ir_version with what the corpus carries.
+
+    ``build_output_manifest`` stamps ``IR_VERSION``; over an older corpus (which the retrofit
+    version gate deliberately leaves untouched) that would tell a consuming agent the wrong schema
+    for the files beside it. Every catalogued paper's ``extraction_notes.ir_version`` counts as
+    observed — including retrofit-skipped ones, because the manifest describes the corpus as it
+    sits on disk. Uniform version → stamped verbatim. Mixed or missing versions → ``ir_version``
+    becomes the sentinel ``'mixed'``/``'unknown'`` (never a version the corpus does not uniformly
+    carry) and ``ir_version_observed`` records the {version: paper count} distribution. Returns a
+    warning for stdout when the result differs from the current pipeline version, else None."""
+    counts = Counter(v if isinstance(v, str) and v else "unknown" for v in observed_versions)
+    if not counts:
+        return None
+    if len(counts) == 1 and "unknown" not in counts:
+        version = next(iter(counts))
+        manifest["ir_version"] = version
+        if version == IR_VERSION:
+            return None
+        return (
+            f"corpus ir_version is {version!r}, not the current pipeline {IR_VERSION!r} — "
+            "manifest stamped with the observed version"
+        )
+    distribution = dict(sorted(counts.items()))
+    manifest["ir_version"] = "mixed" if len(counts) > 1 else "unknown"
+    manifest["ir_version_observed"] = distribution
+    return (
+        f"corpus ir_version is not uniform: {distribution} — manifest ir_version set to "
+        f"{manifest['ir_version']!r} (per-paper counts in ir_version_observed)"
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="Output root containing per-paper subdirectories")
@@ -645,6 +722,11 @@ def main() -> int:
     ap.add_argument("--default-venue", default=None,
                     help="Corpus-level venue fallback when dirnames carry no venue token "
                          "(stamped venue_source='corpus_default'); e.g. --default-venue CVPR")
+    ap.add_argument("--retrofit-any-version", action="store_true",
+                    help="Retrofit/revalidate paper dirs regardless of extraction_notes.ir_version. "
+                         f"By default only {sorted(ACCEPTED_IR_VERSIONS)} are touched; an older "
+                         "corpus is left untouched so its 07_validation.json is not flipped to "
+                         "invalid by the current validator.")
     args = ap.parse_args()
 
     if not args.root.is_dir():
@@ -662,16 +744,24 @@ def main() -> int:
     cards: list[dict[str, Any]] = []
     result_rows: list[dict[str, Any]] = []
     per_paper_refs: list[tuple[str, dict[str, Any] | None]] = []
+    observed_versions: list[str | None] = []
     retrofit_changed = 0
+    retrofit_skipped = 0
     blob_refs_seen = False
     fidelity_checked_seen = False
     wrapped_sections_seen = False
 
     for pdir in paper_dirs:
         if not args.no_retrofit:
-            stats = retrofit_paper(pdir, flatten_sections=args.flatten_sections,
-                                   default_venue=args.default_venue)
-            if stats["changed_files"]:
+            stats = retrofit_paper(
+                pdir,
+                flatten_sections=args.flatten_sections,
+                default_venue=args.default_venue,
+                accepted_versions=None if args.retrofit_any_version else ACCEPTED_IR_VERSIONS,
+            )
+            if stats.get("skipped"):
+                retrofit_skipped += 1
+            elif stats["changed_files"]:
                 retrofit_changed += 1
 
         census = _load(pdir / "01_census.json")
@@ -682,6 +772,7 @@ def main() -> int:
         if not isinstance(extraction, dict):
             continue
         notes = extraction.get("extraction_notes") or {}
+        observed_versions.append(notes.get("ir_version"))
         blob_refs_seen = blob_refs_seen or bool(notes.get("blob_primary_references"))
         fidelity = notes.get("score_fidelity") or {}
         fidelity_checked_seen = fidelity_checked_seen or bool(fidelity.get("checked"))
@@ -707,6 +798,9 @@ def main() -> int:
         verify_scores=fidelity_checked_seen,
         flattened_sections=not wrapped_sections_seen,
     )
+    version_warning = stamp_observed_ir_version(manifest, observed_versions)
+    if version_warning:
+        print(f"WARNING: {version_warning}")
     save_json(args.root / "_manifest.json", manifest)
     _write_jsonl(args.root / "_catalog.jsonl", catalog)
     _write_jsonl(args.root / "_cards.jsonl", cards)
@@ -724,7 +818,8 @@ def main() -> int:
     multi = [e for e in entity_index["entities"] if len({p["paper_id"] for p in e["papers"]}) > 1]
     print(f"papers indexed       : {len(catalog)}")
     if not args.no_retrofit:
-        print(f"papers retrofitted   : {retrofit_changed} changed")
+        skipped_note = f", {retrofit_skipped} skipped (out-of-version)" if retrofit_skipped else ""
+        print(f"papers retrofitted   : {retrofit_changed} changed{skipped_note}")
     print(f"catalog rows         : {len(catalog)} -> _catalog.jsonl")
     print(f"unit cards           : {len(cards)} -> _cards.jsonl")
     print(f"result rows          : {len(result_rows)} ({n_numeric} with value_num; "

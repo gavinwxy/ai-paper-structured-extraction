@@ -137,5 +137,7 @@ def main() -> None:
 
     summary = asyncio.run(run_batch(config))
 
-    if summary.get("failed", 0) > 0:
+    # An error summary (e.g. no papers discovered) carries no "failed" count — it must still
+    # exit non-zero, or a mis-pointed batch/CI run looks like a clean success.
+    if summary.get("failed", 0) > 0 or summary.get("error"):
         sys.exit(1)

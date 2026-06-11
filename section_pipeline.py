@@ -122,20 +122,6 @@ SECTION_PREFERRED_ANCHOR_TYPE: dict[str, str] = {
     "method": "Method",
     "evidence": "Measure",
 }
-# Census node types each content section materializes into full units. Method nodes
-# become Method units in the method section; Measure and the substrate-role
-# ExperimentSetup nodes (dataset/benchmark/task) become units in the evidence section.
-# Problem and Finding are not census nodes — they are born during content extraction
-# (Problem in the problem section, Finding in evidence). The configuration-role
-# ExperimentSetup units (data_split/inference_protocol/...) are likewise born in evidence.
-SECTION_MATERIALIZED_NODE_TYPES: dict[str, set[str]] = {
-    "problem": set(),
-    "method": {"Method"},
-    # evidence also materializes the FG-5 `contribution_finding` census root (a Finding): it is
-    # the one Finding the census plans, reused by id as the headline finding instead of a freshly
-    # born one. All other Findings are still born here.
-    "evidence": {"Measure", "ExperimentSetup", "Finding"},
-}
 # Content sections that author edges in their own `relations[]`: evidence authors the
 # claim-centric `about`/`supports`; problem authors `motivates` (Problem -> the census
 # Method/ExperimentSetup it justifies). The closing `resolves` (Finding -> Problem) is NOT authored
@@ -986,6 +972,17 @@ def _rewrite_unit_references(sections: list[dict[str, Any]], replacements: dict[
                 values = unit.get(field)
                 if isinstance(values, list):
                     unit[field] = [replacements.get(value, value) for value in values]
+            # The Measure-level setup_ids/finding_ids lists are not the only id references: each
+            # score row carries its own setup_id/system_id/opponent_id/judge_id. Repoint those too
+            # (mirrors _sanitize_unit_ids). Missing this meant a row pointing at a merged-away
+            # duplicate was later BLANKED by _repair_score_refs, silently dropping the row's setup
+            # binding even though the survivor exists and the Measure-level list was repointed.
+            for row in unit.get("scores", []) or []:
+                if not isinstance(row, dict):
+                    continue
+                for key in ("system_id", "setup_id", "opponent_id", "judge_id"):
+                    if row.get(key) in replacements:
+                        row[key] = replacements[row[key]]
 
 
 def _rewrite_relation_endpoints(relations: list[dict[str, Any]], replacements: dict[str, str]) -> None:
@@ -1558,9 +1555,22 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
         # speculative roots from surviving (when no root is `must`, keep just the first).
         must_roots = [n for n in roots if n.get("salience") == "must"]
         keep_ids = {id(n) for n in (must_roots or roots[:1])}
+        # Demote each non-kept extra root to a valid NON-root role *of its own type*: a Method
+        # extra -> `component`, an ExperimentSetup extra -> `benchmark`. A `contribution_finding`
+        # extra is type Finding, which has NO valid non-root census role (Finding content roles
+        # like descriptive/comparative are authored in the evidence section, not the census), so
+        # coercing it to an ExperimentSetup role ("benchmark") would make the node role/type/id
+        # mutually inconsistent and hard-fail validate_census — killing the whole paper. Leave such
+        # a root as a co-equal `contribution_finding` instead (root_count > 1 is valid;
+        # co_contribution links them). The same conservative default holds for any future
+        # contribution role whose type has no non-root role to fall back to.
+        demote_role_by_type = {"Method": "component", "ExperimentSetup": "benchmark"}
         for extra in roots:
-            if id(extra) not in keep_ids:
-                extra["role"] = "component" if extra.get("type") == "Method" else "benchmark"
+            if id(extra) in keep_ids:
+                continue
+            demoted = demote_role_by_type.get(extra.get("type"))
+            if demoted is not None:
+                extra["role"] = demoted
     return normalized
 
 
@@ -2262,7 +2272,11 @@ def _warn_duplicate_score_rows(sections: list[dict[str, Any]]) -> list[str]:
 _SCI_NOTATION_RE = re.compile(
     r"^([+-]?\d+(?:\.\d+)?)\s*[x×*]\s*10\s*(?:\^|\*\*)?\s*\(?([+-]?\d+)\)?"
 )
-_LEADING_NUM_RE = re.compile(r"^([+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))")
+# Leading number, with an optional E-notation exponent ('1e3', '6.4e-4', '1.18e+13'). Without the
+# `[eE][+-]?\d+` tail, float() would only see the mantissa (the regex stops at 'e'), silently
+# dropping the exponent and returning a value off by 10^exp — the exact mis-parse the comment above
+# warns about, for the other common scientific-notation spelling.
+_LEADING_NUM_RE = re.compile(r"^([+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)")
 # Symbols that may legitimately precede a number without making the value qualitative prose.
 _NUM_PREFIX_CHARS = "≈~<>≤≥±$ \t"
 
@@ -2518,6 +2532,11 @@ def _repair_unit_enums(sections: list[dict[str, Any]]) -> list[str]:
             elif utype == "Measure":
                 _drop_invalid_optional(
                     unit, "objective_class", MEASURE_OBJECTIVE_CLASSES, "Measure", uid
+                )
+                # The evidence prompt forbids comparison_direction:"" but json_object mode cannot
+                # enforce the enum; dropping falls back to the field's omitted/unspecified default.
+                _drop_invalid_optional(
+                    unit, "comparison_direction", COMPARISON_DIRECTIONS, "Measure", uid
                 )
                 # 0.12 blob-primary: also optional, also filled freely; dropping it falls back
                 # to the main_result default instead of hard-failing the paper on e.g. "main".
@@ -2963,7 +2982,9 @@ def _attach_model_captions(
                 continue
             tmarker = _canon_marker(unit.get("source_table_marker") or "")
             cmarker = _canon_marker(unit.get("caption_marker") or "")
-            if not cmarker or tmarker not in source_tables:
+            # `not tmarker` also keys the anchorless (pre-first-[§N]) table stored under "" —
+            # deliberately unaddressable, so a markerless Measure must never drive its caption.
+            if not cmarker or not tmarker or tmarker not in source_tables:
                 continue
             block_text = blocks.get(cmarker.lstrip("§"))
             if not block_text:
@@ -3521,31 +3542,60 @@ def assemble_extraction(
 
 
 def _extract_balanced_json(raw: str) -> str:
+    """Extract a balanced ``{...}`` group from a response that is not a bare JSON object.
+
+    A prose preamble may itself contain a brace group ("...for set {A, B}: {...}"), so the first
+    balanced group is not necessarily the payload: a group json.loads rejects is skipped and the
+    scan resumes AFTER it (never inside — a nested fragment of an almost-valid payload must not
+    win over the caller's stray-backslash repair of the full group), bounded. When no candidate
+    parses, the first balanced group is still returned so that repair sees its usual input.
+    """
+
+    def _balanced_group(start: int) -> str | None:
+        depth = 0
+        in_string = False
+        escape = False
+        for pos in range(start, len(raw)):
+            ch = raw[pos]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return raw[start : pos + 1]
+        return None
+
     start = raw.find("{")
     if start < 0:
         raise ValueError("No JSON object found in LLM response")
-
-    depth = 0
-    in_string = False
-    escape = False
-    for pos in range(start, len(raw)):
-        ch = raw[pos]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
+    first_group: str | None = None
+    for _ in range(16):  # bound on '{' candidates: brace-heavy garbage must not go quadratic
+        if start < 0:
+            break
+        group = _balanced_group(start)
+        if group is None:
+            start = raw.find("{", start + 1)
             continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return raw[start : pos + 1]
+        if first_group is None:
+            first_group = group
+        try:
+            json.loads(group)
+        except json.JSONDecodeError:
+            start = raw.find("{", start + len(group))
+            continue
+        return group
+    if first_group is not None:
+        return first_group
     raise ValueError("Could not find a balanced JSON object in LLM response")
 
 
@@ -3977,9 +4027,12 @@ def reconcile_reference_units(
         for node in census.get("nodes", []) or []:
             if isinstance(node, dict) and node.get("role") in CONTRIBUTION_ROLES:
                 cid = node.get("node_id")
+                # First MATERIALIZED contribution only: a contribution_finding root materializes
+                # as a Finding (never in the Method/ExperimentSetup index), so stopping at it
+                # would silently skip the whole FG-12 backfill — keep scanning past it.
                 if isinstance(cid, str) and cid in type_by_id:
                     contribution_id = cid
-                break
+                    break
     # Python owns origin="reference" edges (the model never emits `origin`); drop any from a
     # previous reconcile and regenerate below, so replays (tools/relink_references.py) apply
     # current guards instead of preserving stale backfills.
@@ -4737,7 +4790,7 @@ def _validate_unit_fields(
                         f"Measure {uid} setup_id {setup_id} must point to a local ExperimentSetup"
                     )
         comparison_direction = unit.get("comparison_direction")
-        if "comparison_direction" in unit and comparison_direction not in COMPARISON_DIRECTIONS:
+        if comparison_direction is not None and comparison_direction not in COMPARISON_DIRECTIONS:
             issues.append(f"Measure {uid} has invalid comparison_direction: {comparison_direction}")
         objective_class = unit.get("objective_class")
         if objective_class is not None and objective_class not in MEASURE_OBJECTIVE_CLASSES:

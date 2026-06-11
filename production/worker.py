@@ -84,10 +84,13 @@ async def _run_paper_pipeline(
 ) -> dict[str, Any]:
     """Internal pipeline execution for one paper."""
     t0 = time.monotonic()
-    paper_dir = ensure_paper_dir(config.output_dir, paper_id)
-    write_status(paper_dir, "in_progress")
-
+    # Setup (per-paper mkdir / in-progress status write) runs inside the try: an OSError here
+    # must still return the {"status": "failed"} dict — an escaped exception bypasses the
+    # runner's ProgressTracker accounting.
+    paper_dir: Path | None = None
     try:
+        paper_dir = ensure_paper_dir(config.output_dir, paper_id)
+        write_status(paper_dir, "in_progress")
         paper_content = paper_path.read_text(encoding="utf-8")
         logger.info("[%s] Starting extraction (%d chars)", paper_id, len(paper_content))
         # The proxy prompt-cache routing key is unsupported on official DeepSeek (caching is
@@ -231,8 +234,9 @@ async def _run_paper_pipeline(
         # Drain on failure too: captures cost-to-failure (e.g. a truncated evidence pass)
         # and prevents the per-paper accumulator from leaking across a batch.
         token_usage = llm.drain_usage(paper_id)
-        write_status(paper_dir, "failed", error=str(exc), timing_s=round(elapsed, 1),
-                     token_usage=token_usage)
+        if paper_dir is not None:  # setup may have failed before the dir existed
+            write_status(paper_dir, "failed", error=str(exc), timing_s=round(elapsed, 1),
+                         token_usage=token_usage)
         logger.error("[%s] FAILED (%.1fs): %s", paper_id, elapsed, exc)
         return {
             "paper_id": paper_id,
@@ -415,11 +419,13 @@ async def _run_all_content_sections(
         # P3 lever: run the cheapest section (SECTION_ORDER[0] = "problem") to completion first so
         # its [system+paper+spine+registry+relations] prefix populates the automatic prefix-cache;
         # the remaining sections then hit that warm prefix instead of racing it cold. Mirror
-        # gather(return_exceptions=True) by capturing the warmer's exception so the loop below
-        # stays aligned to SECTION_ORDER and aggregates errors identically.
+        # gather(return_exceptions=True) for ordinary errors by capturing the warmer's exception
+        # so the loop below stays aligned to SECTION_ORDER and aggregates errors identically.
+        # CancelledError stays uncaught: external cancellation (shutdown) must propagate, not be
+        # reclassified as a section failure that still launches the remaining sections.
         try:
             first: Any = await _section(SECTION_ORDER[0])
-        except BaseException as exc:  # noqa: BLE001 — match gather's exception capture
+        except Exception as exc:
             first = exc
         rest = await asyncio.gather(
             *(_section(s) for s in SECTION_ORDER[1:]), return_exceptions=True

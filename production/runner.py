@@ -122,6 +122,9 @@ async def run_batch(config: Config) -> dict[str, Any]:
         if isinstance(result, BaseException):
             paper_id = papers_to_process[i][0]
             logger.error("[%s] Unexpected error: %s", paper_id, result)
+            # This task never reached _process_and_track's accounting — count it here so
+            # progress.summary() (and the exit code derived from it) matches paper_results.
+            progress.mark_failed()
             paper_results.append({
                 "paper_id": paper_id,
                 "status": "failed",
