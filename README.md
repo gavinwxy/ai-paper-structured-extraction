@@ -97,15 +97,26 @@ gets its own output subdirectory holding the staged intermediates and the final 
 ```
 <output_dir>/<paper_id>/
 ├── 01_census.json                              # stage A
-├── 02_metadata.json                            # title/authors/year/venue sidecar
+├── 02_metadata.json                            # title/authors/year/venue (+ dirname backfill, has_code/has_data)
 ├── 03_references.json                          # bibliography sidecar (+ reconciled provides_unit_ids)
-├── 04_relations.json                           # stage B
-├── 05_sections/{problem,method,evidence}.json  # stage C (per section)
-├── 06_extraction.json                          # ← final assembled section-IR
+├── 04_relations.json                           # stage B subset (carries a note; canonical edges live in 06)
+├── 05_sections/{problem,method,evidence}.json  # stage C (per section, saved flat)
+├── 06_extraction.json                          # ← final assembled section-IR (canonical)
 ├── 07_validation.json                          # validation issues ([] = clean)
 ├── extraction.html                             # rendered view
 └── status.json
+<output_dir>/_manifest.json                     # data dictionary / file contracts (agent-readiness)
 <output_dir>/run_summary.json                   # batch-level summary
+```
+
+Deterministic agent-readiness enrichments ship in every fresh run (no flags): score rows carry
+`value_num`, Measures carry `has_quantitative_payload`, units with `cite_keys` carry resolved
+`ref_ids`, `extraction_notes.score_fidelity` is always present, and `marker_namespaces`
+disambiguates the two `§N` schemes. To retrofit an **older** corpus and build the corpus-level
+retrieval artifacts (`_catalog.jsonl`, `_cards.jsonl`, `_result_rows.jsonl`, `_entity_index.json`):
+
+```bash
+.venv/bin/python tools/build_agent_index.py <output_dir> --flatten-sections
 ```
 
 Runs are **resumable** — already-completed papers are skipped on re-run; pass `--force` to
