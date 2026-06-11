@@ -200,8 +200,13 @@ shows reference badges/links.
 python tools/generate_section_schemas.py
 ```
 
-All JSON schemas are generated from constants in `section_pipeline.py` — **never hand-edit the
-JSON**.
+Most JSON schemas are generated from constants in `section_pipeline.py`. The exception is the
+blob-primary fields in `section-evidence.schema.json`, which are hand-edited into the committed
+schema first (the committed `schemas/*.json` are the source of truth). If you change a schema, port
+any hand-edit back into the `section_pipeline.py` constants, **then** re-run the generator and verify
+`git diff schemas/` shows only the changes you intended — regeneration clobbers anything not ported.
+(`metadata-output.schema.json` and `references-output.schema.json` are hand-maintained and are not
+produced by the generator.)
 
 ## Configuration
 
@@ -287,7 +292,8 @@ module · **Schema:** `schemas/section-{section}.schema.json`
 The shared core carries only the rules common to every section (identifiers, provenance format, the
 output envelope, universal hard constraints) and is **byte-identical** across all section calls — so
 the paper text stays in the cross-section prompt cache. Each per-section module
-(`prompts/section-extraction/section-modules/{problem,method,evidence}.md`) is a self-contained
+(`prompts/section-extraction/section-modules/{problem,method,evidence}.md`; the evidence module is
+`evidence-blob.md` by default, or `evidence.md` with `--no-blob-primary-evidence`) is a self-contained
 contract: that section's allowed unit types and field contracts, the controlled vocabularies and
 relation subset it uses, a worked example, and its section-specific rules.
 
@@ -421,9 +427,9 @@ Each LLM call has a paired prompt + JSON schema:
 | Relation pass | `relation-pass.md` | `relation-pass-output.schema.json` |
 | Problem section | `section-extraction-pass.md` + `section-modules/problem.md` | `section-problem.schema.json` |
 | Method section | `section-extraction-pass.md` + `section-modules/method.md` | `section-method.schema.json` |
-| Evidence section | `section-extraction-pass.md` + `section-modules/evidence.md` | `section-evidence.schema.json` |
+| Evidence section | `section-extraction-pass.md` + `section-modules/evidence-blob.md` (default; `evidence.md` with `--no-blob-primary-evidence`) | `section-evidence.schema.json` |
 | Metadata (sidecar) | `metadata-extraction.md` | `metadata-output.schema.json` |
-| References (sidecar) | `references-extraction.md` | `references-output.schema.json` |
+| References (sidecar) | `references-extraction-blob.md` (default; `references-extraction.md` with `--no-blob-primary-references`) | `references-output.schema.json` |
 
 In json_object mode the schema is rendered into the prompt as the OUTPUT FORMAT CONTRACT instead of
 sent as `response_format` — see [Model compatibility](#model-compatibility).
@@ -439,20 +445,23 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 │   ├── llm.py  outputs.py  progress.py  #   async transport, atomic writes, progress
 ├── prompts/
 │   ├── metadata-extraction.md           # Metadata sidecar prompt
-│   ├── references-extraction.md         # References sidecar prompt
+│   ├── references-extraction.md         # References sidecar prompt (--no-blob-primary-references)
+│   ├── references-extraction-blob.md    # References sidecar prompt (blob-primary, default)
 │   └── section-extraction/
 │       ├── node-census.md               # Stage A prompt
 │       ├── relation-pass.md             # Stage B prompt
 │       ├── section-extraction-pass.md   # Stage C shared core (rules common to all sections)
 │       └── section-modules/             # Self-contained per-section contracts (section_focus)
-│           ├── problem.md  method.md  evidence.md
-├── schemas/                             # Generated JSON schemas (do not hand-edit)
+│           ├── problem.md  method.md  evidence.md   # evidence.md = --no-blob-primary-evidence
+│           └── evidence-blob.md                     # blob-primary evidence (default)
+├── schemas/                             # JSON schemas (generated; evidence schema's blob-primary fields are hand-edited — see "Regenerate schemas")
 │   ├── node-census-output.schema.json   relation-pass-output.schema.json
 │   ├── section-{problem,method,evidence}.schema.json
 │   └── metadata-output.schema.json      references-output.schema.json
 ├── tools/
 │   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
 │   ├── render_extraction.py             # Render extraction JSON → HTML
+│   ├── reference_formatter.py           # Render-time rule-based bibliography prettifier (used by render_extraction.py)
 │   ├── count_extraction.py              # Node/relation counts
 │   ├── relink_references.py             # Replay reference reconcile over an existing batch (in place)
 │   ├── ab_reference_roles.py            # A/B-test the references-stage citation-relation vocab
