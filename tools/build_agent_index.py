@@ -26,7 +26,7 @@ marker_namespaces (RF-11-lite), and the cite-key reconcile replay that stamps un
 
 Usage:
     python tools/build_agent_index.py <output_root> [--no-retrofit] [--flatten-sections]
-    python tools/build_agent_index.py production-outputs/agent_index_validation --flatten-sections
+    python tools/build_agent_index.py production-outputs/cvpr_seg_50_v0.12 --flatten-sections
 """
 from __future__ import annotations
 
