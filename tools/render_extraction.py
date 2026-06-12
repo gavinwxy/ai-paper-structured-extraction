@@ -385,15 +385,29 @@ def render_formula_block(name: str, expr: str, desc: str, symbols: list | None) 
 
 
 def render_formulas(formulas: list | None) -> str:
-    blocks = "".join(
-        render_formula_block(f.get("name", ""), f.get("expression", ""), "", f.get("symbols", []))
-        for f in (formulas or [])
-        if isinstance(f, dict) and f.get("expression")
+    # 0.14: the objective lives in formulas[] as the role='objective' entry (with its one-line
+    # description); split it out into the Objective group the old standalone field used to fill.
+    entries = [f for f in (formulas or []) if isinstance(f, dict) and f.get("expression")]
+    objective_blocks = "".join(
+        render_formula_block(f.get("name", ""), f["expression"], f.get("description", ""), f.get("symbols", []))
+        for f in entries
+        if f.get("role") == "objective"
     )
-    return f"<div class='fg'><div class='fl'>Formulas</div>{blocks}</div>" if blocks else ""
+    plain_blocks = "".join(
+        render_formula_block(f.get("name", ""), f["expression"], "", f.get("symbols", []))
+        for f in entries
+        if f.get("role") != "objective"
+    )
+    html = ""
+    if plain_blocks:
+        html += f"<div class='fg'><div class='fl'>Formulas</div>{plain_blocks}</div>"
+    if objective_blocks:
+        html += f"<div class='fg'><div class='fl'>Objective</div>{objective_blocks}</div>"
+    return html
 
 
 def render_objective(obj: dict | None) -> str:
+    # Legacy standalone objective_function (pre-0.14 corpora rendered without retrofit).
     if not isinstance(obj, dict) or not obj.get("expression"):
         return ""
     block = render_formula_block("", obj["expression"], obj.get("description", ""), obj.get("symbols", []))

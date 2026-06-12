@@ -126,29 +126,21 @@
                     "expression": {
                       "type": "string",
                       "description": "The equation itself, as LaTeX or plain text, e.g. 'softmax(QK^T/sqrt(d_k))V'"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "objective"
+                      ],
+                      "description": "Functional tag: 'objective' marks the loss/optimization target the method minimizes/maximizes (at most one entry per distinct objective; a method with no stated objective tags nothing). Omit on ordinary defining equations."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "One line on what the objective optimizes; only on a role='objective' entry \u2014 omit on all other formulas"
                     }
                   }
                 },
-                "description": "Key defining equations of the method, each with a short label; omit when the method states none"
-              },
-              "objective_function": {
-                "type": "object",
-                "required": [
-                  "expression",
-                  "description"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "expression": {
-                    "type": "string",
-                    "description": "The objective or loss as LaTeX or plain text, e.g. 'L = -sum log P(y|x)'"
-                  },
-                  "description": {
-                    "type": "string",
-                    "description": "What the objective optimizes; empty string when only the formula is reported"
-                  }
-                },
-                "description": "The optimization objective or loss the method minimizes/maximizes; omit when the method defines none"
+                "description": "Key defining equations of the method, each with a short label; the entry tagged role='objective' is the optimization objective/loss; omit the field when the method states no equations"
               },
               "implementation_notes": {
                 "type": "string",

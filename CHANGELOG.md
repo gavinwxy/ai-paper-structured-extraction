@@ -1,12 +1,66 @@
 # 更新日志（section-ir 抽取框架）
 
-本文件整理 `section-ir` 论文抽取框架从 **0.10** 到 **0.13** 的主要改动。
-当前 `IR_VERSION = section-ir-0.13`，`ACCEPTED_IR_VERSIONS = {0.12, 0.13}`（见 `section_pipeline.py:158`）。
+本文件整理 `section-ir` 论文抽取框架从 **0.10** 起的主要改动。
+当前 `IR_VERSION = section-ir-0.14`，`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14}`（见 `section_pipeline.py`）。
 
 版本主线分支：`planning-stage-redesign-deepseek-light`（0.12+），
 0.10 在 `planning-stage-redesign-deepseek-heavy-fix` 上落地。
 
 格式约定：每个版本列出主题、关键改动与对应 commit；带 A/B 实测数字的结论尽量给出量化结果。
+
+---
+
+## 0.14 — 公式统一：objective_function 并入 formulas[]
+
+**日期**：2026-06-12
+
+消除 Method 单元上的本体冗余：独立的 `objective_function` 字段与 `formulas[]` 在语义上重叠
+（语料扫描：398 个带目标函数的 Method 单元中 **110 个（27.6%）同一表达式被转写两次**，涉及 68 篇），
+且单槽位设计无法表达多目标方法（GAN 对抗目标、多任务损失）。
+
+### Schema / prompt
+- `objective_function` 字段删除；优化目标改为 `formulas[]` 中带 `"role": "objective"` 标签的条目，
+  其"优化什么"的一句话说明 `description` 只允许出现在 objective 条目上（不回吐 0.12 lean-formulas 的成本战果）。
+- `FORMULA_ROLES = {"objective"}`（sparse 单值枚举，后续可 E1 式追加）。
+- method.md 新增**公式归属规则**：公式属于定义它的单元；组合方法的父单元只保留组合目标
+  （如 `L = L^A + αL^R`），不重抄子单元的分量 loss（治理跨单元重复，旧语料中 24 例）。
+- `method_kind: objective_function`（结构类别枚举值）不受影响，保留。
+
+### 装配层确定性修复（`_clean_method_equations` 扩展）
+- 遗留 `objective_function` 载荷自动迁移为 `role="objective"` 的 formulas 条目（幂等）；
+- 同一单元内归一化表达式相同的公式去重，objective 标签/description 合并到存活条目；
+- 非法 role 值丢弃（lossy-but-safe，记录 warning），校验层同时设防（双保险）。
+- baseline 禁字段表简化为 `inputs/outputs/formulas`（迁移先行，formulas 禁令即覆盖目标函数）。
+
+### Retrofit
+- 新增 `tools/retrofit_objective_function.py`（沿 `relink_references.py` 模式）：对已有产物原地重放迁移，
+  `--dry-run/--render/--validate`；0.12/0.13 产物迁移后重新打 0.14 版本戳（结构上即满足 0.14 契约），
+  更老版本只迁移字段不动版本号。幂等已验证（二次运行 0 变化）。
+- 实测：wave2_demo 2 篇（6 迁移/5 合并/0 校验问题）；cvpr_seg_50_v0.12 dry-run 50 篇
+  （100 迁移/37 合并/0 校验问题）。`ab_*` 对照目录有意不动（保护 A/B 记录）。
+
+### 渲染
+- `render_formulas` 将 objective 条目单列 "Objective" 分组（含 description）；
+  `render_objective` 保留用于未 retrofit 的旧语料。
+
+### 20 篇基准 A/B（基线 = HEAD/0.13 于 git worktree，treatment 跑 3 轮迭代收敛）
+- 迭代过程：v1 暴露"同胞共享目标全丢"（083 三个变体的交叉熵）与 description 泄漏（125，8 处）；
+  v2 修同胞规则 + 确定性 desc-strip 后泄漏归零，但暴露根因——**旧 objective_function 字段本身是
+  "搜寻训练目标"的诱导槽位**，删字段后简短陈述的标准损失（CE、L1+SSIM）漏转写；
+  v3 在 formulas 规则中恢复显式搜寻指令（"actively hunt… A missing objective must mean the
+  paper states none, not that it was overlooked"）。
+- v3 终态 vs 基线：20/20 valid（双臂）；单元内重复转写 6→0；跨单元重复 27→21；公式总数 127→138；
+  tagged objective 28 vs 基线"真方程"OF 21（基线 33 个 OF 中 12 个为退化条目：裸符号头、prose、
+  平凡和——0.14 在去除这些的同时净增真目标覆盖）；083 三同胞交叉熵恢复且各自携带；
+  017 单单元双 objective（多目标表达力，0.13 单槽位不可能）；014 的 L_diffusion 正确归位到
+  builds_on 单元。desc 泄漏 0（装配层强制）。
+- 已知残留（1/20，跨轮不稳定）：200_ECCV Analytic-Splatting 的简短 L1+SSIM 训练损失未被转写，
+  且渲染方程 C(u) 间歇性被误标为 objective；表达式集合差中其余"丢失"经逐条核查均为记号变体
+  （√/sqrt、ᾱ/\bar α）或基线退化条目，非真实丢失。
+
+### 装配层追加（A/B 驱动）
+- `_clean_method_equations` 增加 description 契约强制：非 objective 条目的 description 确定性剥离
+  （lossy-but-safe，记 warning）——守住 0.12 lean-formulas 的成本战果不被模型逐条目 prose 侵蚀。
 
 ---
 

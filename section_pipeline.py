@@ -141,8 +141,8 @@ TYPED_ARRAY_KEYS: dict[str, str] = {
 NODE_TYPES = {"Method", "ExperimentSetup", "Measure", "Finding"}
 # The IR version this pipeline emits, and the versions the validator accepts (the retrofit
 # tooling re-validates 0.12-era outputs in place, so the previous version stays accepted).
-IR_VERSION = "section-ir-0.13"
-ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13"}
+IR_VERSION = "section-ir-0.14"
+ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13", "section-ir-0.14"}
 
 NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Method": "mth:",
@@ -326,7 +326,7 @@ ROLE_VOCAB_BY_TYPE: dict[str, set[str]] = {
 # fire on this corpus.
 # `resource`/`taxonomy` (0.10, FG-1) type a contribution that is a non-algorithmic deliverable
 # (a taxonomy, an atlas, a software library) as a Method for want of a dedicated type; method.md
-# suppresses the algorithm-form fields (inputs/outputs/formulas/objective_function) for them. A
+# suppresses the algorithm-form fields (inputs/outputs/formulas) for them. A
 # dataset/benchmark deliverable is NOT a method_kind — it is an ExperimentSetup via the
 # contribution_resource census role, so it hosts score rows natively without a duplicate twin.
 # `theorem`/`lemma`/`bound`/`definition` (0.10, FG-2) type a formal statement/construct
@@ -336,6 +336,14 @@ ROLE_VOCAB_BY_TYPE: dict[str, set[str]] = {
 # lemma/bound) that the theorem-Method `supports`.
 METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function",
                 "resource", "taxonomy", "theorem", "lemma", "bound", "definition"}
+# Optional per-formula functional tag (0.14). The standalone `objective_function` field is gone:
+# it overlapped formulas[] ontologically (27.6% of OF-bearing Method units transcribed the same
+# expression twice) and its 1-cardinality could not hold multi-objective methods (GAN, multi-task).
+# A formulas[] entry tagged role="objective" is the training/optimization target; the tag is sparse
+# (omitted on ordinary defining equations) and the one-line `description` of what is optimized
+# rides only on objective-tagged entries. Legacy `objective_function` payloads are migrated into
+# formulas[] deterministically by _clean_method_equations.
+FORMULA_ROLES = {"objective"}
 COMPARISON_DIRECTIONS = {"higher_is_better", "lower_is_better", "target", "unspecified"}
 # Optional per-score-row value kind (0.10, FG-2). A score `value` is always a string; `value_kind`
 # says how to read it so a symbolic/asymptotic theoretical result (`O(n^6)`, `PSPACE-complete`,
@@ -443,7 +451,6 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
         "inputs",
         "outputs",
         "formulas",
-        "objective_function",
         "implementation_notes",
         "cite_keys",
         "ref_ids",
@@ -2051,6 +2058,12 @@ def build_output_manifest(
                 "(normalized cite-key collapse); absent when the unit cites nothing or no entry "
                 "joins"
             ),
+            "Method.formulas[].role": (
+                "optional functional tag; 'objective' marks the training/optimization target "
+                "(0.14 — absorbed the retired objective_function field; the one-line "
+                "description of what is optimized rides on the same entry); absent on ordinary "
+                "defining equations"
+            ),
             "extraction_notes.span_index": (
                 "chunk_marker -> {text, truncated?}: verbatim text prefix of every [§N] input "
                 "block the extraction references (provenance/table markers), for grounding "
@@ -2330,50 +2343,106 @@ def _annotate_quantitative_payload(sections: list[dict[str, Any]]) -> None:
             unit["has_quantitative_payload"] = bool(score_rows) or has_headline
 
 
+def _normalize_formula_expression(expression: Any) -> str:
+    """Whitespace-insensitive comparison key for equation expressions (transcriptions of the
+    same displayed equation differ only in spacing in practice)."""
+    return re.sub(r"\s+", "", expression) if isinstance(expression, str) else ""
+
+
 def _clean_method_equations(sections: list[dict[str, Any]]) -> list[str]:
-    """Drop empty optional equation fields on Method units: an ``objective_function`` or a
-    ``formulas[]`` entry whose ``expression`` is blank (a stub some json_object models emit when
-    a paper has no equation). The fields are optional, so dropping them is safe and removes the
-    'missing expression' validation failure. Logged to uncertain_assignments."""
+    """Normalize the unified equation field on Method units (0.14): drop ``formulas[]`` stubs with
+    a blank ``expression`` (json_object models emit them when a paper has no equation), migrate a
+    legacy ``objective_function`` payload into formulas[] as the ``role="objective"`` entry,
+    dedup entries transcribing the same expression (merging the objective tag/description onto the
+    survivor), and drop an invalid ``role`` value rather than failing validation over an optional
+    decoration. Lossless for real content, lossy only for stubs/duplicates; logged to
+    uncertain_assignments. Idempotent: re-running on cleaned sections changes nothing."""
     warnings: list[str] = []
     for section in sections:
         for unit in section.get("units", []) or []:
             if unit.get("type") != "Method":
                 continue
-            objective = unit.get("objective_function")
-            if objective is not None and not (
-                isinstance(objective, dict) and (objective.get("expression") or "").strip()
-            ):
-                unit.pop("objective_function", None)
-                warnings.append(f"dropped empty objective_function on {unit.get('id')!r}")
+            uid = unit.get("id")
             formulas = unit.get("formulas")
-            if isinstance(formulas, list):
-                kept = [
-                    f for f in formulas
-                    if isinstance(f, dict) and (f.get("expression") or "").strip()
-                ]
-                if len(kept) != len(formulas):
+            entries = [f for f in formulas if isinstance(f, dict)] if isinstance(formulas, list) else []
+            n_stubs = sum(1 for f in entries if not (f.get("expression") or "").strip())
+
+            # Legacy objective_function (pre-0.14 corpora, or a model still emitting the retired
+            # field): append as a candidate objective entry; dedup below merges it into an
+            # existing transcription of the same expression.
+            objective = unit.pop("objective_function", None)
+            if objective is not None:
+                expr = objective.get("expression") if isinstance(objective, dict) else None
+                if isinstance(expr, str) and expr.strip():
+                    migrated = {"name": "", "expression": expr, "role": "objective"}
+                    description = objective.get("description")
+                    if isinstance(description, str) and description.strip():
+                        migrated["description"] = description
+                    entries.append(migrated)
                     warnings.append(
-                        f"dropped {len(formulas) - len(kept)} empty formula(s) on {unit.get('id')!r}"
+                        f"migrated objective_function into formulas[role=objective] on {uid!r}"
                     )
-                if kept:
-                    unit["formulas"] = kept
                 else:
-                    unit.pop("formulas", None)
+                    warnings.append(f"dropped empty objective_function on {uid!r}")
+
+            kept: list[dict[str, Any]] = []
+            by_expr: dict[str, dict[str, Any]] = {}
+            for entry in entries:
+                if not (entry.get("expression") or "").strip():
+                    continue
+                role = entry.get("role")
+                if role is not None and role not in FORMULA_ROLES:
+                    entry.pop("role", None)
+                    warnings.append(
+                        f"dropped invalid formula role {role!r} on {uid!r}"
+                    )
+                    role = None
+                # `description` rides only on objective-tagged entries (the contract that keeps
+                # per-formula prose from regrowing the 0.12 lean-formulas cost win); strip leaks.
+                if role != "objective" and (entry.get("description") or "").strip():
+                    entry.pop("description", None)
+                    warnings.append(
+                        f"stripped description on non-objective formula "
+                        f"{entry.get('name') or entry.get('expression', '')[:40]!r} on {uid!r}"
+                    )
+                elif role != "objective":
+                    entry.pop("description", None)
+                key = _normalize_formula_expression(entry.get("expression"))
+                survivor = by_expr.get(key)
+                if survivor is None:
+                    by_expr[key] = entry
+                    kept.append(entry)
+                    continue
+                # Same expression transcribed twice: merge the richer annotations onto the
+                # survivor instead of keeping two copies.
+                for field in ("role", "description", "name"):
+                    if entry.get(field) and not survivor.get(field):
+                        survivor[field] = entry[field]
+                warnings.append(
+                    f"deduplicated formula {entry.get('name') or entry.get('expression', '')[:40]!r} on {uid!r}"
+                )
+            if n_stubs > 0:
+                warnings.append(f"dropped {n_stubs} empty formula(s) on {uid!r}")
+            if kept:
+                unit["formulas"] = kept
+            else:
+                unit.pop("formulas", None)
     return warnings
 
 
-BASELINE_METHOD_BANNED_FIELDS = ("inputs", "outputs", "formulas", "objective_function")
+BASELINE_METHOD_BANNED_FIELDS = ("inputs", "outputs", "formulas")
 
 
 def _strip_baseline_method_fields(
     sections: list[dict[str, Any]], census: dict[str, Any] | None
 ) -> list[str]:
     """For Method units the census tagged ``compared_against``, drop the heavy optional fields the
-    method-section contract bans on baselines: ``objective_function``, ``formulas``, ``inputs``,
-    ``outputs``. Baselines exist as structural anchors for ``compares_to`` + score-row ``system_id``;
-    reconstructing technical detail invites hallucination (e.g. fabricated objective_functions on
-    black-box baselines) and inflates output tokens. Lossy-but-safe; logged."""
+    method-section contract bans on baselines: ``formulas``, ``inputs``, ``outputs``. (A legacy
+    ``objective_function`` is migrated into formulas[] by _clean_method_equations, which runs
+    first, so banning formulas covers it.) Baselines exist as structural anchors for
+    ``compares_to`` + score-row ``system_id``; reconstructing technical detail invites
+    hallucination (e.g. fabricated objectives on black-box baselines) and inflates output tokens.
+    Lossy-but-safe; logged."""
     if not census:
         return []
     baseline_ids = {
@@ -4669,9 +4738,11 @@ def _validate_unit_fields(
         method_kind = unit.get("method_kind")
         if method_kind is not None and method_kind not in METHOD_KINDS:
             issues.append(f"Method {uid} has invalid method_kind: {method_kind}")
-        # inputs/outputs/formulas/objective_function are optional; validate shape only when present.
-        # Formulas carry {name, expression}; the per-symbol glossary was dropped in section-ir-0.12
-        # (see generate_section_schemas.formulas_schema) so there is no symbols field to validate.
+        # inputs/outputs/formulas are optional; validate shape only when present.
+        # Formulas carry {name, expression} plus an optional functional role tag and (on
+        # objective-tagged entries) an optional one-line description (0.14 — the standalone
+        # objective_function field was absorbed into formulas[]); the per-symbol glossary was
+        # dropped in section-ir-0.12 (see generate_section_schemas.formulas_schema).
         formulas = unit.get("formulas")
         if formulas is not None:
             if not isinstance(formulas, list):
@@ -4683,13 +4754,12 @@ def _validate_unit_fields(
                         continue
                     if not formula.get("expression"):
                         issues.append(f"Method {uid} formulas[{index}] missing expression")
-        objective = unit.get("objective_function")
-        if objective is not None:
-            if not isinstance(objective, dict):
-                issues.append(f"Method {uid} objective_function must be an object")
-            else:
-                if not objective.get("expression"):
-                    issues.append(f"Method {uid} objective_function missing expression")
+                    role = formula.get("role")
+                    if role is not None and role not in FORMULA_ROLES:
+                        issues.append(f"Method {uid} formulas[{index}] has invalid role: {role}")
+                    description = formula.get("description")
+                    if description is not None and not isinstance(description, str):
+                        issues.append(f"Method {uid} formulas[{index}] description must be a string")
     elif utype == "Finding":
         if not unit.get("statement"):
             issues.append(f"Finding {uid} missing statement")

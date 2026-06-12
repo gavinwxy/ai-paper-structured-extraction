@@ -35,6 +35,7 @@ from section_pipeline import (  # noqa: E402
     EXPERIMENT_SETUP_ROLES,
     FINDING_POLARITIES,
     FINDING_ROLES,
+    FORMULA_ROLES,
     IR_VERSION,
     MEASURE_OBJECTIVE_CLASSES,
     MEASURE_TABLE_ROLES,
@@ -72,8 +73,7 @@ OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
     "Measure": {"comparison_direction", "objective_class",
                 "source_table_marker", "caption_marker", "table_role", "headline_result",
                 "finding_ids"},
-    "Method": {"method_kind", "inputs", "outputs", "formulas", "objective_function",
-               "implementation_notes"},
+    "Method": {"method_kind", "inputs", "outputs", "formulas", "implementation_notes"},
     "ExperimentSetup": {"description"},
     # FG-11 (section-ir-0.10): optional Finding quantitative payload.
     "Finding": {"polarity", "effect_size", "scope"},
@@ -151,6 +151,7 @@ ENUM_ORDER: dict[str, list[str]] = {
     "finding_role": FINDING_ROLE_ORDER,
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function",
                     "resource", "taxonomy", "theorem", "lemma", "bound", "definition"],
+    "formula_role": ["objective"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
     "finding_polarity": ["positive", "negative", "neutral", "mixed"],
     "score_value_kind": ["numeric", "symbolic", "asymptotic", "qualitative", "curve"],
@@ -165,6 +166,7 @@ ENUM_VALUES: dict[str, set[str]] = {
     "experiment_setup_role": EXPERIMENT_SETUP_ROLES,
     "finding_role": FINDING_ROLES,
     "method_kind": METHOD_KINDS,
+    "formula_role": FORMULA_ROLES,
     "comparison_direction": COMPARISON_DIRECTIONS,
     "finding_polarity": FINDING_POLARITIES,
     "score_value_kind": SCORE_VALUE_KINDS,
@@ -278,6 +280,12 @@ def formulas_schema(description: str) -> dict[str, Any]:
     # per-symbol glossary. The symbols[] array was ~25% of method output bytes (87% of it the prose
     # descriptions) with no graph consumer — only the HTML renderer ever read it — so it is dropped
     # for cost. Symbol meanings stay recoverable from the expression and the method's description.
+    # section-ir-0.14 unified equations: the standalone objective_function field is absorbed here.
+    # The training/optimization target is the formulas[] entry tagged role="objective"; the sparse
+    # tag keeps multi-objective methods representable and removes the systematic double
+    # transcription (the same loss in both fields on 27.6% of OF-bearing methods). `description`
+    # (what the objective optimizes) is allowed only on the objective-tagged entry so per-formula
+    # prose does not regrow the 0.12 cost win.
     return {
         "type": "array",
         "items": {
@@ -293,27 +301,18 @@ def formulas_schema(description: str) -> dict[str, Any]:
                     "type": "string",
                     "description": "The equation itself, as LaTeX or plain text, e.g. 'softmax(QK^T/sqrt(d_k))V'",
                 },
-            },
-        },
-        "description": description,
-    }
-
-
-def objective_function_schema(description: str) -> dict[str, Any]:
-    # See formulas_schema: the symbols glossary is dropped for cost; keep expression + a one-line
-    # description of what is optimized.
-    return {
-        "type": "object",
-        "required": ["expression", "description"],
-        "additionalProperties": False,
-        "properties": {
-            "expression": {
-                "type": "string",
-                "description": "The objective or loss as LaTeX or plain text, e.g. 'L = -sum log P(y|x)'",
-            },
-            "description": {
-                "type": "string",
-                "description": "What the objective optimizes; empty string when only the formula is reported",
+                "role": enum_schema(
+                    "formula_role",
+                    "Functional tag: 'objective' marks the loss/optimization target the method "
+                    "minimizes/maximizes (at most one entry per distinct objective; a method "
+                    "with no stated objective tags nothing). Omit on ordinary defining "
+                    "equations.",
+                ),
+                "description": {
+                    "type": "string",
+                    "description": "One line on what the objective optimizes; only on a "
+                    "role='objective' entry — omit on all other formulas",
+                },
             },
         },
         "description": description,
@@ -399,10 +398,9 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "inputs": string_array_schema("Inputs to the method; omit when the paper does not state them"),
             "outputs": string_array_schema("Outputs of the method; omit when the paper does not state them"),
             "formulas": formulas_schema(
-                "Key defining equations of the method, each with a short label; omit when the method states none"
-            ),
-            "objective_function": objective_function_schema(
-                "The optimization objective or loss the method minimizes/maximizes; omit when the method defines none"
+                "Key defining equations of the method, each with a short label; the entry tagged "
+                "role='objective' is the optimization objective/loss; omit the field when the "
+                "method states no equations"
             ),
             "implementation_notes": string_schema("Key implementation details; empty string when none are reported"),
         },

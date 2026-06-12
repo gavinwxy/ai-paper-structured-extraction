@@ -501,7 +501,20 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 ## Versioning
 
-Current IR version: **`section-ir-0.13`** (`extraction_notes.input_mode = node_census_pipeline`).
+Current IR version: **`section-ir-0.14`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.14 is the **unified-equations** revision (breaking for the Method shape; the validator accepts
+0.12/0.13, and `tools/retrofit_objective_function.py` migrates an existing corpus in place):
+
+- **`objective_function` absorbed into `formulas[]`**: the standalone field overlapped formulas
+  ontologically (27.6% of objective-bearing Method units transcribed the same expression in both
+  fields) and its 1-cardinality could not represent multi-objective methods. The optimization
+  target is now the `formulas[]` entry tagged `"role": "objective"`, which alone may carry a
+  one-line `description` of what is optimized. Assembly migrates legacy payloads, dedups
+  same-expression entries (merging the tag onto the survivor), and drops invalid role values.
+- **Formula ownership rule** (prompt): an equation belongs to the unit whose computation it
+  defines — a composite method keeps only its combined objective and no longer re-transcribes its
+  components' losses.
 
 0.13 is the **agent-readiness** revision (RF-07/08/11; additive over 0.12 except the `ir_version`
 string — the validator accepts both):
