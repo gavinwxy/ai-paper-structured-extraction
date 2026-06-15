@@ -39,8 +39,6 @@ async def run_batch(config: Config) -> dict[str, Any]:
     # at the run root learns the file contracts without trial-and-error. Overwritten per run —
     # it documents the flags the freshest papers were produced with.
     manifest = build_output_manifest(
-        blob_primary_evidence=config.blob_primary_evidence,
-        blob_primary_references=config.blob_primary_references,
         verify_scores=config.verify_scores,
         model=config.model,
     )

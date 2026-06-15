@@ -10,6 +10,38 @@
 
 ---
 
+## 维护 — 移除 no-blob 旧路径（blob-only 瘦身）
+
+**日期**：2026-06-15　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+blob-primary evidence 与 blob-primary references 自 0.12 起已是生产唯一模式（默认开启），
+其 `--no-blob-primary-*` 退出分支已无实际用途。本次删除两条 legacy/no-blob 路径，blob 成为无条件行为。
+**纯瘦身、行为等价**（生产历来以 blob=True 运行），无 IR 版本变更。
+
+### 删除
+- CLI：`--blob-primary-evidence` / `--no-blob-primary-evidence` / `--blob-primary-references` /
+  `--no-blob-primary-references` 四个开关；`Config.blob_primary_evidence` / `Config.blob_primary_references` 字段。
+- `section_pipeline.py`：`strip_blob_evidence_schema()` 及其 `BLOB_EVIDENCE_FIELDS` / `LEGACY_*_DESCRIPTION` 常量
+  （legacy 0.11 evidence schema 派生）；`load_references_schema_for_mode()` 的运行时改写逻辑。
+- prompt：legacy `references-extraction.md`（全量转写）与 `evidence.md`（全量转写）删除。
+- 函数 `assemble_extraction` / `run_references_extraction` / `extract_single_content_section_sync` /
+  `run_content_extraction_sync` / `run_pipeline` 上的 `blob_primary_*` 参数。
+
+### 重命名 / 内联
+- blob prompt 去掉 `-blob` 后缀成为唯一规范名：`references-extraction-blob.md` → `references-extraction.md`，
+  `section-modules/evidence-blob.md` → `evidence.md`；`load_section_module` 随之去掉特判，直接 `{section_type}.md`。
+- references blob 契约**烘焙进 schema 文件** `references-output.schema.json`（与 evidence schema 既已 blob-flavored 对称），
+  `load_references_schema_for_mode()` → 无参 `load_references_schema()` 纯加载器。
+
+### 保留（按设计，向后兼容已产出的语料）
+- `build_output_manifest()` 仍保留 `blob_primary_*` 形参与条件契约文案（`build_agent_index` 跨语料描述用，
+  语料可能含 0.11 旧产物）；渲染器 / 索引侧读取 `extraction_notes.blob_primary_references` 等标记的逻辑不变。
+- 装配层始终写入 `extraction_notes["blob_primary_references"] = True` 标记。
+
+测试：496 项全绿（删除/改写/简化覆盖 no-blob 旧路径的用例）。
+
+---
+
 ## 0.14 — 公式统一：objective_function 并入 formulas[]
 
 **日期**：2026-06-12

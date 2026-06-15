@@ -23,7 +23,6 @@ SECTION_MODULES_DIR = PROMPTS_DIR / "section-modules"
 EXAMPLES_DIR = PROMPTS_DIR / "examples"
 METADATA_PROMPT_PATH = PROJECT_ROOT / "prompts" / "metadata-extraction.md"
 REFERENCES_PROMPT_PATH = PROJECT_ROOT / "prompts" / "references-extraction.md"
-REFERENCES_BLOB_PROMPT_PATH = PROJECT_ROOT / "prompts" / "references-extraction-blob.md"
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
 NODE_CENSUS_SCHEMA_PATH = SCHEMAS_DIR / "node-census-output.schema.json"
 RELATION_PASS_SCHEMA_PATH = SCHEMAS_DIR / "relation-pass-output.schema.json"
@@ -734,142 +733,14 @@ def load_section_schema(section_type: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# The Measure fields that exist only under blob-primary evidence, and the pre-blob (0.11) scores
-# description they displace. The committed evidence schema is blob-flavored (the default mode);
-# the opt-out arm derives its legacy contract from it at runtime rather than keeping two files.
-BLOB_EVIDENCE_FIELDS = (
-    "source_table_marker",
-    "caption_marker",
-    "table_role",
-    "headline_result",
-    "finding_ids",
-)
-LEGACY_SCORES_DESCRIPTION = (
-    "Flat array of reported scores under this measure — one row per system, covering the "
-    "method family's own variants and every compared-against baseline"
-)
-LEGACY_VARIANT_DESCRIPTION = (
-    "System name for this score row as the paper labels it — a method-family "
-    "variant/configuration or a compared-against baseline (e.g. 'Transformer (big)', 'GNMT')"
-)
-LEGACY_SYSTEM_ID_DESCRIPTION = (
-    "ID of the Method unit this row reports — the contribution variant or the compared-against "
-    "baseline (e.g. 'mth:transformer', 'mth:gnmt'). Empty string when no node represents this "
-    "row's system (e.g. an ensemble-of-baselines the census did not capture)."
-)
-LEGACY_RELATION_DESCRIPTION = (
-    "about = a Finding is about a Method/ExperimentSetup/Measure; supports = a Measure, "
-    "Finding, or Method (a theorem/proof) supports a Finding."
-)
+def load_references_schema() -> dict[str, Any]:
+    """Load the references-pass schema (the blob-primary transcription contract)."""
+    return json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def strip_blob_evidence_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Derive the legacy (``--no-blob-primary-evidence``) evidence schema from the committed one.
-
-    The committed schema is the blob-primary contract; with the flag off it would still reach the
-    model (as strict ``response_format`` or as the json_object prompt contract) and contradict the
-    full-transcription module — advertising marker fields ``evidence.md`` never mentions, plus
-    ``scores``/``variant``/``system_id``/``relation`` descriptions that say baselines do NOT
-    belong in scores and ban the Finding↔Measure edges the legacy module authors. Stripping the
-    blob fields and restoring the 0.11 descriptions makes the opt-out arm a true pre-blob baseline.
-    """
-    out = copy.deepcopy(schema)
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            props = node.get("properties")
-            if isinstance(props, dict):
-                for field in BLOB_EVIDENCE_FIELDS:
-                    props.pop(field, None)
-                scores = props.get("scores")
-                if isinstance(scores, dict) and "description" in scores:
-                    scores["description"] = LEGACY_SCORES_DESCRIPTION
-                variant = props.get("variant")
-                if isinstance(variant, dict) and "description" in variant and isinstance(props.get("system_id"), dict):
-                    variant["description"] = LEGACY_VARIANT_DESCRIPTION
-                    props["system_id"]["description"] = LEGACY_SYSTEM_ID_DESCRIPTION
-                relation = props.get("relation")
-                if isinstance(relation, dict) and relation.get("enum") == ["about", "supports"]:
-                    relation["description"] = LEGACY_RELATION_DESCRIPTION
-            required = node.get("required")
-            if isinstance(required, list):
-                node["required"] = [r for r in required if r not in BLOB_EVIDENCE_FIELDS]
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(out)
-    return out
-
-
-def load_references_schema_for_mode(blob_primary_references: bool) -> dict[str, Any]:
-    """Load the references schema, adjusted to the mode's transcription contract.
-
-    One schema file serves both prompts, but several descriptions carry full-transcription
-    wording that contradicts the blob prompt's "never emit background — skip it": the ``roles``
-    guidance ("use background only when no stronger role fits", "emit it alone"), the
-    ``provides_name`` empty-string clause ("for background"), and the ``salience`` gloss
-    ("passing mention" — under blob rules an emitted reference is never a passing mention).
-    In blob mode the model-visible descriptions say so instead; the ``background`` enum value
-    itself stays (a stray background entry decodes fine and simply produces no edge — tolerant
-    beats a strict-mode hard reject).
-    """
-    schema = json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
-    if not blob_primary_references:
-        return schema
-    try:
-        relation_props = schema["properties"]["references"]["items"]["properties"]["relation"]["properties"]
-    except (KeyError, TypeError):
-        return schema
-
-    def _rewrite(field: str, old: str, new: str) -> None:
-        prop = relation_props.get(field)
-        if isinstance(prop, dict) and isinstance(prop.get("description"), str):
-            prop["description"] = prop["description"].replace(old, new)
-
-    _rewrite(
-        "roles",
-        "When ambiguous between builds_on and background, prefer builds_on if the cited work "
-        "is plausibly a direct predecessor (high recall); use background only when no stronger "
-        "role fits.",
-        "Do NOT emit background-only references at all — skip them; they stay in the verbatim "
-        "bibliography blob. When ambiguous between builds_on and background, prefer builds_on "
-        "if the cited work is plausibly a direct predecessor (high recall).",
-    )
-    _rewrite(
-        "roles",
-        "background is the only context-only role (no edge) and is mutually exclusive — emit it "
-        "alone, never alongside a structural role.",
-        "background carries no edge and is never emitted as an entry.",
-    )
-    _rewrite(
-        "salience",
-        "peripheral = passing mention.",
-        "peripheral = structurally linked but minor; main baselines and the primary "
-        "systems/datasets the paper's experiments run on are central, not peripheral.",
-    )
-    _rewrite(
-        "provides_name",
-        "Empty string for background or when no concrete artifact is named.",
-        "Empty string when no concrete artifact is named.",
-    )
-    return schema
-
-
-def load_section_module(section_type: str, blob_primary_evidence: bool = False) -> str:
-    """Load the per-section focus module text for prompt injection.
-
-    When ``blob_primary_evidence`` is set, the evidence section uses the blob-primary module
-    (``evidence-blob.md``) — the LLM points at result tables by ``[§N]`` marker and transcribes only
-    the contribution method's rows, instead of retyping every baseline. All other sections, and the
-    flag-off evidence path, use ``{section_type}.md`` unchanged.
-    """
-    name = section_type
-    if blob_primary_evidence and section_type == "evidence":
-        name = "evidence-blob"
-    path = SECTION_MODULES_DIR / f"{name}.md"
+def load_section_module(section_type: str) -> str:
+    """Load the per-section focus module text for prompt injection."""
+    path = SECTION_MODULES_DIR / f"{section_type}.md"
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8").strip()
@@ -3427,8 +3298,6 @@ def assemble_extraction(
     sections_included: list[str] | None = None,
     sections_omitted: list[str] | None = None,
     verify_scores: bool = True,
-    blob_primary_evidence: bool = False,
-    blob_primary_references: bool = False,
 ) -> dict[str, Any]:
     """Merge content section results + relation-pass edges into final section-IR 0.7 output.
 
@@ -3500,9 +3369,8 @@ def assemble_extraction(
     # migrate any Measure↔Finding edge the model authored into the mount and drop those edge shapes
     # (and canonicalize the table markers). Runs on the contribution-node-join edges that survive the
     # cleanup above, and before _assign_resolves (which uses Finding→contribution `about`, untouched).
-    if blob_primary_evidence:
-        relations, warns = _mount_findings_on_measures(sections, relations)
-        assembly_warnings.extend(warns)
+    relations, warns = _mount_findings_on_measures(sections, relations)
+    assembly_warnings.extend(warns)
 
     # Synthesize the closing `resolves` edge(s) from the surviving contribution-node join,
     # then dedup so a re-run can't double it. These are valid by construction (Finding->Problem).
@@ -3549,12 +3417,11 @@ def assemble_extraction(
         # Blob-primary: override each table's heuristic caption with the model-chosen caption block
         # (the model's caption_marker is the authoritative location; code slices it verbatim), so the
         # caption stored beside the table is the one the model pointed at, not a proximity guess.
-        if blob_primary_evidence:
-            cap_warns = _attach_model_captions(sections, source_tables, paper_content)
-            if cap_warns:
-                uncertain = extraction_notes.setdefault("uncertain_assignments", [])
-                if isinstance(uncertain, list):
-                    uncertain.extend(cap_warns)
+        cap_warns = _attach_model_captions(sections, source_tables, paper_content)
+        if cap_warns:
+            uncertain = extraction_notes.setdefault("uncertain_assignments", [])
+            if isinstance(uncertain, list):
+                uncertain.extend(cap_warns)
         extraction_notes["source_tables"] = source_tables
         # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim tables.
         # Writes nothing into units/scores/relations — only a notes block — so it cannot affect render
@@ -3578,23 +3445,22 @@ def assemble_extraction(
             "located_pct": None,
             "reason": reason,
         }
-    # Blob-primary references: capture the full bibliography verbatim so the references pass can emit
-    # only graph-linked entries and leave background refs here (the display + completeness backstop).
-    # The mode marker lets the renderer distinguish "legacy full transcription" from "blob mode whose
-    # slice failed" — in the latter case the structured list is graph-linked-only and must say so.
-    if blob_primary_references:
-        extraction_notes["blob_primary_references"] = True
-        references_blob = _slice_references_blob(paper_content)
-        if references_blob:
-            extraction_notes["references_blob"] = references_blob
-        else:
-            uncertain = extraction_notes.setdefault("uncertain_assignments", [])
-            if isinstance(uncertain, list):
-                uncertain.append(
-                    "blob-primary references: no bibliography section could be sliced from the paper "
-                    "(no header matched or no candidate looked reference-dense); background references "
-                    "are not captured and the structured list covers graph-linked entries only"
-                )
+    # Capture the full bibliography verbatim so the references pass can emit only graph-linked
+    # entries and leave background refs here (the display + completeness backstop). The marker lets
+    # the renderer tell a blob run whose slice succeeded from one whose slice failed — in the latter
+    # case the structured list is graph-linked-only and must say so.
+    extraction_notes["blob_primary_references"] = True
+    references_blob = _slice_references_blob(paper_content)
+    if references_blob:
+        extraction_notes["references_blob"] = references_blob
+    else:
+        uncertain = extraction_notes.setdefault("uncertain_assignments", [])
+        if isinstance(uncertain, list):
+            uncertain.append(
+                "blob-primary references: no bibliography section could be sliced from the paper "
+                "(no header matched or no candidate looked reference-dense); background references "
+                "are not captured and the structured list covers graph-linked entries only"
+            )
     # RF-11 (agent-readiness): ground every referenced provenance marker to a verbatim text prefix.
     span_index = _build_span_index(sections, relations, paper_content)
     if span_index:
@@ -3943,18 +3809,15 @@ def run_references_extraction(
     paper_content: str,
     temperature: float = 0.0,
     max_tokens: int = 16_384,
-    blob_primary_references: bool = True,
 ) -> dict[str, Any]:
     """Extract paper reference list into structured entries.
 
-    With ``blob_primary_references`` (the production default) the blob prompt is used — the model
-    transcribes only graph-linked references and skips background ones (assembly slices the full
-    bibliography verbatim as the backstop). Pass False for the legacy full-transcription pass.
+    The model transcribes only graph-linked references and skips background ones; assembly slices
+    the full bibliography verbatim into ``extraction_notes.references_blob`` as the backstop.
     """
-    prompt_path = REFERENCES_BLOB_PROMPT_PATH if blob_primary_references else REFERENCES_PROMPT_PATH
-    system_prompt, user_template = load_prompt(prompt_path)
+    system_prompt, user_template = load_prompt(REFERENCES_PROMPT_PATH)
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
-    schema = load_references_schema_for_mode(blob_primary_references)
+    schema = load_references_schema()
     resp_fmt = build_response_format(schema, name="references_output", model=model)
     system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
     raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
@@ -4416,18 +4279,13 @@ def extract_single_content_section_sync(
     max_retries: int = MAX_SECTION_RETRIES,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
-    blob_primary_evidence: bool = True,
 ) -> dict[str, Any]:
     """Extract one content section (stage C) using the synchronous LLM client."""
     system_prompt, _ = load_prompt(SECTION_EXTRACTION_PROMPT_PATH)
-    section_module = load_section_module(section_type, blob_primary_evidence)
-    if blob_primary_evidence and section_type == "evidence":
+    section_module = load_section_module(section_type)
+    if section_type == "evidence":
         section_module = f"{section_module}\n\n## Source-table index\n{build_table_index(paper_content)}"
     section_schema = load_section_schema(section_type)
-    if section_type == "evidence" and not blob_primary_evidence:
-        # The committed evidence schema is the blob-primary contract; strip it back to the 0.11
-        # shape so the opt-out arm's model never sees marker fields or the blob scores wording.
-        section_schema = strip_blob_evidence_schema(section_schema)
     resp_fmt = build_response_format(section_schema, name=f"{section_type}_section", model=model)
 
     # For json_object models (DeepSeek), the schema cannot constrain decoding, so fold its
@@ -4491,13 +4349,10 @@ def run_content_extraction_sync(
     max_tokens: int = DEFAULT_SECTION_MAX_TOKENS,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
-    blob_primary_evidence: bool = True,
-    blob_primary_references: bool = True,
 ) -> dict[str, Any]:
     """Run the four content sections (stage C) over a shared prefix, then assemble 0.7 output.
 
-    Both blob flags default ON to match the production worker — a paper run through this sync
-    path produces the same 0.12-shaped output as ``python -m production``.
+    Produces the same section-ir 0.12 (blob-primary) output as ``python -m production``.
     """
     parsed_sections = parse_sections(paper_content)
     sections_included = _sort_section_refs({f"§{section_id}" for section_id in parsed_sections})
@@ -4523,7 +4378,6 @@ def run_content_extraction_sync(
             max_retries=MAX_SECTION_RETRIES,
             prompt_cache_key=cache_key,
             prompt_cache_retention=prompt_cache_retention,
-            blob_primary_evidence=blob_primary_evidence,
         )
 
     # Seed the shared paper prefix into the cache with the first call, then fan out.
@@ -4555,8 +4409,6 @@ def run_content_extraction_sync(
         paper_content,
         sections_included=sections_included,
         sections_omitted=sections_omitted,
-        blob_primary_evidence=blob_primary_evidence,
-        blob_primary_references=blob_primary_references,
     )
 
 
@@ -4573,13 +4425,10 @@ def run_pipeline(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     strict: bool = True,
-    blob_primary_evidence: bool = True,
-    blob_primary_references: bool = True,
 ) -> dict[str, Any]:
     """Run census + metadata + references in parallel, then the relation pass, content fill, and validation.
 
-    Both blob flags default ON to match the production worker, so this entry point and
-    ``python -m production`` produce the same 0.12-shaped output."""
+    Produces the same section-ir 0.12 (blob-primary) output as ``python -m production``."""
     pipeline_warnings: list[str] = []
     cache_key = prompt_cache_key if prompt_cache_key is not None else build_prompt_cache_key(model, paper_content)
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -4593,7 +4442,7 @@ def run_pipeline(
         )
         references_future = executor.submit(
             run_references_extraction, client, model, paper_content, temperature=temperature,
-            max_tokens=max_tokens, blob_primary_references=blob_primary_references,
+            max_tokens=max_tokens,
         )
         raw_census = census_future.result()
         try:
@@ -4637,8 +4486,6 @@ def run_pipeline(
         max_tokens=section_max_tokens,
         prompt_cache_key=cache_key,
         prompt_cache_retention=prompt_cache_retention,
-        blob_primary_evidence=blob_primary_evidence,
-        blob_primary_references=blob_primary_references,
     )
     if references is not None:
         pipeline_warnings.extend(reconcile_reference_units(references, extraction, census))

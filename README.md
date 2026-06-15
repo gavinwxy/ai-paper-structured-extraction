@@ -133,10 +133,10 @@ reprocess. Common flags:
 | `--force` | off | ignore resumability, reprocess everything |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
 | `--no-warm-content-cache` | on (warming) | disable content-cache warming; run the three content sections fully concurrently instead of warming the shared prefix first (see below) |
-| `--no-blob-primary-evidence` | on (blob mode) | disable section-ir-0.12 blob-primary evidence and revert to full transcription: with blob mode on, the evidence pass points at result tables by `[§N]` marker and transcribes only the contribution method's rows; baselines + ablation grids stay in the code-sliced verbatim table blob (see below) |
-| `--no-blob-primary-references` | on (blob mode) | disable section-ir-0.12 blob-primary references and revert to full transcription: with blob mode on, the references pass transcribes only graph-linked references; the full bibliography is code-sliced verbatim into `extraction_notes.references_blob` and background refs live there (see below) |
 
 Run `.venv/bin/python -m production --help` for the full set.
+
+Blob-primary evidence and blob-primary references (below) are always on — they are the section-ir-0.12 behavior and the only mode the pipeline produces; the former `--no-blob-primary-*` opt-outs were removed.
 
 **Content-cache warming** (cost lever, **on by default**; disable with `--no-warm-content-cache`).
 The three content sections (problem/method/evidence) share a byte-identical paper-inclusive prompt
@@ -150,23 +150,20 @@ latency per paper, so pass `--no-warm-content-cache` for latency-priority runs o
 demonstrably warm. Inspect `relations` cached% in the telemetry to tell whether a proxy is warm
 (high ⇒ warming redundant); see `tools/token_cost_report.py --cache`.
 
-**Blob-primary evidence** (completion-cost lever, **on by default**; disable with
-`--no-blob-primary-evidence`). Result-collection data is the heaviest part of the output (score rows
-dominate completion tokens), and most of those rows are *baselines* — competitor numbers the LLM
-laboriously (and sometimes lossily) retypes. In blob-primary mode the evidence pass instead **points**
-at each result table by its `[§N]` block marker (`source_table_marker`/`caption_marker`); code slices
-that table and caption verbatim into `extraction_notes.source_tables`, so the full leaderboard and
-every ablation grid are preserved **without** transcription tokens or transcription error. The LLM
-transcribes only the **contribution method's own** rows (`table_role: main_result`) or none at all
-(`table_role: ablation`), emits a `headline_result` one-liner as a durable text backstop, and mounts
-the findings a table evidences via `Measure.finding_ids` (replacing the `Finding`↔`Measure` edges).
-The contribution rows stay structured and verifier-checked, so the queryable high-value core is
-intact at near-zero cost. Validated in two A/Bs (−12.9% and −11.2% total cost, 20/20 valid, no loss)
-before the default flip. With the flag off, the evidence schema is stripped back to the 0.11 shape
-at runtime (no blob fields, legacy `scores` wording), so the opt-out arm is a true pre-blob baseline.
+**Blob-primary evidence** (completion-cost lever, always on). Result-collection data is the heaviest
+part of the output (score rows dominate completion tokens), and most of those rows are *baselines* —
+competitor numbers the LLM laboriously (and sometimes lossily) retypes. The evidence pass instead
+**points** at each result table by its `[§N]` block marker (`source_table_marker`/`caption_marker`);
+code slices that table and caption verbatim into `extraction_notes.source_tables`, so the full
+leaderboard and every ablation grid are preserved **without** transcription tokens or transcription
+error. The LLM transcribes only the **contribution method's own** rows (`table_role: main_result`) or
+none at all (`table_role: ablation`), emits a `headline_result` one-liner as a durable text backstop,
+and mounts the findings a table evidences via `Measure.finding_ids` (replacing the
+`Finding`↔`Measure` edges). The contribution rows stay structured and verifier-checked, so the
+queryable high-value core is intact at near-zero cost. Validated in two A/Bs (−12.9% and −11.2% total
+cost, 20/20 valid, no loss) before it became the default.
 
-**Blob-primary references** (completion-cost lever, **on by default**; disable with
-`--no-blob-primary-references`). The references analog of blob-primary evidence: code slices the
+**Blob-primary references** (completion-cost lever, always on). The references analog of blob-primary evidence: code slices the
 full bibliography verbatim into `extraction_notes.references_blob` (header located among broadened
 candidates — numbered/bold/bare headers included — and the densest-in-references candidate wins);
 the LLM transcribes only the **graph-linked** references (those with a structural role —
@@ -303,10 +300,10 @@ module · **Schema:** `schemas/section-{section}.schema.json`
 The shared core carries only the rules common to every section (identifiers, provenance format, the
 output envelope, universal hard constraints) and is **byte-identical** across all section calls — so
 the paper text stays in the cross-section prompt cache. Each per-section module
-(`prompts/section-extraction/section-modules/{problem,method,evidence}.md`; the evidence module is
-`evidence-blob.md` by default, or `evidence.md` with `--no-blob-primary-evidence`) is a self-contained
-contract: that section's allowed unit types and field contracts, the controlled vocabularies and
-relation subset it uses, a worked example, and its section-specific rules.
+(`prompts/section-extraction/section-modules/{problem,method,evidence}.md`; the evidence module is the
+blob-primary contract) is a self-contained contract: that section's allowed unit types and field
+contracts, the controlled vocabularies and relation subset it uses, a worked example, and its
+section-specific rules.
 
 For each of the three sections:
 
@@ -438,9 +435,9 @@ Each LLM call has a paired prompt + JSON schema:
 | Relation pass | `relation-pass.md` | `relation-pass-output.schema.json` |
 | Problem section | `section-extraction-pass.md` + `section-modules/problem.md` | `section-problem.schema.json` |
 | Method section | `section-extraction-pass.md` + `section-modules/method.md` | `section-method.schema.json` |
-| Evidence section | `section-extraction-pass.md` + `section-modules/evidence-blob.md` (default; `evidence.md` with `--no-blob-primary-evidence`) | `section-evidence.schema.json` |
+| Evidence section | `section-extraction-pass.md` + `section-modules/evidence.md` (blob-primary) | `section-evidence.schema.json` |
 | Metadata (sidecar) | `metadata-extraction.md` | `metadata-output.schema.json` |
-| References (sidecar) | `references-extraction-blob.md` (default; `references-extraction.md` with `--no-blob-primary-references`) | `references-output.schema.json` |
+| References (sidecar) | `references-extraction.md` (blob-primary) | `references-output.schema.json` |
 
 In json_object mode the schema is rendered into the prompt as the OUTPUT FORMAT CONTRACT instead of
 sent as `response_format` — see [Model compatibility](#model-compatibility).
@@ -456,15 +453,13 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 │   ├── llm.py  outputs.py  progress.py  #   async transport, atomic writes, progress
 ├── prompts/
 │   ├── metadata-extraction.md           # Metadata sidecar prompt
-│   ├── references-extraction.md         # References sidecar prompt (--no-blob-primary-references)
-│   ├── references-extraction-blob.md    # References sidecar prompt (blob-primary, default)
+│   ├── references-extraction.md         # References sidecar prompt (blob-primary)
 │   └── section-extraction/
 │       ├── node-census.md               # Stage A prompt
 │       ├── relation-pass.md             # Stage B prompt
 │       ├── section-extraction-pass.md   # Stage C shared core (rules common to all sections)
 │       └── section-modules/             # Self-contained per-section contracts (section_focus)
-│           ├── problem.md  method.md  evidence.md   # evidence.md = --no-blob-primary-evidence
-│           └── evidence-blob.md                     # blob-primary evidence (default)
+│           └── problem.md  method.md  evidence.md   # evidence.md is blob-primary
 ├── schemas/                             # JSON schemas (generated; evidence schema's blob-primary fields are hand-edited — see "Regenerate schemas")
 │   ├── node-census-output.schema.json   relation-pass-output.schema.json
 │   ├── section-{problem,method,evidence}.schema.json
@@ -531,8 +526,8 @@ string — the validator accepts both):
   every `[§N]` input block the extraction references (provenance/table markers) — so an agent can
   ground a unit's source span without re-reading the paper. Deterministic, fresh runs only.
 
-0.12 is the **blob-primary** revision, in three parts (the first two **on by default**, with
-`--no-blob-primary-evidence` / `--no-blob-primary-references` opting out):
+0.12 is the **blob-primary** revision, in three parts (the first two are unconditional — the pipeline
+produces only blob-primary output):
 
 - **Blob-primary evidence**: a results Measure may point at its source `<table>` by `[§N]` marker
   (`source_table_marker`/`caption_marker`) and carry only the contribution method's own score rows

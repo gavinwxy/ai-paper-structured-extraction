@@ -74,24 +74,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-warm-content-cache", dest="warm_content_cache", action="store_false",
                         help="Disable P3 warming — run all three content sections fully concurrently "
                              "(use when latency matters or the proxy is demonstrably warm)")
-    parser.add_argument("--blob-primary-evidence", dest="blob_primary_evidence", action="store_true",
-                        default=True,
-                        help="section-ir-0.12 blob-primary evidence (ON by default): the evidence pass "
-                             "points at result tables by [§N] marker and transcribes only the "
-                             "contribution method's rows; baselines + ablation grids stay in the "
-                             "code-sliced verbatim table blob")
-    parser.add_argument("--no-blob-primary-evidence", dest="blob_primary_evidence", action="store_false",
-                        help="Disable blob-primary evidence — transcribe every score row "
-                             "(the section-ir-0.11 evidence behavior)")
-    parser.add_argument("--blob-primary-references", dest="blob_primary_references", action="store_true",
-                        default=True,
-                        help="section-ir-0.12 blob-primary references (ON by default): the references "
-                             "pass transcribes a structured entry only for graph-linked references "
-                             "(structural role or provided name); background refs stay in the "
-                             "code-sliced verbatim bibliography blob")
-    parser.add_argument("--no-blob-primary-references", dest="blob_primary_references", action="store_false",
-                        help="Disable blob-primary references — transcribe every reference "
-                             "(the section-ir-0.11 references behavior)")
     return parser.parse_args()
 
 
@@ -124,8 +106,6 @@ def main() -> None:
         log_level=args.log_level,
         verify_scores=args.verify_scores,
         warm_content_cache=args.warm_content_cache,
-        blob_primary_evidence=args.blob_primary_evidence,
-        blob_primary_references=args.blob_primary_references,
     )
 
     setup_logging(config.output_dir, config.log_level)
