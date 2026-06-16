@@ -74,6 +74,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-warm-content-cache", dest="warm_content_cache", action="store_false",
                         help="Disable P3 warming — run all three content sections fully concurrently "
                              "(use when latency matters or the proxy is demonstrably warm)")
+    parser.add_argument("--no-external-methods", dest="external_methods_pass", action="store_false",
+                        help="Disable the section-ir-0.15 Increment-2 external-methods (prose) pass — "
+                             "run with references-only external materialization (Increment-1 / A/B "
+                             "control). On by default.")
     return parser.parse_args()
 
 
@@ -106,6 +110,7 @@ def main() -> None:
         log_level=args.log_level,
         verify_scores=args.verify_scores,
         warm_content_cache=args.warm_content_cache,
+        external_methods_pass=args.external_methods_pass,
     )
 
     setup_logging(config.output_dir, config.log_level)

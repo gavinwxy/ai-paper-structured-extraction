@@ -6,6 +6,13 @@ nodes. Because it sees every node at once, it never has to forward-reference a n
 captured yet — the failure mode that severed composition links and mis-bound metric subjects in
 the old per-section pipeline.
 
+> **Architecture axis** (see `docs/extraction-axis.md`): this pass turns the census's coarse
+> node roles into the paper's **structural edges** — both internal composition (`part_of`) and
+> the paper-contribution↔external-prior-work edges (`builds_on` / `uses` / `compares_to`). It
+> only relates nodes the census already materialized; it never invents a node. It is the
+> in-pipeline complement to the parallel references pass, which independently mints external
+> edges from the bibliography and joins them onto the same census nodes via `cite_keys`.
+
 ## System Prompt
 
 ```markdown
@@ -35,7 +42,7 @@ A measure binds to the dataset/split it was computed on **not** here, but in the
 
 - Use only relationships the paper's text supports. Do not infer a composition or an evaluation target just because it seems plausible.
 - `part_of`: connect each `component` to the larger method it belongs to, usually the `contribution`. Connect every component you can — there are no section boundaries here, so a component never gets stranded from its parent. `part_of` is for the paper's **own** internal composition only. **Two sibling variants** of one idea — alternatives where neither is a sub-module of the other (e.g. UCB-N and UCB-MaxN, or "Method Two" and "Method Three") — are **not** `part_of` each other: relate them with `compares_to` (interchangeable peers), or `co_contribution` if the census tagged both as roots. Reserve `part_of` for genuine whole/part nesting.
-- `builds_on` / `uses`: link the `contribution` (or a `component`) to the external prior work it depends on — `builds_on` for prior work it **extends or derives from** (every `builds_on` node gets one), `uses` for a method/model/dataset it merely **depends on as a tool** without extending. These are external dependencies; never express them as `part_of`.
+- `builds_on` / `uses`: link the `contribution` (or a `component`) to the external prior work it depends on — `builds_on` for prior work it **extends or derives from** (every `builds_on` node gets one), `uses` for a method/model/dataset it merely **depends on as a tool/backbone/base model** without extending (every `uses` prior-art node gets one — a node the census/external stage tagged `uses` is, by construction, a building block the contribution runs on). These are external dependencies; never express them as `part_of`.
 - `assumes`: emit it only when the census surfaced a `theoretical_setting`/`structural_class` setting node; an empirical paper has none.
 - `evaluates`: emit exactly one `evaluates` per Measure, targeting the most specific of the paper's OWN methods (the `contribution`, or the `component` an ablation isolates). Emit a second only when the paper reports that same measure as a primary result for two of its own systems. Never target a `compared_against` baseline — do not fan one measure out to every system in its results table. (In the rare case a Measure is reported only for prior systems and judges none of the paper's own methods, emit no `evaluates` edge for it.)
 - `co_contribution`: emit it only for the co-equal roots the census actually tagged — **two or more `contribution`/`contribution_resource` nodes**. Most papers have a single root and need none.

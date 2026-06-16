@@ -34,3 +34,6 @@ AGENTS.md
 docs/
 issues/
 plans/
+
+# CodeGraph local index
+.codegraph/

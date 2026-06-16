@@ -67,9 +67,10 @@
                   "contribution",
                   "component",
                   "builds_on",
+                  "uses",
                   "compared_against"
                 ],
-                "description": "Argumentative role: contribution (the single primary method/system), component (a sub-method that is part_of the contribution), builds_on (prior work extended), or compared_against (a baseline)"
+                "description": "Argumentative role: contribution (the single primary method/system), component (a sub-method that is part_of the contribution), builds_on (prior work extended), uses (an external prior method/backbone/base-model depended on without extending), or compared_against (a baseline)"
               },
               "name": {
                 "type": "string",

@@ -40,6 +40,7 @@ from section_pipeline import (  # noqa: E402
     MEASURE_OBJECTIVE_CLASSES,
     MEASURE_TABLE_ROLES,
     METHOD_KINDS,
+    INTERNAL_NODE_ROLES,
     METHOD_ROLES,
     NODE_ROLES,
     SALIENCE_LEVELS,
@@ -88,17 +89,19 @@ ARRAY_TYPE_NAMES: dict[str, str] = {
 }
 
 # Census node roles and the unit-level role vocabularies, with explicit ordering for stable
-# schemas. Census roles are listed in search-cluster order (the_method, prior_art, testbed,
-# yardsticks). The substrate roles (dataset/benchmark/task) are the only ExperimentSetup roles
-# the census emits; the configuration roles are born during content fill.
+# schemas. Census roles are listed in search-cluster order (the_method, testbed, yardsticks,
+# the_problem). Section-ir-0.15: the census is internal-only — the prior-art METHOD roles
+# (builds_on / compared_against / uses) are NOT census-emittable (the external stage materializes
+# them), so they are absent from NODE_ROLE_ORDER and the census node_role enum, but stay in
+# METHOD_ROLE_ORDER below because re-injected external Method UNITS still carry them (`uses` is
+# Increment 2.1 — a backbone/base-model the contribution depends on without extending).
 NODE_ROLE_ORDER = [
     "contribution", "contribution_resource", "contribution_finding", "component",
-    "builds_on", "compared_against",
     "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
     "metric",
     "problem",
 ]
-METHOD_ROLE_ORDER = ["contribution", "component", "builds_on", "compared_against"]
+METHOD_ROLE_ORDER = ["contribution", "component", "builds_on", "uses", "compared_against"]
 EXPERIMENT_SETUP_ROLE_ORDER = [
     "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
     "contribution_resource",
@@ -161,7 +164,7 @@ ENUM_ORDER: dict[str, list[str]] = {
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
-    "node_role": NODE_ROLES,
+    "node_role": INTERNAL_NODE_ROLES,
     "method_role": METHOD_ROLES,
     "experiment_setup_role": EXPERIMENT_SETUP_ROLES,
     "finding_role": FINDING_ROLES,
@@ -387,6 +390,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
                 "method_role",
                 "Argumentative role: contribution (the single primary method/system), component "
                 "(a sub-method that is part_of the contribution), builds_on (prior work extended), "
+                "uses (an external prior method/backbone/base-model depended on without extending), "
                 "or compared_against (a baseline)",
             ),
             "name": string_schema("Name of the method"),
@@ -601,7 +605,7 @@ def node_census_schema() -> dict[str, Any]:
                     "properties": {
                         "node_id": id_schema(
                             "Node id; the prefix follows from the role's type — mth: for "
-                            "contribution/component/builds_on/compared_against, exp: for "
+                            "contribution/component, exp: for "
                             "contribution_resource/dataset/benchmark/task/theoretical_setting/"
                             "structural_class, mea: for metric, fnd: for contribution_finding, "
                             "prb: for problem"
@@ -612,10 +616,11 @@ def node_census_schema() -> dict[str, Any]:
                             "contribution (a method/system), contribution_resource (a dataset/"
                             "benchmark deliverable), or contribution_finding (a result/finding "
                             "deliverable for an analysis paper with no novel method/resource) — "
-                            "plus component. prior_art: builds_on and compared_against. testbed: "
-                            "dataset, benchmark, task, theoretical_setting, structural_class. "
-                            "yardsticks: metric. the_problem: problem (the single research "
-                            "problem the paper addresses).",
+                            "plus component. testbed: dataset, benchmark, task, "
+                            "theoretical_setting, structural_class. yardsticks: metric. "
+                            "the_problem: problem (the single research problem the paper "
+                            "addresses). Prior-art methods the paper builds on or compares "
+                            "against are NOT censused here — the references stage captures them.",
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
                         "gloss": string_schema("One short phrase describing the node"),
@@ -623,12 +628,11 @@ def node_census_schema() -> dict[str, Any]:
                         "cite_keys": string_array_schema(
                             "In-text bibliography citation marker(s) attached to this node, as "
                             "bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' "
-                            "for author-year). Fill for builds_on/compared_against/dataset/benchmark "
-                            "nodes (drawn from cited prior work or data), e.g. 'we compare against "
-                            "ConvS2S [8]' -> ['8']. Empty [] for any root (contribution/"
-                            "contribution_resource/contribution_finding) and every component (your "
-                            "own work), for task/metric/problem nodes, and when no citation is "
-                            "attached."
+                            "for author-year). Fill for cited testbed nodes (dataset/benchmark) "
+                            "drawn from cited data, e.g. 'evaluated on ImageNet [8]' -> ['8']. "
+                            "Empty [] for any root (contribution/contribution_resource/"
+                            "contribution_finding) and every component (your own work), for "
+                            "task/metric/problem nodes, and when no citation is attached."
                         ),
                         "salience": enum_schema(
                             "salience",

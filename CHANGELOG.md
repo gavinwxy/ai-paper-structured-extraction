@@ -1,12 +1,86 @@
 # 更新日志（section-ir 抽取框架）
 
 本文件整理 `section-ir` 论文抽取框架从 **0.10** 起的主要改动。
-当前 `IR_VERSION = section-ir-0.14`，`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14}`（见 `section_pipeline.py`）。
+当前 `IR_VERSION = section-ir-0.15`，`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14, 0.15}`（见 `section_pipeline.py`）。
 
 版本主线分支：`planning-stage-redesign-deepseek-light`（0.12+），
 0.10 在 `planning-stage-redesign-deepseek-heavy-fix` 上落地。
 
 格式约定：每个版本列出主题、关键改动与对应 commit；带 A/B 实测数字的结论尽量给出量化结果。
+
+---
+
+## section-ir-0.15 — 内/外抽取轴解耦：census 纯内部 + 外部方法 re-inject
+
+**日期**：2026-06-16　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`　**未提交**
+
+把内部内容与外部关系**真正解耦**：census 在 LLM 层只抽本文内部的东西，外部先行方法由专门环节
+负责，再**确定性 re-inject 回节点集**，使图谱（对比 / 血缘骨架、引用 join、score-row 锚点、跨论文
+index）完整保留。详见 `docs/extraction-axis.md`。
+
+> **推翻 2026-06-16 早先"否决纯内部"的结论**：当时担心纯内部 census 会割断 references→unit join、
+> 清空 stage-B 外部边、丢 baseline score-row 锚点——这些担心**靠新增的 re-injection 层全部补回**。
+> LLM 不再抽外部方法节点，但代码从外部环节把它们重新造出来并合并进 census，下游看到的节点集与
+> 0.14 等价。用户明确接受"有信息损失也没关系"，并选择把 baseline/血缘搬到外部、让外部链接更聚焦
+> "方法之间的关系"。早先一并落地的 **references apparatus 例外**（纯优化器/采样/打分模型/硬件/
+> 工具库引用当背景 SKIP，与 census "apparatus is not a node" 对齐）保留有效。
+
+### 精炼后的边界（按图谱角色，不按出处）
+- **内部（census 直接产）**：contribution / component / problem / metric / finding **+ 完整测试床**
+  （dataset / benchmark / task / theoretical_setting / structural_class）。评测数据集 / benchmark
+  **算内部**（图谱核心可查询关系 + score-row `setup_id` 锚点）。
+- **外部（re-inject）**：只有先行 / 对比的**方法**——`builds_on`（血缘）、`compared_against`（baseline）。
+
+### Increment 1 — census 纯内部 + references 来源 re-inject
+- `IR_VERSION = section-ir-0.15`；`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14, 0.15}`。
+- census `node_role` enum 收缩为 `INTERNAL_NODE_ROLES`；`normalize_census_nodes` 丢弃漏抽的外部角色；
+  `node-census.md` 改为四簇、删 prior_art 簇。
+- `materialize_external_methods(references, census)`：`validate_census` 后、`build_node_registry`
+  前，从 references 的 `builds_on` / `compares_to` 条目铸造外部 `mth:` 节点 re-inject。
+
+### Increment 2 — 专用 external-methods 散文 pass + 回投
+- **为何**：references 引文/表格锚定，对散文血缘（"we build on / extend X"）天然欠召回；其
+  schema 要求 `{id, authors, title, venue, year}` 且禁编造，**结构上**装不下散文里点名却无干净引文行
+  的血缘。Increment 1 实测 `builds_on` 边 −64%（vs 0.14）。
+- **新 pass**：`prompts/external-methods-extraction.md` + `schemas/external-methods-output.schema.json`
+  + `run_external_methods_extraction` / worker `_run_external_methods`（Phase-1 并行，冷缓存，默认开，
+  `--no-external-methods` 退回 Increment-1）。输出 `{name, relation, cite_key, evidence}`；`evidence`
+  是硬门控，`builds_on` 必须能引"本文方法作主语 + 血缘动词 + 该方法作宾语"的句子。
+- **合并** `materialize_external_methods(references, census, external_methods)`：两源单次确定性并集
+  排序、按 name 去重 + **cite_key 桥接**（"ResNet"[8] ≡ "Residual Network"[8]）、`builds_on` 升级
+  `compared_against`、撞内部节点内部优先。
+- **回投 references 层**（关键正确性 fix）：只由散文 pass 找到的外部方法合成最小 references 条目
+  （`title = name`）追加进 `references`，否则它们对 `reconcile_reference_units` 和跨论文
+  `build_entity_index`（按 `references[].title` 聚类、跳过空 title）隐形——有边却无法跨语料 join。
+
+### 实测（20 篇配对 A/B，control=Inc1 vs treat=Inc2，同代码仅 `--no-external-methods` 之差）
+- 20/20 valid 两臂。外部方法节点 **160→197（+23%）**，distinct 160→196（≈无重复膨胀）。
+- `builds_on` 边（post-bf）**28→41（+46%）**，`compares_to` **152→189（+24%）**，外部边预算 **+28%**。
+- **回归门全绿或更好**：testbed 89→89、setup_id 91→90、`part_of` 94→91（无噪声爆炸）；回投 fix 让
+  refs 链接率 **56%→66%**、system_id **87%→96%**（pass-only 外部方法现在能 join + 索引）。
+- `builds_on` 精度盲审（30 条 pass 发射，3-judge 多数）：**87% 真外部方法链接，13% 纯噪声**；严格血缘
+  47%、另 33% 真依赖但更该标 `uses`（base-model/backbone）、7% 该标 `compared_against`。
+- 设计经 4-lens 红队评审（GO_WITH_CHANGES）：回投 fix、并集去重、evidence 硬门控、精度盲审皆按其建议落地。
+
+### Increment 2.1 — pass 也产 `uses`（base-model / backbone 分流）
+精度盲审揭示 builds_on 的 33% 其实是"采用 backbone / base-model"的 `uses`，被过度归到 builds_on。
+新增**第三个再注入外部方法角色 `uses`**（re-inject-only：`NODE_ROLES`/`EXTERNAL_NODE_ROLES`/
+`ROLE_TO_TYPE→Method`/`ROLE_CLUSTER→prior_art`/`METHOD_ROLE_ORDER`，schema 重生）；external-methods
+prompt + schema 加 `uses`（builds_on=改写/扩展，uses=原样依赖 backbone/base-model，compared_against=
+baseline；数据集/apparatus 仍排除）；relation-pass 让 `uses` 先行节点也**逐节点出边**；references 的
+`uses` 仍不铸造节点（指向 census 测试床 / apparatus）——只有散文 pass 的 `uses` 铸造方法节点。
+
+**实测（同 20 篇，Inc2 无-uses → Inc2.1 有-uses）**：20/20 valid。pass builds_on 30→23、`uses` 0→42；
+外部方法节点 197→227（+15%，distinct 196→220）；Stage-B 边 builds_on 39→28、`uses` 0→39、compares_to
+156→161；方法关系边预算（bo+us+ct, post-bf）317→328（+3%）。回归门：testbed / system_id(96→97%) /
+setup_id(90%) 稳；score-row 总数波动（−141 集中在 2 篇大表论文 020/200 的 evidence 抽取非确定性，填充率
+不降，非 2.1 退化）；refs 链接绝对值 289→294（不丢，占比因 +69 条 uses 回投条目而稀释）。
+**精度**：builds_on 严格血缘 **47%→57%**（base-model 离开 builds_on）；新 `uses` 层 ~95% 为真building
+block（base-model/backbone/复用算法 SIFT/RANSAC/TSDF/Louvain…，无数据集/优化器泄漏）。残留 builds_on
+噪声（survey-actor: DETR/Kennedy；baseline: BiLSTM；少量仍漏的 base-model）是另一类，2.1 不针对它。
+
+测试：520 项 unittest 绿（新增跨源合并 / 回投 / gate / `uses` 角色 / 跨源 rank 用例）。
+4 篇冒烟 + Inc1↔Inc2↔Inc2.1 共 3×20 篇 A/B 全程零崩溃。
 
 ---
 

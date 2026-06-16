@@ -25,6 +25,7 @@ from section_pipeline import (
     load_section_schema,
     load_section_module,
     load_references_schema,
+    load_external_methods_schema,
     slice_metadata_input,
     build_response_format,
     schema_to_prompt_spec,
@@ -38,6 +39,7 @@ from section_pipeline import (
     render_content_user_prompt,
     build_prompt_cache_key,
     assemble_extraction,
+    materialize_external_methods,
     reconcile_reference_units,
     validate_section_ir,
     parse_sections,
@@ -49,6 +51,7 @@ from section_pipeline import (
     SECTION_EXTRACTION_PROMPT_PATH,
     METADATA_PROMPT_PATH,
     REFERENCES_PROMPT_PATH,
+    EXTERNAL_METHODS_PROMPT_PATH,
     METADATA_SCHEMA_PATH,
     SECTION_ORDER,
     MAX_SECTION_RETRIES,
@@ -100,11 +103,19 @@ async def _run_paper_pipeline(
             else None
         )
 
-        # Phase 1 (stage A): node census + metadata + references in parallel
-        census_result, metadata_result, references_result = await asyncio.gather(
+        # Phase 1 (stage A): node census + metadata + references + external methods in parallel.
+        # The external-methods pass (Increment 2) is gated so an A/B control / opt-out keeps the
+        # Increment-1 reference-only external materialization (no extra cold call).
+        async def _external_methods_arm() -> dict[str, Any] | None:
+            if not config.external_methods_pass:
+                return None
+            return await _run_external_methods(paper_id, paper_content, config, llm)
+
+        census_result, metadata_result, references_result, external_methods_result = await asyncio.gather(
             _run_census(paper_id, paper_content, cache_key, config, llm),
             _run_metadata(paper_id, paper_content, config, llm),
             _run_references(paper_id, paper_content, config, llm),
+            _external_methods_arm(),
             return_exceptions=True,
         )
 
@@ -114,6 +125,7 @@ async def _run_paper_pipeline(
 
         metadata = None
         references = None
+        external_methods = None
         warnings: list[str] = []
 
         if isinstance(metadata_result, BaseException):
@@ -128,6 +140,12 @@ async def _run_paper_pipeline(
         else:
             references = references_result
 
+        if isinstance(external_methods_result, BaseException):
+            warnings.append(f"external methods extraction failed: {external_methods_result}")
+            logger.warning("[%s] External methods extraction failed: %s", paper_id, external_methods_result)
+        else:
+            external_methods = external_methods_result
+
         # RF-01: dirname venue/year backfill + has_code/has_data — also recovers a usable
         # metadata record when the LLM metadata pass failed outright (metadata is None here).
         metadata = enrich_metadata(metadata, paper_id)
@@ -138,10 +156,21 @@ async def _run_paper_pipeline(
             details = "\n- ".join(census_issues)
             raise ValueError(f"Node census validation failed:\n- {details}")
 
+        # Section-ir-0.15 internal/external axis: the census is internal-only. Re-materialize the
+        # external prior-art Method nodes (builds_on / compared_against) from BOTH external stages —
+        # the citation-anchored references pass and the prose external-methods pass (Increment 2,
+        # which recovers the method-to-method lineage references under-emits) — and merge them into
+        # the node set BEFORE build_node_registry, so the relation pass, the method-section
+        # materialization, score-row system_id anchors, and reconcile all see them. The merge also
+        # projects pass-only externals back into `references` so they join + index cross-paper.
+        if references is not None or external_methods is not None:
+            warnings.extend(materialize_external_methods(references, census, external_methods))
+
         save_json(paper_dir / "01_census.json", census)
         save_json(paper_dir / "02_metadata.json", metadata)
         save_json(paper_dir / "03_references.json", references)
-        logger.info("[%s] Phase 1 complete (census + metadata + references)", paper_id)
+        save_json(paper_dir / "05_external_methods.json", external_methods)
+        logger.info("[%s] Phase 1 complete (census + metadata + references + external methods)", paper_id)
 
         # Phase 2 (stage B): relation pass over the full node set
         node_registry = build_node_registry(census)
@@ -384,6 +413,35 @@ async def _run_references(
         response_format=resp_fmt,
         paper_id=paper_id,
         stage="references",
+    )
+
+
+async def _run_external_methods(
+    paper_id: str, paper_content: str, config: Config, llm: LLMClient,
+) -> dict[str, Any]:
+    """Run the external-methods pass (section-ir-0.15 Increment 2).
+
+    The dedicated external method-relationship stage: a prose sweep for the external prior-art
+    methods THIS paper builds on / compares its own method against — the lineage the citation/
+    table-anchored references pass under-emits. Like references, it runs cold (own system prompt,
+    no prompt_cache_key) in Phase 1; its records feed materialize_external_methods.
+    """
+    system_prompt, user_template = load_prompt(EXTERNAL_METHODS_PROMPT_PATH)
+    user_prompt = user_template.replace("{{paper_content}}", paper_content)
+    schema = load_external_methods_schema()
+    resp_fmt = build_response_format(schema, name="external_methods_output", model=config.model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, config.model)
+
+    return await _call_and_parse(
+        llm,
+        model=config.model,
+        system_prompt=system_prompt,
+        user_content=user_prompt,
+        temperature=config.temperature,
+        max_tokens=config.planning_max_tokens,
+        response_format=resp_fmt,
+        paper_id=paper_id,
+        stage="external_methods",
     )
 
 

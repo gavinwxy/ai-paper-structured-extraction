@@ -40,3 +40,9 @@ class Config:
     # redundant (not harmful) when the proxy is already warm. Cost is one section of serial latency
     # per paper, so disable with --no-warm-content-cache for latency-priority runs.
     warm_content_cache: bool = True
+    # section-ir-0.15 Increment 2 (default ON): the dedicated external-methods (prose) pass that
+    # recovers the method-to-method lineage (builds_on) the citation-anchored references pass
+    # under-emits. One extra cold full-paper call in Phase 1; its records feed
+    # materialize_external_methods alongside references. Disable with --no-external-methods to run
+    # the Increment-1 (references-only external) configuration, e.g. for an A/B control arm.
+    external_methods_pass: bool = True

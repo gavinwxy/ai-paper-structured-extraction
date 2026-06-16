@@ -23,11 +23,13 @@ SECTION_MODULES_DIR = PROMPTS_DIR / "section-modules"
 EXAMPLES_DIR = PROMPTS_DIR / "examples"
 METADATA_PROMPT_PATH = PROJECT_ROOT / "prompts" / "metadata-extraction.md"
 REFERENCES_PROMPT_PATH = PROJECT_ROOT / "prompts" / "references-extraction.md"
+EXTERNAL_METHODS_PROMPT_PATH = PROJECT_ROOT / "prompts" / "external-methods-extraction.md"
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
 NODE_CENSUS_SCHEMA_PATH = SCHEMAS_DIR / "node-census-output.schema.json"
 RELATION_PASS_SCHEMA_PATH = SCHEMAS_DIR / "relation-pass-output.schema.json"
 METADATA_SCHEMA_PATH = SCHEMAS_DIR / "metadata-output.schema.json"
 REFERENCES_SCHEMA_PATH = SCHEMAS_DIR / "references-output.schema.json"
+EXTERNAL_METHODS_SCHEMA_PATH = SCHEMAS_DIR / "external-methods-output.schema.json"
 SECTION_SCHEMA_FILES: dict[str, str] = {
     "problem": "section-problem.schema.json",
     "method": "section-method.schema.json",
@@ -140,8 +142,8 @@ TYPED_ARRAY_KEYS: dict[str, str] = {
 NODE_TYPES = {"Method", "ExperimentSetup", "Measure", "Finding"}
 # The IR version this pipeline emits, and the versions the validator accepts (the retrofit
 # tooling re-validates 0.12-era outputs in place, so the previous version stays accepted).
-IR_VERSION = "section-ir-0.14"
-ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13", "section-ir-0.14"}
+IR_VERSION = "section-ir-0.15"
+ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13", "section-ir-0.14", "section-ir-0.15"}
 
 NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Method": "mth:",
@@ -174,6 +176,11 @@ NODE_ROLES = {
     "component",          # the_method: a sub-method/module that is part of the contribution
     "builds_on",          # prior_art: an existing method/model the contribution extends
     "compared_against",   # prior_art: a baseline method the contribution is compared against
+    "uses",               # prior_art: an external method/model the contribution depends on as a
+                          # building block (a backbone, a base model, a reused technique) WITHOUT
+                          # extending it — distinct from `builds_on` (extends) and from a `dataset`/
+                          # `benchmark` testbed. EXTERNAL (re-inject-only, never census-emitted;
+                          # section-ir-0.15 Increment 2.1), materialized by the external-methods pass.
     "dataset",            # testbed: data the method is trained or evaluated on
     "benchmark",          # testbed: a standardized dataset+protocol for evaluation
     "task",               # testbed: the problem being solved/evaluated
@@ -184,6 +191,17 @@ NODE_ROLES = {
                           # planned by the census so it is recallable/salience-tagged; the problem
                           # section materializes it (id reuse) and authors its motivates edge
 }
+# Internal/external axis (section-ir-0.15). The census is INTERNAL-ONLY: it emits the paper's
+# own nodes (contribution/component/problem/metric/finding) and the testbed it runs on
+# (dataset/benchmark/task/theoretical_setting/structural_class). The prior-art METHODS
+# (builds_on / compared_against / uses) are EXTERNAL — materialized by the external stages
+# (materialize_external_methods) and re-injected into the node set before the relation pass.
+# `uses` (Increment 2.1) is re-inject-only: the census never emitted it, so it lives in
+# EXTERNAL_NODE_ROLES but its removal from INTERNAL is a no-op. ROLE_TO_TYPE / ROLE_CLUSTER below
+# stay TOTAL over the union so a re-injected external node still derives type Method and cluster
+# prior_art; only what the census LLM may emit shrinks.
+EXTERNAL_NODE_ROLES = {"builds_on", "compared_against", "uses"}
+INTERNAL_NODE_ROLES = NODE_ROLES - EXTERNAL_NODE_ROLES
 # role -> coarse node type. Total and unambiguous: a node's type is a strict coarsening of
 # its role, so the census carries only `role` and the pipeline derives `type` from it.
 ROLE_TO_TYPE: dict[str, str] = {
@@ -193,6 +211,7 @@ ROLE_TO_TYPE: dict[str, str] = {
     "component": "Method",
     "builds_on": "Method",
     "compared_against": "Method",
+    "uses": "Method",
     "dataset": "ExperimentSetup",
     "benchmark": "ExperimentSetup",
     "task": "ExperimentSetup",
@@ -209,6 +228,7 @@ ROLE_CLUSTER: dict[str, str] = {
     "component": "the_method",
     "builds_on": "prior_art",
     "compared_against": "prior_art",
+    "uses": "prior_art",
     "dataset": "testbed",
     "benchmark": "testbed",
     "task": "testbed",
@@ -736,6 +756,11 @@ def load_section_schema(section_type: str) -> dict:
 def load_references_schema() -> dict[str, Any]:
     """Load the references-pass schema (the blob-primary transcription contract)."""
     return json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def load_external_methods_schema() -> dict[str, Any]:
+    """Load the external-methods-pass schema (the dedicated method-relationship contract)."""
+    return json.loads(EXTERNAL_METHODS_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def load_section_module(section_type: str) -> str:
@@ -1368,6 +1393,16 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
       node when none is marked, demote extras to a non-root role of their type when several are.
     """
     normalized = copy.deepcopy(census)
+    # Section-ir-0.15 internal/external axis: the census is internal-only. Drop any prior-art
+    # METHOD node (builds_on / compared_against) the LLM still emits — these are materialized by
+    # the external stage (materialize_external_methods) and re-injected before the relation pass,
+    # so the census stays a pure internal-node inventory.
+    node_list = normalized.get("nodes")
+    if isinstance(node_list, list):
+        normalized["nodes"] = [
+            n for n in node_list
+            if not (isinstance(n, dict) and n.get("role") in EXTERNAL_NODE_ROLES)
+        ]
     nodes = iter_census_nodes(normalized)
 
     for node in nodes:
@@ -3824,6 +3859,29 @@ def run_references_extraction(
     return _parse_llm_json(raw)
 
 
+def run_external_methods_extraction(
+    client: Any,
+    model: str,
+    paper_content: str,
+    temperature: float = 0.0,
+    max_tokens: int = 16_384,
+) -> dict[str, Any]:
+    """Extract the external prior-art methods this paper builds on / compares against.
+
+    The dedicated external method-relationship stage (section-ir-0.15): reads the paper's prose
+    for lineage and comparison and emits ``{name, relation, cite_key, evidence}`` records. These
+    feed ``materialize_external_methods``, which mints the external Method nodes the internal-only
+    census no longer emits.
+    """
+    system_prompt, user_template = load_prompt(EXTERNAL_METHODS_PROMPT_PATH)
+    user_prompt = user_template.replace("{{paper_content}}", paper_content)
+    schema = load_external_methods_schema()
+    resp_fmt = build_response_format(schema, name="external_methods_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
+    raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
+    return _parse_llm_json(raw)
+
+
 def _normalize_name(text: Any) -> str:
     """Lowercase a name to space-joined alphanumeric tokens for tolerant matching."""
     if not isinstance(text, str):
@@ -3872,6 +3930,325 @@ def _normalize_cite_key(value: Any) -> str:
         return re.sub(r"[\[\]\s]+", "", stripped).lower()
     first = re.sub(r"[^a-z0-9]", "", authors[0].lower())
     return f"{first}{year}{letter}" if first else re.sub(r"[\[\]\s]+", "", stripped).lower()
+
+
+# References role -> the census external-method node role it materializes (section-ir-0.15). The
+# references pass speaks the edge vocabulary (builds_on / compares_to); the census node set speaks
+# the node-role vocabulary (builds_on / compared_against). `uses` is intentionally absent: a `uses`
+# reference points at a dataset/benchmark (a census-owned testbed node, joined by cite_key) or at
+# apparatus (skipped), never at a new external prior-art method node.
+_REF_ROLE_TO_EXTERNAL_NODE_ROLE = {"builds_on": "builds_on", "compares_to": "compared_against"}
+# The inverse: an external-method node role -> the references edge-vocabulary role used when this
+# stage projects a pass-only external back into the references layer (so it joins + indexes).
+_EXTERNAL_NODE_ROLE_TO_REF_ROLE = {"builds_on": "builds_on", "compared_against": "compares_to", "uses": "uses"}
+# Rank for role upgrade (lower wins): when one external method is seen under several roles, the most
+# specific/salient wins — builds_on (lineage, the work extends it) > compared_against (a baseline it
+# beats) > uses (merely a building block it depends on). So a method that is both extended and used
+# is `builds_on`, and a plain backbone stays `uses`.
+_EXTERNAL_NODE_ROLE_RANK = {"builds_on": 0, "compared_against": 1, "uses": 2}
+# Source authority for cross-source merge / id-collision arbitration (lower wins): an internal
+# census node owns its id outright; between the two external sources the references pass (which
+# carries verified bibliographic backing + a real cite_key) outranks the prose pass.
+_EXTERNAL_SOURCE_RANK = {"references": 0, "pass": 1}
+
+
+def _external_method_candidates(
+    references: dict[str, Any] | None,
+    external_methods: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Collect raw external-method candidates from both stages into one list.
+
+    Each candidate is ``{name, role (node role), cite_key, source, idx}``. The references pass
+    speaks the edge vocabulary (builds_on / compares_to -> mapped to node roles); the prose
+    external-methods pass already speaks the node-role vocabulary (builds_on / compared_against).
+    `uses` and any other reference role is dropped here (testbed/apparatus, not a new method node).
+    """
+    raw: list[dict[str, Any]] = []
+
+    ref_list = references.get("references") if isinstance(references, dict) else None
+    if isinstance(ref_list, list):
+        for idx, ref in enumerate(ref_list):
+            if not isinstance(ref, dict):
+                continue
+            relation = ref.get("relation")
+            if not isinstance(relation, dict):
+                continue
+            roles = [r for r in relation.get("roles") or [] if isinstance(r, str)]
+            node_role = next(
+                (_REF_ROLE_TO_EXTERNAL_NODE_ROLE[r] for r in ("builds_on", "compares_to") if r in roles),
+                None,
+            )
+            if node_role is None:
+                continue
+            name = relation.get("provides_name")
+            if not isinstance(name, str) or not name.strip():
+                continue  # no named artifact -> no node (its number/text survives in the blob)
+            cite_id = ref.get("id")
+            raw.append({
+                "name": name,
+                "role": node_role,
+                "cite_key": cite_id.strip() if isinstance(cite_id, str) else "",
+                "source": "references",
+                "idx": idx,
+            })
+
+    em_list = external_methods.get("external_methods") if isinstance(external_methods, dict) else None
+    if isinstance(em_list, list):
+        for idx, em in enumerate(em_list):
+            if not isinstance(em, dict):
+                continue
+            role = em.get("relation")
+            if role not in _EXTERNAL_NODE_ROLE_RANK:  # only builds_on / compared_against mint a node
+                continue
+            name = em.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            cite_key = em.get("cite_key")
+            raw.append({
+                "name": name,
+                "role": role,
+                "cite_key": cite_key.strip() if isinstance(cite_key, str) else "",
+                "source": "pass",
+                "idx": idx,
+            })
+    return raw
+
+
+def materialize_external_methods(
+    references: dict[str, Any] | None,
+    census: dict[str, Any] | None,
+    external_methods: dict[str, Any] | None = None,
+) -> list[str]:
+    """Mint external prior-art Method nodes into the census node set from the external stage(s).
+
+    Section-ir-0.15 internal/external axis: the census is internal-only and no longer emits
+    `builds_on` / `compared_against` nodes. This deterministic step re-creates them from the two
+    external stages — the citation-anchored **references** pass and (Increment 2) the prose
+    **external-methods** pass that recovers the method-to-method lineage references under-emits —
+    so the comparison/lineage graph, the references->unit cite_key join, and baseline score-row
+    `system_id` anchors all survive. It runs AFTER `validate_census` and BEFORE `build_node_registry`,
+    so the minted nodes flow into the relation pass, the method-section materialization, and
+    reconcile exactly like census nodes (the relation pass draws one builds_on/compares_to edge per
+    minted node).
+
+    Candidates from BOTH sources are folded into one canonical set, deduped by normalized name AND
+    bridged by shared citation key (so a references "ResNet" [8] and a prose "Residual Network" [8]
+    collapse to one node); cite_keys are merged and a builds_on upgrades a compared_against (lineage
+    is the stronger node role). The references surface name is preferred as canonical. Minting is a
+    single deterministic sort over the union, so replays are idempotent; on an id-slug collision an
+    internal census node always wins (its id is left authoritative), and between two external mints
+    the loser's cite_keys/role are merged into the winner rather than dropped.
+
+    A pass-ONLY external (lineage references never emitted — frequently with no inline citation
+    marker) would otherwise be invisible to `reconcile_reference_units` and to the title-keyed
+    cross-paper entity index. To keep the recovered method-to-method links queryable across the
+    corpus, each such node is also projected back into the references layer as a minimal entry
+    (``title = name`` so the index includes it; role from its node role; ``provides_name = name`` so
+    reconcile name-joins it to the unit). Mutates ``census['nodes']`` (and, for the projection,
+    ``references['references']``) in place; returns audit warnings.
+    """
+    warnings: list[str] = []
+    if not isinstance(census, dict):
+        return warnings
+    nodes = census.get("nodes")
+    if not isinstance(nodes, list):
+        return warnings
+
+    raw = _external_method_candidates(references, external_methods)
+    if not raw:
+        return warnings
+
+    # Internal census node ids own their slug outright (authority: internal > references > pass).
+    internal_ids = {
+        n.get("node_id") for n in nodes
+        if isinstance(n, dict) and isinstance(n.get("node_id"), str)
+    }
+
+    # --- Fold the union into canonical candidates: dedup by normalized name, bridge by cite_key. ---
+    # Process references before pass (source rank), then by a fixed total order, so the canonical
+    # name/slug/node_id a method lands under is reproducible across re-runs.
+    raw.sort(key=lambda c: (
+        _EXTERNAL_SOURCE_RANK[c["source"]],
+        _normalize_name(c["name"]),
+        _normalize_cite_key(c["cite_key"]),
+        c["idx"],
+    ))
+    canon: list[dict[str, Any]] = []
+    by_name: dict[str, dict[str, Any]] = {}
+    by_cite: dict[str, dict[str, Any]] = {}
+    for c in raw:
+        nname = _normalize_name(c["name"])
+        if not nname:
+            continue
+        ncite = _normalize_cite_key(c["cite_key"])
+        cand = by_name.get(nname) or (by_cite.get(ncite) if ncite else None)
+        if cand is None:
+            cand = {
+                "name": c["name"],
+                "role": c["role"],
+                "cite_keys": [],
+                "from_references": False,
+                "from_pass": False,
+            }
+            canon.append(cand)
+        by_name.setdefault(nname, cand)  # alias this surface form onto the canonical candidate
+        if c["source"] == "references":
+            cand["from_references"] = True
+            cand["name"] = c["name"]  # references surface name is canonical (verified bibliographic form)
+            by_name[_normalize_name(c["name"])] = cand
+        else:
+            cand["from_pass"] = True
+        if c["cite_key"] and c["cite_key"] not in cand["cite_keys"]:
+            cand["cite_keys"].append(c["cite_key"])
+        if ncite:
+            by_cite.setdefault(ncite, cand)
+        if _EXTERNAL_NODE_ROLE_RANK[c["role"]] < _EXTERNAL_NODE_ROLE_RANK[cand["role"]]:
+            cand["role"] = c["role"]
+
+    # --- Mint, in a deterministic order independent of source interleaving. ---
+    minted_ids: dict[str, dict[str, Any]] = {}  # base_id -> minted node (for external-external merge)
+    pass_only_nodes: list[dict[str, Any]] = []
+    for cand in sorted(canon, key=lambda c: (_normalize_name(c["name"]), _EXTERNAL_NODE_ROLE_RANK[c["role"]])):
+        name = cand["name"]
+        role = cand["role"]
+        slug = _slugify_id_part(name)
+        if not slug:
+            continue
+        base_id = f"{NODE_ID_PREFIX_BY_TYPE['Method']}{slug}"
+        if base_id in internal_ids:
+            # An internal census node owns this id — leave it authoritative; the reference/prose
+            # mention can still link by name in reconcile. Do not mint a mth:foo_2 twin, and do not
+            # pollute the internal node with external cite_keys (the citation is to the external work).
+            warnings.append(
+                f"External method {name!r} (cite {cand['cite_keys'] or '<none>'}) collides with "
+                f"existing census node {base_id!r}; not minted"
+            )
+            continue
+        if base_id in minted_ids:
+            # Two different surface names slugged to the same id (rare; name-dedup caught the common
+            # case). Merge the loser into the winner rather than dropping its markers.
+            winner = minted_ids[base_id]
+            for ck in cand["cite_keys"]:
+                if ck not in winner["cite_keys"]:
+                    winner["cite_keys"].append(ck)
+            if _EXTERNAL_NODE_ROLE_RANK[role] < _EXTERNAL_NODE_ROLE_RANK[winner["role"]]:
+                winner["role"] = role
+                winner["gloss"] = _external_method_gloss(role)
+            continue
+        node = {
+            "node_id": base_id,
+            "role": role,
+            "type": "Method",
+            "name": name,
+            "gloss": _external_method_gloss(role),
+            "source_scope": [],
+            "cite_keys": list(cand["cite_keys"]),
+            "salience": "should",
+        }
+        nodes.append(node)
+        internal_ids.add(base_id)
+        minted_ids[base_id] = node
+        cand["node_id"] = base_id
+        if cand["from_pass"] and not cand["from_references"]:
+            pass_only_nodes.append(cand)
+        warnings.append(
+            f"Materialized external {role} method {name!r} as {base_id} "
+            f"(cite {cand['cite_keys'] or '<none>'})"
+        )
+
+    # --- Project pass-only externals into the references layer so they join + index cross-paper. ---
+    warnings.extend(_project_pass_only_externals(references, pass_only_nodes))
+    return warnings
+
+
+def _external_method_gloss(role: str) -> str:
+    if role == "builds_on":
+        return "prior method this work builds on"
+    if role == "uses":
+        return "external method this work uses as a building block"
+    return "baseline method this work is compared against"
+
+
+def _project_pass_only_externals(
+    references: dict[str, Any] | None,
+    pass_only_nodes: list[dict[str, Any]],
+) -> list[str]:
+    """Append a minimal references entry for each pass-only external minted node.
+
+    A prose-discovered external method that the references pass never emitted (often because it is
+    named in method-section prose with no inline citation marker) gets a census node + a node-gated
+    relation-pass edge, but without a references entry it is invisible to `reconcile_reference_units`
+    (which iterates the references list) and to the cross-paper `build_entity_index` (which clusters
+    on ``references[].title`` and skips title-less entries — the existing graph-consistency stubs
+    write ``title:''``). Projecting it back as a real entry (``title = name``, ``provides_name = name``)
+    lets reconcile name-join it to the unit and lets the cross-paper index cluster it like any other
+    external. Skips a projection whose citation key would duplicate an existing references entry id.
+    """
+    warnings: list[str] = []
+    if not pass_only_nodes:
+        return warnings
+    if not isinstance(references, dict):
+        # The references pass failed entirely; the nodes/edges still stand, but there is no layer to
+        # project into. Surface the loss instead of silently dropping the cross-paper join.
+        warnings.append(
+            f"{len(pass_only_nodes)} pass-only external method(s) could not be projected into the "
+            f"references layer (references pass unavailable); cross-paper join unavailable for them"
+        )
+        return warnings
+    ref_list = references.setdefault("references", [])
+    if not isinstance(ref_list, list):
+        return warnings
+    existing_ref_norm_ids = {
+        _normalize_cite_key(r.get("id")) for r in ref_list if isinstance(r, dict)
+    }
+    unanchored = 0
+    for cand in pass_only_nodes:
+        name = cand["name"]
+        node_id = cand["node_id"]
+        ref_role = _EXTERNAL_NODE_ROLE_TO_REF_ROLE[cand["role"]]
+        # Prefer a real in-prose citation marker as the entry id (joins by cite_key); fall back to
+        # the synthetic node_id (joins by provides_name) when there is none or it would collide.
+        entry_id = ""
+        for ck in cand["cite_keys"]:
+            if ck and _normalize_cite_key(ck) not in existing_ref_norm_ids:
+                entry_id = ck
+                break
+        if not entry_id:
+            if not cand["cite_keys"]:
+                unanchored += 1
+            if _normalize_cite_key(node_id) in existing_ref_norm_ids:
+                # Even the synthetic key collides — leave it to reconcile's name-fallback / stub.
+                warnings.append(
+                    f"Pass-only external {name!r} ({node_id}) not projected: citation key collides "
+                    f"with an existing reference entry"
+                )
+                continue
+            entry_id = node_id
+        ref_list.append({
+            "id": entry_id,
+            "authors": [],
+            "title": name,
+            "venue": "",
+            "year": None,
+            "relation": {
+                "roles": [ref_role],
+                "stance": "neutral",
+                "salience": "peripheral",
+                "provides_name": name,
+                "provides_unit_ids": [],
+            },
+        })
+        existing_ref_norm_ids.add(_normalize_cite_key(entry_id))
+        warnings.append(
+            f"Projected pass-only external {name!r} ({node_id}) into references as entry "
+            f"{entry_id!r} (role {ref_role})"
+        )
+    if unanchored:
+        warnings.append(
+            f"{unanchored} pass-only external method(s) had no inline citation marker; projected by "
+            f"name only (weaker join, but indexed cross-paper via title)"
+        )
+    return warnings
 
 
 def reconcile_reference_units(
