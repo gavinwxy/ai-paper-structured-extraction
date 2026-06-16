@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "title": "Citation Relations Output",
+  "required": ["citations"],
+  "additionalProperties": false,
+  "description": "section-ir-0.16 paper-level citation-relation layer: how THIS paper relates to the prior work it cites. Per cited work, only the in-text cite_key and the relation role(s) with their verbatim evidence span. Source is the paper as a whole — no nodes, no internal-unit edges. Bibliographic metadata is resolved separately by the reference-metadata pass; background/apparatus citations are skipped (they stay in the verbatim reference blob).",
+  "properties": {
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cite_key", "relations"],
+        "additionalProperties": false,
+        "properties": {
+          "cite_key": {
+            "type": "string",
+            "description": "The in-text citation marker exactly as written (e.g. '12', 'Vaswani2017'). The join key to the bibliography. Empty string only if the related method is named in prose with no inline citation marker."
+          },
+          "relations": {
+            "type": "array",
+            "description": "One or more relations THIS paper has with the cited work. Multiple when the same work plays multiple roles (e.g. both builds_on and compares_to).",
+            "items": {
+              "type": "object",
+              "required": ["role", "signal"],
+              "additionalProperties": false,
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": ["compares_with", "uses_component", "builds_on", "inspired_by", "adapts_idea_from", "addresses_limitation_of", "analyzes_property_of"],
+                  "description": "Seven-role paper-level citation taxonomy (background is the residual skip bucket — never emitted). compares_with = the cited work is a baseline/reference/competing method this paper measures itself against experimentally (incl. any comparison-table row). uses_component = this paper directly uses a component of the cited work as-is (module, model part, loss, encoder, dataset/benchmark run on, training recipe, implementation) — a local ingredient, not the overall base. builds_on = the cited work is this paper's main base method/base model/base framework/pipeline that it modifies or extends (remove it and the framework does not stand). inspired_by = this paper explicitly says the cited work inspired its idea, without necessarily reusing its concrete structure. adapts_idea_from = this paper transfers the cited work's core idea to a new architecture/representation/modality/task/application (stronger than inspired_by). addresses_limitation_of = this paper names a limitation of the cited work (or its method class) and proposes a method to solve/mitigate it. analyzes_property_of = this paper studies/characterizes/explains/theoretically analyzes a property of the cited work or its method family."
+                },
+                "signal": {
+                  "type": "string",
+                  "description": "A short VERBATIM span from the paper stating this relation with THIS PAPER AS THE ACTOR (a lineage clause for builds_on; a dependency clause for uses; a comparison sentence or table caption/row label for compares_to). A required gate: if no qualifying span can be quoted, do not emit this role."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

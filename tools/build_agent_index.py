@@ -60,6 +60,11 @@ from section_pipeline import (  # noqa: E402
     validate_section_ir,
 )
 
+# Corpora built with the references+reconcile mechanism (pre-0.16). section-ir-0.16 replaced it with
+# the paper-level citation layer (relations are complete from the Pass 1/2 join and carry no
+# internal-unit links), so retrofit replays reconcile ONLY for these older versions.
+_RECONCILE_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13", "section-ir-0.14", "section-ir-0.15"}
+
 # "Long Form (ACRO)" — the parenthetical must look like a short label (acronym/model name), not
 # prose: no spaces beyond 3 tokens, and at least one uppercase letter or digit.
 _ALIAS_PAREN_RE = re.compile(r"^(?P<long>.+?)\s*\((?P<short>[^()]{1,40})\)\s*$")
@@ -176,9 +181,13 @@ def retrofit_paper(
                     "located_pct": None,
                     "reason": "not checked at extraction time (retrofitted)",
                 }
-        if isinstance(references, dict):
-            # Replays the cite-key reconcile: refreshes provides_unit_ids/backfilled edges AND
-            # stamps unit ref_ids (the reverse join fresh runs now write).
+        ext_ir_version = (extraction.get("extraction_notes") or {}).get("ir_version")
+        if isinstance(references, dict) and ext_ir_version in _RECONCILE_IR_VERSIONS:
+            # Pre-0.16 corpora only: replay the cite-key reconcile (refresh provides_unit_ids /
+            # backfilled edges + stamp unit ref_ids). section-ir-0.16 replaced this with the
+            # paper-level citation layer — its references are complete from the Pass 1/2 join and
+            # carry no internal-unit links by design, so reconcile must NOT run (it would
+            # re-introduce the internal↔external links 0.16 deliberately removed).
             reconcile_reference_units(references, extraction, census)
         if _dumps(references) != refs_before:
             save_json(paper_dir / "03_references.json", references)
@@ -330,7 +339,6 @@ def build_cards(
             "text": text,
             "gloss": gloss,
             "aliases": aliases,
-            "salience": node.get("salience"),
             "cite_keys": unit.get("cite_keys") or node.get("cite_keys") or [],
             "ref_ids": unit.get("ref_ids") or [],
             "embed_text": embed_text,

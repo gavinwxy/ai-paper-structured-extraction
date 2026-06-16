@@ -95,7 +95,7 @@ A finding is **not always about the method**:
 - **about a metric** — a conclusion about a *measure's behavior* (it saturates, is gameable): **mount the finding on that Measure via its `finding_ids`**.
 - **multi-step chain** — when one observation licenses a conclusion, connect them with `supports`: `Finding(observation) --supports--> Finding(conclusion)`. Do not flatten a derivation into two unconnected siblings.
 
-## Salience filter
+## What to extract
 
 - Extract best/final contribution results on primary benchmarks, and transfer/generalization results that demonstrate the main finding — as contribution `scores[]` rows pointing at their tables.
 - Extract contribution scale/capacity variants when presented as first-class configurations.

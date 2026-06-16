@@ -22,12 +22,20 @@ SECTION_EXTRACTION_PROMPT_PATH = PROMPTS_DIR / "section-extraction-pass.md"
 SECTION_MODULES_DIR = PROMPTS_DIR / "section-modules"
 EXAMPLES_DIR = PROMPTS_DIR / "examples"
 METADATA_PROMPT_PATH = PROJECT_ROOT / "prompts" / "metadata-extraction.md"
+# Citation layer (section-ir-0.16): one census-blind paper-level citation-relation pass + a
+# blob-scoped reference-metadata pass replace the references + external-methods sidecars.
+CITATIONS_PROMPT_PATH = PROJECT_ROOT / "prompts" / "citations-extraction.md"
+REFERENCE_METADATA_PROMPT_PATH = PROJECT_ROOT / "prompts" / "reference-metadata.md"
+# Legacy external sidecars (section-ir-0.15) — kept for old-corpus tooling (relink/retrofit) and the
+# A/B control arm; not called by the live 0.16 pipeline.
 REFERENCES_PROMPT_PATH = PROJECT_ROOT / "prompts" / "references-extraction.md"
 EXTERNAL_METHODS_PROMPT_PATH = PROJECT_ROOT / "prompts" / "external-methods-extraction.md"
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
 NODE_CENSUS_SCHEMA_PATH = SCHEMAS_DIR / "node-census-output.schema.json"
 RELATION_PASS_SCHEMA_PATH = SCHEMAS_DIR / "relation-pass-output.schema.json"
 METADATA_SCHEMA_PATH = SCHEMAS_DIR / "metadata-output.schema.json"
+CITATIONS_SCHEMA_PATH = SCHEMAS_DIR / "citations-output.schema.json"
+REFERENCE_METADATA_SCHEMA_PATH = SCHEMAS_DIR / "reference-metadata.schema.json"
 REFERENCES_SCHEMA_PATH = SCHEMAS_DIR / "references-output.schema.json"
 EXTERNAL_METHODS_SCHEMA_PATH = SCHEMAS_DIR / "external-methods-output.schema.json"
 SECTION_SCHEMA_FILES: dict[str, str] = {
@@ -142,8 +150,8 @@ TYPED_ARRAY_KEYS: dict[str, str] = {
 NODE_TYPES = {"Method", "ExperimentSetup", "Measure", "Finding"}
 # The IR version this pipeline emits, and the versions the validator accepts (the retrofit
 # tooling re-validates 0.12-era outputs in place, so the previous version stays accepted).
-IR_VERSION = "section-ir-0.15"
-ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13", "section-ir-0.14", "section-ir-0.15"}
+IR_VERSION = "section-ir-0.16"
+ACCEPTED_IR_VERSIONS = {"section-ir-0.12", "section-ir-0.13", "section-ir-0.14", "section-ir-0.15", "section-ir-0.16"}
 
 NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "Method": "mth:",
@@ -157,7 +165,6 @@ NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
     # the problem section materializes it (reusing the id) and authors its content + motivates edge.
     "Problem": "prb:",
 }
-SALIENCE_LEVELS = {"must", "should"}
 # Census node role — the single granular tag the census emits per node. It is the
 # argumentative function the node plays, grouped into four search clusters by the guiding
 # principle "trace the method's life": the_method (mine), prior_art (others'), testbed
@@ -188,8 +195,8 @@ NODE_ROLES = {
     "structural_class",    # testbed: the structural family a result ranges over (graph class, etc.)
     "metric",             # yardsticks: a reported performance measure
     "problem",            # the_problem: the research problem the paper addresses (RF-08, 0.13) —
-                          # planned by the census so it is recallable/salience-tagged; the problem
-                          # section materializes it (id reuse) and authors its motivates edge
+                          # planned by the census so it is recallable; the problem section
+                          # materializes it (id reuse) and authors its motivates edge
 }
 # Internal/external axis (section-ir-0.15). The census is INTERNAL-ONLY: it emits the paper's
 # own nodes (contribution/component/problem/metric/finding) and the testbed it runs on
@@ -753,13 +760,23 @@ def load_section_schema(section_type: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_citations_schema() -> dict[str, Any]:
+    """Load the citation-relation pass schema (section-ir-0.16 paper-level relations)."""
+    return json.loads(CITATIONS_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def load_reference_metadata_schema() -> dict[str, Any]:
+    """Load the reference-metadata pass schema (section-ir-0.16 blob-scoped bibliography)."""
+    return json.loads(REFERENCE_METADATA_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
 def load_references_schema() -> dict[str, Any]:
-    """Load the references-pass schema (the blob-primary transcription contract)."""
+    """Load the references-pass schema (legacy 0.15 blob-primary transcription contract)."""
     return json.loads(REFERENCES_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def load_external_methods_schema() -> dict[str, Any]:
-    """Load the external-methods-pass schema (the dedicated method-relationship contract)."""
+    """Load the external-methods-pass schema (legacy 0.15 method-relationship contract)."""
     return json.loads(EXTERNAL_METHODS_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
@@ -910,7 +927,7 @@ def _dedup_experiment_setups(
 
     `protected_ids` (the census node ids) are never merged away: a census-materialized
     ExperimentSetup is authoritative and deliberately distinct, so merging it would silently drop
-    one node, which then reads as uncovered while a `should` node still passes validation. The
+    one node, which then reads as uncovered. The
     `_covered_entry_ids` union is empty here (covers_entries is assigned later in assembly), so the
     census ids passed in are the real protection — born configuration setups still dedup normally.
     """
@@ -1370,14 +1387,6 @@ def all_census_node_ids(census: dict[str, Any]) -> set[str]:
     }
 
 
-def census_must_node_ids(census: dict[str, Any]) -> set[str]:
-    return {
-        node["node_id"]
-        for node in iter_census_nodes(census)
-        if node.get("salience") == "must" and isinstance(node.get("node_id"), str)
-    }
-
-
 def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
     """Repair section-obvious node-census problems before strict validation.
 
@@ -1443,47 +1452,21 @@ def normalize_census_nodes(census: dict[str, Any]) -> dict[str, Any]:
     method_nodes = [node for node in nodes if node.get("type") == "Method"]
     roots = [node for node in nodes if node.get("role") in CONTRIBUTION_ROLES]
     if not roots:
-        # No root tagged. Promote the strongest node: prefer a must-Method (the empirical-paper
-        # common case) as `contribution`, else a must-ExperimentSetup (a benchmark/dataset paper)
-        # as `contribution_resource`.
-        chosen = next((n for n in method_nodes if n.get("salience") == "must"), None)
-        if chosen is None and method_nodes:
-            chosen = method_nodes[0]
-        if chosen is not None:
-            chosen["role"] = CONTRIBUTION_ROLE
+        # No root tagged. Promote the first Method (the empirical-paper common case) as
+        # `contribution`, else the first ExperimentSetup (a benchmark/dataset paper) as
+        # `contribution_resource`.
+        if method_nodes:
+            method_nodes[0]["role"] = CONTRIBUTION_ROLE
         else:
             exp_nodes = [n for n in nodes if n.get("type") == "ExperimentSetup"]
-            promote = next((n for n in exp_nodes if n.get("salience") == "must"), None)
-            if promote is None and exp_nodes:
-                promote = exp_nodes[0]
-            if promote is not None:
-                promote["role"] = "contribution_resource"
-    elif len(roots) > 1:
-        # Co-equal primary contributions (FG-7): a paper may deliver two roots that neither
-        # contains (a method AND a benchmark, or two independent algorithms presented as joint
-        # results). Keep every `must` root as a co-equal contribution — the relation pass links
-        # them with `co_contribution` and `_assign_resolves` fans the discovery arc across it.
-        # Demote only the weaker `should` "roots": a genuine co-contribution is must-salient, so a
-        # should-salient extra root is almost always a mis-tag, and demoting it stops a flood of
-        # speculative roots from surviving (when no root is `must`, keep just the first).
-        must_roots = [n for n in roots if n.get("salience") == "must"]
-        keep_ids = {id(n) for n in (must_roots or roots[:1])}
-        # Demote each non-kept extra root to a valid NON-root role *of its own type*: a Method
-        # extra -> `component`, an ExperimentSetup extra -> `benchmark`. A `contribution_finding`
-        # extra is type Finding, which has NO valid non-root census role (Finding content roles
-        # like descriptive/comparative are authored in the evidence section, not the census), so
-        # coercing it to an ExperimentSetup role ("benchmark") would make the node role/type/id
-        # mutually inconsistent and hard-fail validate_census — killing the whole paper. Leave such
-        # a root as a co-equal `contribution_finding` instead (root_count > 1 is valid;
-        # co_contribution links them). The same conservative default holds for any future
-        # contribution role whose type has no non-root role to fall back to.
-        demote_role_by_type = {"Method": "component", "ExperimentSetup": "benchmark"}
-        for extra in roots:
-            if id(extra) in keep_ids:
-                continue
-            demoted = demote_role_by_type.get(extra.get("type"))
-            if demoted is not None:
-                extra["role"] = demoted
+            if exp_nodes:
+                exp_nodes[0]["role"] = "contribution_resource"
+    # Multiple census-tagged roots are kept as co-equal primary contributions (FG-7): a paper may
+    # deliver two roots that neither contains (a method AND a benchmark, or two independent
+    # algorithms presented as joint results). The relation pass links them with `co_contribution`
+    # and `_assign_resolves` fans the discovery arc across them; root_count > 1 is valid. With no
+    # salience signal to flag a mis-tagged extra, we trust the census role tagging (the prompt's
+    # "almost always exactly one — when in doubt prefer a single root" self-limits over-tagging).
     return normalized
 
 
@@ -1550,8 +1533,6 @@ def validate_census(census: dict[str, Any]) -> list[str]:
                     f"Census node {label} has role {role} (type {node_type}) "
                     f"but id prefix is not {expected!r}"
                 )
-        if node.get("salience") not in SALIENCE_LEVELS:
-            issues.append(f"Census node {label} has invalid salience: {node.get('salience')}")
         cite_keys = node.get("cite_keys")
         if cite_keys is not None and (
             not isinstance(cite_keys, list)
@@ -1595,10 +1576,10 @@ def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
     """Build the lightweight all-node registry passed to the relation and content stages.
 
     Carries what later stages need to reference and route a node: id, type, name, gloss,
-    salience, and the granular `role` with its search `cluster`. The role lets the relation
-    pass route edges (a `component` is part_of the `contribution`; a `compared_against`
-    method is compares_to it) and the content stage find the contribution method. The `role`
-    is carried straight onto the materialized unit as its fine-grained differentia.
+    and the granular `role` with its search `cluster`. The role lets the relation pass route
+    edges (a `component` is part_of the `contribution`) and the content stage find the
+    contribution method. The `role` is carried straight onto the materialized unit as its
+    fine-grained differentia.
     """
     registry: list[dict[str, Any]] = []
     for node in iter_census_nodes(census):
@@ -1611,7 +1592,6 @@ def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
             "cluster": ROLE_CLUSTER.get(role, ""),
             "name": node.get("name", ""),
             "gloss": node.get("gloss", ""),
-            "salience": node.get("salience", "should"),
         }
         registry.append(entry)
     return registry
@@ -1787,14 +1767,14 @@ def build_extraction_notes(
 ) -> dict[str, Any]:
     """Build final extraction notes for assembled content output.
 
-    Coverage is measured against the census `must` nodes: a must-node is covered iff a unit
+    Coverage is measured against the full census node set: a census node is covered iff a unit
     reusing its node_id was materialized by some section. node_id == unit_id, so coverage is
     structural and needs no covers_entries echo from the model.
 
     `extra_uncovered` (FG-10 D1) holds additional `{item_id, reason}` entries for information lost
     during assembly (e.g. a Measure dropped for empty scores) so the canonical `uncovered_items`
-    list captures all of it; entries whose item_id is already listed (an uncovered must-node) are
-    skipped so a dropped must-Measure is not double-counted.
+    list captures all of it; entries whose item_id is already listed (an uncovered census node) are
+    skipped so a dropped Measure is not double-counted.
     """
     sections_used: set[str] = set()
     materialized_ids: set[str] = set()
@@ -1807,8 +1787,8 @@ def build_extraction_notes(
             if isinstance(unit, dict) and isinstance(unit.get("id"), str):
                 materialized_ids.add(unit["id"])
 
-    must_nodes = census_must_node_ids(census)
-    covered = must_nodes & materialized_ids
+    census_nodes = all_census_node_ids(census)
+    covered = census_nodes & materialized_ids
     notes: dict[str, Any] = {
         "ir_version": IR_VERSION,
         "sections_used": [s for s in SECTION_ORDER if s in sections_used],
@@ -1816,12 +1796,12 @@ def build_extraction_notes(
         "skipped_spans": [],
         "input_mode": "node_census_pipeline",
         "uncovered_items": [
-            {"item_id": node_id, "reason": "census must-node not materialized as a unit"}
-            for node_id in sorted(must_nodes - covered)
+            {"item_id": node_id, "reason": "census node not materialized as a unit"}
+            for node_id in sorted(census_nodes - covered)
         ],
         "plan_coverage": {
-            "must_covered": len(covered),
-            "must_total": len(must_nodes),
+            "node_covered": len(covered),
+            "node_total": len(census_nodes),
         },
         # RF-11-lite (agent-readiness): the two §N namespaces in the outputs collide silently —
         # name them so a consumer never dereferences a census heading label against the chunk
@@ -1874,7 +1854,7 @@ def build_output_manifest(
         "ir_version": IR_VERSION,
         "files": {
             "01_census.json": (
-                "stage-A skeleton: nodes[] (node_id/role/name/gloss/salience/cite_keys) + "
+                "stage-A skeleton: nodes[] (node_id/role/name/gloss/cite_keys) + "
                 "spine_summary {central_contribution, argument_flow, headline_result}. Best "
                 "small first read (~9KB), but NOT complete — the content pass materializes "
                 "additional units (e.g. ExperimentSetups) that only exist in 06"
@@ -1884,10 +1864,15 @@ def build_output_manifest(
                 "be backfilled from the corpus directory name (year_source/venue_source='dirname')"
             ),
             "03_references.json": (
-                "structured bibliography entries with relation {roles, stance, salience, "
-                "provides_name, provides_unit_ids}; in blob-primary mode this holds graph-linked "
-                "references ONLY — background references live verbatim in "
-                "06:extraction_notes.references_blob"
+                "per-cited-work entries {id (= in-text cite_key), authors, title, venue, year, "
+                "relation {roles, signals: role->verbatim evidence span}}; PAPER-LEVEL citation "
+                "relations (the paper as a whole relates to the cited work via the seven-role "
+                "taxonomy: compares_with/uses_component/builds_on/inspired_by/adapts_idea_from/"
+                "addresses_limitation_of/analyzes_property_of) — no internal-unit links "
+                "(provides_unit_ids is always []). Holds substantively-related citations ONLY; "
+                "background references live verbatim in 06:extraction_notes.references_blob. "
+                "Joined from 03_citations.json (relations+signals) + 03_reference_metadata.json "
+                "(bibliography) by cite_key"
             ),
             "04_relations.json": STAGE_B_RELATIONS_NOTE,
             "05_sections/": f"raw per-section LLM results ({sections_shape}); superseded by 06",
@@ -1958,11 +1943,6 @@ def build_output_manifest(
                 "always present; checked=true means transcribed numeric values were located in the "
                 "verbatim source tables (located_pct); checked=false carries a reason and means "
                 "the numbers are UNVERIFIED, not wrong"
-            ),
-            "units[].ref_ids": (
-                "Python-resolved join of the unit's cite_keys to 03_references entry ids "
-                "(normalized cite-key collapse); absent when the unit cites nothing or no entry "
-                "joins"
             ),
             "Method.formulas[].role": (
                 "optional functional tag; 'objective' marks the training/optimization target "
@@ -3932,6 +3912,212 @@ def _normalize_cite_key(value: Any) -> str:
     return f"{first}{year}{letter}" if first else re.sub(r"[\[\]\s]+", "", stripped).lower()
 
 
+# Canonical paper-level citation-relation roles (section-ir-0.16). The seven-role taxonomy the
+# citation pass emits; `background` (incl. apparatus) is the residual skip bucket and is NOT here, so
+# any `background` role the model still emits is dropped by `assemble_citation_references`. These are
+# a SEPARATE vocabulary from the internal unit-graph edges (`builds_on`/`uses`/`compares_to` there) —
+# the citation layer says `uses_component`/`compares_with`, the internal graph says `uses`/`compares_to`.
+CITATION_RELATION_ROLES = (
+    "compares_with",
+    "uses_component",
+    "builds_on",
+    "inspired_by",
+    "adapts_idea_from",
+    "addresses_limitation_of",
+    "analyzes_property_of",
+)
+
+
+def run_citations_extraction(
+    client: Any,
+    model: str,
+    paper_content: str,
+    temperature: float = 0.0,
+    max_tokens: int = 16_384,
+) -> dict[str, Any]:
+    """Pass 1 of the section-ir-0.16 citation layer: classify how THIS paper relates to each prior
+    work it cites.
+
+    Census-blind, full-paper. Returns ``{"citations": [{cite_key, relations: [{role, signal}]}]}``
+    — paper-level relations only (source is the paper as a whole), no nodes, no metadata.
+    """
+    system_prompt, user_template = load_prompt(CITATIONS_PROMPT_PATH)
+    user_prompt = user_template.replace("{{paper_content}}", paper_content)
+    schema = load_citations_schema()
+    resp_fmt = build_response_format(schema, name="citations_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
+    raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
+    return _parse_llm_json(raw)
+
+
+def run_reference_metadata_extraction(
+    client: Any,
+    model: str,
+    references_blob: str,
+    cite_keys: list[str],
+    temperature: float = 0.0,
+    max_tokens: int = 16_384,
+) -> dict[str, Any]:
+    """Pass 2 of the section-ir-0.16 citation layer: transcribe structured bibliography entries for
+    exactly ``cite_keys``, reading ONLY the code-sliced reference blob (not the whole paper).
+
+    Returns ``{"references": [{cite_key, title, authors, venue, year}]}``; a no-op
+    ``{"references": []}`` when there is nothing to resolve (no keys, or no sliceable blob).
+    """
+    if not cite_keys or not references_blob:
+        return {"references": []}
+    system_prompt, user_template = load_prompt(REFERENCE_METADATA_PROMPT_PATH)
+    user_prompt = (
+        user_template
+        .replace("{{cite_keys}}", ", ".join(cite_keys))
+        .replace("{{references_blob}}", references_blob)
+    )
+    schema = load_reference_metadata_schema()
+    resp_fmt = build_response_format(schema, name="reference_metadata_output", model=model)
+    system_prompt = _augment_prompt_for_json_object(system_prompt, schema, model)
+    raw = _call_llm(client, model, system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens, response_format=resp_fmt)
+    return _parse_llm_json(raw)
+
+
+def collect_citation_cite_keys(citations: dict[str, Any] | None) -> list[str]:
+    """The distinct, non-empty cite_keys the citation-relation pass attached a relation to — the set
+    the reference-metadata pass must resolve. First-seen order (cache-friendly, deterministic)."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    items = citations.get("citations") if isinstance(citations, dict) else None
+    if isinstance(items, list):
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            ck = c.get("cite_key")
+            if not isinstance(ck, str):
+                continue
+            ck = ck.strip()
+            if ck and ck not in seen:
+                seen.add(ck)
+                keys.append(ck)
+    return keys
+
+
+def _coerce_year(value: Any) -> int | None:
+    """Coerce a reference year to an int. Accepts an int, or a digit string ('2019', '2019.') — a
+    json_object model can emit the year as a string since its decoding is not schema-bound. Excludes
+    bool (isinstance(True, int)); returns None when no 19xx/20xx year is present."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        m = re.search(r"(1[89]\d\d|20\d\d)", value)
+        return int(m.group(1)) if m else None
+    return None
+
+
+def assemble_citation_references(
+    citations: dict[str, Any] | None,
+    reference_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Join paper-level citation relations (Pass 1) to bibliography metadata (Pass 2) into the
+    downstream ``references`` artifact (section-ir-0.16).
+
+    The output mirrors the legacy references shape so the renderer and the cross-paper entity index
+    keep working unchanged — one entry per cited work with ``{id, authors, title, venue, year,
+    relation}``. The relation carries the paper-level ``roles`` and the new verbatim ``signals``
+    (role -> evidence span). ``provides_unit_ids`` stays empty (0.16 draws no internal-unit↔external
+    links); ``stance``/``salience``/``provides_name`` are defaulted for shape-compatibility only.
+
+    Items sharing a cite_key are merged into ONE entry (roles/signals unioned) so a work the model
+    split across several items collapses; empty-cite_key items (a named method with no inline
+    citation) cannot be merged and each stays its own entry. The metadata join prefers an EXACT raw
+    cite_key match (Pass 2 echoes Pass 1's keys verbatim) and only falls back to the normalized key
+    for surface drift ('[12]' vs '12') — this avoids the author-year normalization collision where
+    two distinct works (Lee & Kim 2020 / Lee & Park 2020) would share one normalized key. A citation
+    whose key resolves to no metadata keeps its relations with empty bibliographic fields.
+    """
+    out: list[dict[str, Any]] = []
+    items = citations.get("citations") if isinstance(citations, dict) else None
+    if not isinstance(items, list):
+        return {"references": out}
+
+    # Metadata indices: exact raw cite_key (primary) + normalized (fallback for surface drift).
+    meta_by_raw: dict[str, dict[str, Any]] = {}
+    meta_by_norm: dict[str, dict[str, Any]] = {}
+    meta_list = reference_metadata.get("references") if isinstance(reference_metadata, dict) else None
+    if isinstance(meta_list, list):
+        for m in meta_list:
+            if not isinstance(m, dict):
+                continue
+            raw = m.get("cite_key")
+            raw = raw.strip() if isinstance(raw, str) else ""
+            if raw:
+                meta_by_raw.setdefault(raw, m)
+            norm = _normalize_cite_key(m.get("cite_key"))
+            if norm:
+                meta_by_norm.setdefault(norm, m)
+
+    # Group items by cite_key, merging roles/signals; empty cite_keys stay individual.
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    blank_seq = 0
+    for c in items:
+        if not isinstance(c, dict):
+            continue
+        cite_key = c.get("cite_key")
+        cite_key = cite_key.strip() if isinstance(cite_key, str) else ""
+        if cite_key:
+            gkey = f"key:{cite_key}"
+        else:
+            gkey = f"blank:{blank_seq}"
+            blank_seq += 1
+        grp = groups.get(gkey)
+        if grp is None:
+            grp = {"cite_key": cite_key, "roles": [], "signals": {}}
+            groups[gkey] = grp
+            order.append(gkey)
+        for rel in c.get("relations") or []:
+            if not isinstance(rel, dict):
+                continue
+            role = rel.get("role")
+            if role not in CITATION_RELATION_ROLES:
+                continue
+            if role not in grp["signals"]:
+                grp["roles"].append(role)
+            sig = rel.get("signal")
+            if isinstance(sig, str) and sig.strip():
+                grp["signals"][role] = sig.strip()           # a non-empty signal wins
+            else:
+                grp["signals"].setdefault(role, "")
+
+    for gkey in order:
+        grp = groups[gkey]
+        roles = grp["roles"]
+        if not roles:
+            continue  # a citation with no recognized relation carries no graph link
+        cite_key = grp["cite_key"]
+        meta: dict[str, Any] = {}
+        if cite_key:
+            meta = meta_by_raw.get(cite_key) or meta_by_norm.get(_normalize_cite_key(cite_key)) or {}
+        authors = meta.get("authors")
+        title = meta.get("title")
+        venue = meta.get("venue")
+        out.append({
+            "id": cite_key,
+            "authors": authors if isinstance(authors, list) else [],
+            "title": title if isinstance(title, str) else "",
+            "venue": venue if isinstance(venue, str) else "",
+            "year": _coerce_year(meta.get("year")),
+            "relation": {
+                "roles": roles,
+                "signals": grp["signals"],
+                "stance": "neutral",
+                "salience": "peripheral",
+                "provides_name": "",
+                "provides_unit_ids": [],
+            },
+        })
+    return {"references": out}
+
+
 # References role -> the census external-method node role it materializes (section-ir-0.15). The
 # references pass speaks the edge vocabulary (builds_on / compares_to); the census node set speaks
 # the node-role vocabulary (builds_on / compared_against). `uses` is intentionally absent: a `uses`
@@ -4803,10 +4989,13 @@ def run_pipeline(
     prompt_cache_retention: str | None = None,
     strict: bool = True,
 ) -> dict[str, Any]:
-    """Run census + metadata + references in parallel, then the relation pass, content fill, and validation.
+    """Run census + metadata + the citation-relation pass in parallel, then the citation
+    reference-metadata pass, the relation pass, content fill, and validation.
 
-    Produces the same section-ir 0.12 (blob-primary) output as ``python -m production``."""
+    Produces the same section-ir 0.16 output as ``python -m production``."""
     pipeline_warnings: list[str] = []
+    citations = None
+    reference_metadata: dict[str, Any] | None = None
     cache_key = prompt_cache_key if prompt_cache_key is not None else build_prompt_cache_key(model, paper_content)
     with ThreadPoolExecutor(max_workers=3) as executor:
         census_future = executor.submit(
@@ -4817,8 +5006,9 @@ def run_pipeline(
         metadata_future = executor.submit(
             run_metadata_extraction, client, model, paper_content, temperature=temperature, max_tokens=max_tokens
         )
-        references_future = executor.submit(
-            run_references_extraction, client, model, paper_content, temperature=temperature,
+        # Citation layer Pass 1 (census-blind): paper-level relations + verbatim signals.
+        citations_future = executor.submit(
+            run_citations_extraction, client, model, paper_content, temperature=temperature,
             max_tokens=max_tokens,
         )
         raw_census = census_future.result()
@@ -4828,10 +5018,24 @@ def run_pipeline(
             metadata = None
             pipeline_warnings.append(f"metadata extraction failed: {exc}")
         try:
-            references = references_future.result()
+            citations = citations_future.result()
         except Exception as exc:
-            references = None
-            pipeline_warnings.append(f"references extraction failed: {exc}")
+            citations = None
+            pipeline_warnings.append(f"citation-relation extraction failed: {exc}")
+
+    # Citation layer Pass 2 (serial — needs Pass 1's cite_keys): resolve each related work's
+    # bibliography metadata from the code-sliced reference blob, then join into `references`.
+    references = None
+    if citations is not None:
+        try:
+            reference_metadata = run_reference_metadata_extraction(
+                client, model, _slice_references_blob(paper_content),
+                collect_citation_cite_keys(citations), temperature=temperature, max_tokens=max_tokens,
+            )
+        except Exception as exc:
+            reference_metadata = {"references": []}
+            pipeline_warnings.append(f"reference-metadata extraction failed: {exc}")
+        references = assemble_citation_references(citations, reference_metadata)
 
     # RF-01 parity with the production worker (a no-op when paper_id carries no dirname pattern).
     metadata = enrich_metadata(metadata, paper_id)
@@ -4864,14 +5068,16 @@ def run_pipeline(
         prompt_cache_key=cache_key,
         prompt_cache_retention=prompt_cache_retention,
     )
-    if references is not None:
-        pipeline_warnings.extend(reconcile_reference_units(references, extraction, census))
+    # No reference reconcile in 0.16: the citation layer is paper-level (it draws no
+    # internal-unit↔external links), so `references` is already complete from the Pass 1/2 join.
     validation_issues = validate_section_ir(extraction, census=census)
     result = {
         "census": census,
         "relations": relations,
         "extraction": extraction,
         "metadata": metadata,
+        "citations": citations,
+        "reference_metadata": reference_metadata,
         "references": references,
         "validation_issues": validation_issues,
         "pipeline_warnings": pipeline_warnings,
@@ -4894,6 +5100,14 @@ def run_pipeline(
         )
         (output_path / f"{paper_id}_references.json").write_text(
             json.dumps(references, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (output_path / f"{paper_id}_citations.json").write_text(
+            json.dumps(citations, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (output_path / f"{paper_id}_reference_metadata.json").write_text(
+            json.dumps(reference_metadata, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         (output_path / f"{paper_id}_pipeline.json").write_text(
@@ -5387,14 +5601,13 @@ def _validate_census_trace(
     notes: dict[str, Any],
     issues: list[str],
 ) -> None:
-    """Trace assembled units back to the node census: every must-node must be materialized."""
+    """Trace assembled units back to the node census: every census node must be materialized."""
     nodes = census.get("nodes")
     if not isinstance(nodes, list):
         issues.append("census.nodes must be a list")
         return
 
     node_ids = all_census_node_ids(census)
-    must_node_ids = census_must_node_ids(census)
 
     uncovered_items_raw = notes.get("uncovered_items", [])
     uncovered_items: set[str] = set()
@@ -5410,33 +5623,33 @@ def _validate_census_trace(
     unknown_covered = sorted(covered_entries - node_ids)
     if unknown_covered:
         issues.append(f"covers_entries references unknown census nodes: {unknown_covered}")
-    # uncovered_items is assembly-built (never model-written): it lists uncovered census must-nodes
-    # AND, since 0.10 (FG-10 D1), assembly-dropped non-census units (e.g. a born/should Measure
-    # dropped for empty scores). Only the census-node entries are constrained — the must-node
-    # accounting below ensures every must-node is materialized or declared uncovered; the dropped-
-    # unit entries are an informational superset, so they are not required to be census nodes.
+    # uncovered_items is assembly-built (never model-written): it lists uncovered census nodes
+    # AND, since 0.10 (FG-10 D1), assembly-dropped non-census units (e.g. a born Measure dropped
+    # for empty scores). Only the census-node entries are constrained — the accounting below
+    # ensures every census node is materialized or declared uncovered; the dropped-unit entries
+    # are an informational superset, so they are not required to be census nodes.
 
     for entry_id in sorted(covered_entries):
         if entry_id not in unit_index:
             issues.append(f"covers_entries claims '{entry_id}' but no unit with this ID exists")
 
-    missing_must = sorted(must_node_ids - covered_entries - uncovered_items)
-    if missing_must:
-        issues.append(f"must census nodes neither materialized nor declared uncovered: {missing_must}")
+    missing = sorted(node_ids - covered_entries - uncovered_items)
+    if missing:
+        issues.append(f"census nodes neither materialized nor declared uncovered: {missing}")
 
     coverage = notes.get("plan_coverage", {})
     if isinstance(coverage, dict):
-        expected_covered = len(must_node_ids & covered_entries)
-        expected_total = len(must_node_ids)
-        if coverage.get("must_covered") != expected_covered:
+        expected_covered = len(node_ids & covered_entries)
+        expected_total = len(node_ids)
+        if coverage.get("node_covered") != expected_covered:
             issues.append(
-                "plan_coverage.must_covered does not match materialized census nodes: "
-                f"{coverage.get('must_covered')} != {expected_covered}"
+                "plan_coverage.node_covered does not match materialized census nodes: "
+                f"{coverage.get('node_covered')} != {expected_covered}"
             )
-        if coverage.get("must_total") != expected_total:
+        if coverage.get("node_total") != expected_total:
             issues.append(
-                "plan_coverage.must_total does not match census: "
-                f"{coverage.get('must_total')} != {expected_total}"
+                "plan_coverage.node_total does not match census: "
+                f"{coverage.get('node_total')} != {expected_total}"
             )
     else:
         issues.append("extraction_notes.plan_coverage must be an object")

@@ -43,7 +43,6 @@ from section_pipeline import (  # noqa: E402
     INTERNAL_NODE_ROLES,
     METHOD_ROLES,
     NODE_ROLES,
-    SALIENCE_LEVELS,
     SCORE_VALUE_KINDS,
     SECTION_AUTHORS_RELATIONS,
     STAGE_B_RELATIONS,
@@ -111,7 +110,6 @@ FINDING_ROLE_ORDER = [
     "descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode",
     "theorem", "lemma", "bound",
 ]
-SALIENCE_ORDER = ["must", "should"]
 STAGE_B_RELATION_ORDER = ["part_of", "builds_on", "uses", "assumes", "co_contribution",
                           "compares_to", "evaluates"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
@@ -160,7 +158,6 @@ ENUM_ORDER: dict[str, list[str]] = {
     "score_value_kind": ["numeric", "symbolic", "asymptotic", "qualitative", "curve"],
     "measure_objective_class": ["primary_quality", "cost_efficiency", "fairness", "safety", "robustness"],
     "measure_table_role": ["main_result", "ablation"],
-    "salience": SALIENCE_ORDER,
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
@@ -175,7 +172,6 @@ ENUM_VALUES: dict[str, set[str]] = {
     "score_value_kind": SCORE_VALUE_KINDS,
     "measure_objective_class": MEASURE_OBJECTIVE_CLASSES,
     "measure_table_role": MEASURE_TABLE_ROLES,
-    "salience": SALIENCE_LEVELS,
 }
 
 
@@ -600,7 +596,7 @@ def node_census_schema() -> dict[str, Any]:
                 "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
                 "items": {
                     "type": "object",
-                    "required": ["node_id", "role", "name", "gloss", "source_scope", "cite_keys", "salience"],
+                    "required": ["node_id", "role", "name", "gloss", "source_scope", "cite_keys"],
                     "additionalProperties": False,
                     "properties": {
                         "node_id": id_schema(
@@ -620,7 +616,7 @@ def node_census_schema() -> dict[str, Any]:
                             "theoretical_setting, structural_class. yardsticks: metric. "
                             "the_problem: problem (the single research problem the paper "
                             "addresses). Prior-art methods the paper builds on or compares "
-                            "against are NOT censused here — the references stage captures them.",
+                            "against are NOT censused here — the citation layer captures them.",
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
                         "gloss": string_schema("One short phrase describing the node"),
@@ -633,10 +629,6 @@ def node_census_schema() -> dict[str, Any]:
                             "Empty [] for any root (contribution/contribution_resource/"
                             "contribution_finding) and every component (your own work), for "
                             "task/metric/problem nodes, and when no citation is attached."
-                        ),
-                        "salience": enum_schema(
-                            "salience",
-                            "must = load-bearing for the contribution; should = adds nuance",
                         ),
                     },
                 },

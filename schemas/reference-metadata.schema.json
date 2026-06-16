@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "title": "Reference Metadata Output",
+  "required": ["references"],
+  "additionalProperties": false,
+  "description": "section-ir-0.16 reference-metadata pass: structured bibliography entries for a requested set of citation keys, transcribed from the paper's verbatim reference list. Joined to the citation-relation layer by cite_key.",
+  "properties": {
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cite_key", "title", "authors", "venue", "year"],
+        "additionalProperties": false,
+        "properties": {
+          "cite_key": {
+            "type": "string",
+            "description": "The requested citation key, echoed exactly (e.g. '12', 'Vaswani2017'). The join key."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the referenced work."
+          },
+          "authors": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Author names in 'Last, First' format (e.g. 'Vaswani, Ashish'). Single-name authors as-is; empty list if unreadable."
+          },
+          "venue": {
+            "type": "string",
+            "description": "Publication venue (journal, conference with abbreviation if given, or 'arXiv' for preprints). Empty string if absent."
+          },
+          "year": {
+            "type": ["integer", "null"],
+            "description": "Publication year, null if unknown."
+          }
+        }
+      }
+    }
+  }
+}

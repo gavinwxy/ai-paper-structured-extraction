@@ -34,7 +34,7 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 
 - Do not emit several Problem units for one problem (no background/gap/motivation split) — that is the old over-tagged shape; collapse it into one focused statement.
 - Do not create a Finding unit for the contribution here; the contribution finding belongs in the evidence section.
-- Do not create Method units here; a system named as background belongs in the `description`. (Comparison baselines are `compared_against` Methods in the method section — not here; the baseline's number is preserved by the evidence stage, in the verbatim source table or as a score row.)
+- Do not create Method units here; a system named as background belongs in the `description`. (The paper's own comparison variants are Methods materialized in the method section; external baselines it merely compares against are not Method units at all — the paper's relation to them is captured paper-level by the citation layer, and their numbers are preserved verbatim by the evidence stage.)
 - Do not create a Problem for paper-structural remarks ("this paper is organized as follows").
 
 ## Worked example

@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Node Census Output",
-  "description": "Stage A of section-ir-0.15: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), Measure nodes, and the single research-problem Problem node (RF-08). The only Finding node is the optional contribution_finding. Configuration ExperimentSetup units (splits/protocols) are born during content fill.",
+  "description": "Stage A of section-ir-0.16: a flat census of every argumentatively load-bearing node, each tagged with one granular role (its type is derived from the role), with no relations. The census emits Method nodes, the substrate ExperimentSetup nodes (dataset/benchmark/task), Measure nodes, and the single research-problem Problem node (RF-08). The only Finding node is the optional contribution_finding. Configuration ExperimentSetup units (splits/protocols) are born during content fill.",
   "required": [
     "spine_summary",
     "nodes"
@@ -60,8 +60,7 @@
           "name",
           "gloss",
           "source_scope",
-          "cite_keys",
-          "salience"
+          "cite_keys"
         ],
         "additionalProperties": false,
         "properties": {
@@ -85,7 +84,7 @@
               "metric",
               "problem"
             ],
-            "description": "Argumentative role, in search-cluster order. the_method: the root \u2014 contribution (a method/system), contribution_resource (a dataset/benchmark deliverable), or contribution_finding (a result/finding deliverable for an analysis paper with no novel method/resource) \u2014 plus component. testbed: dataset, benchmark, task, theoretical_setting, structural_class. yardsticks: metric. the_problem: problem (the single research problem the paper addresses). Prior-art methods the paper builds on or compares against are NOT censused here \u2014 the references stage captures them."
+            "description": "Argumentative role, in search-cluster order. the_method: the root \u2014 contribution (a method/system), contribution_resource (a dataset/benchmark deliverable), or contribution_finding (a result/finding deliverable for an analysis paper with no novel method/resource) \u2014 plus component. testbed: dataset, benchmark, task, theoretical_setting, structural_class. yardsticks: metric. the_problem: problem (the single research problem the paper addresses). Prior-art methods the paper builds on or compares against are NOT censused here \u2014 the citation layer captures them."
           },
           "name": {
             "type": "string",
@@ -108,14 +107,6 @@
               "type": "string"
             },
             "description": "In-text bibliography citation marker(s) attached to this node, as bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' for author-year). Fill for cited testbed nodes (dataset/benchmark) drawn from cited data, e.g. 'evaluated on ImageNet [8]' -> ['8']. Empty [] for any root (contribution/contribution_resource/contribution_finding) and every component (your own work), for task/metric/problem nodes, and when no citation is attached."
-          },
-          "salience": {
-            "type": "string",
-            "enum": [
-              "must",
-              "should"
-            ],
-            "description": "must = load-bearing for the contribution; should = adds nuance"
           }
         }
       }

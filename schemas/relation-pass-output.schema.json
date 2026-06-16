@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Relation Pass Output",
-  "description": "Stage B of section-ir-0.15: structural edges over the full node set. Sees every node, so cross-section composition and measure-subject binding are captured here with no forward references.",
+  "description": "Stage B of section-ir-0.16: structural edges over the full node set. Sees every node, so cross-section composition and measure-subject binding are captured here with no forward references.",
   "required": [
     "relations"
   ],

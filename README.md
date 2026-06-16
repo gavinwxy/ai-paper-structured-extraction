@@ -1,7 +1,7 @@
 # Section-IR Extraction Pipeline
 
 A three-stage LLM pipeline that reads a scientific paper (Markdown) and extracts its
-**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.15`):
+**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.16`):
 
 ```
 problem → method → evidence
@@ -9,9 +9,10 @@ problem → method → evidence
 
 - **problem** — the single research problem the paper addresses (one trunk; the old multi-tag
   `context` section collapsed to one).
-- **method** — the technical apparatus: the contribution and its components (internal), plus the
-  external prior-art methods it builds on, uses as a building block, or competes with (materialized
-  by the dedicated external stage — see the internal/external axis below).
+- **method** — the technical apparatus: the contribution and its components (the paper's **own**
+  methods). External prior-art methods are NOT materialized here — the paper's relations to the works
+  it builds on, reuses, compares with, is inspired by, adapts, critiques, or analyzes are captured
+  paper-level by the citation layer's seven-role taxonomy (see the internal/external axis below).
 - **evidence** — the merged experiment + analysis layer. It carries both *what was measured*
   (`Measure`, `ExperimentSetup`) and *what those measurements mean* (`Finding`), and it hosts the
   **headline contribution finding** — so there is no separate `claim` section.
@@ -27,49 +28,52 @@ The output is a single JSON object with four top-level keys — `document`, `sec
 ```
                               Paper (Markdown, with [§N] markers)
                                         │
-       ┌──────────────┬─────────────────┼─────────────────┬──────────────────┐
-       ▼              ▼                  ▼                  ▼                  ▼
- ┌───────────┐ ┌────────────┐  ┌──────────────────┐ ┌────────────┐ ┌──────────────────┐
- │ Metadata  │ │ References │  │ Stage A: Census  │ │ External   │ │  (Phase 1 runs   │
- │ (sidecar) │ │ (sidecar)  │  │ (single LLM call)│ │ Methods    │ │   all in         │
- └───────────┘ └────────────┘  └──────────────────┘ │ (sidecar)  │ │   parallel)      │
- title/authors  bibliography   INTERNAL-only nodes[] └────────────┘ └──────────────────┘
- /year/venue   (cite_keys →    (own method/testbed,  builds_on/uses/
-               units)          roles; NO edges)      compared_against methods
-                                        │                   │
-                                        ▼                   │
-                          ┌──────────────────────────────┐  │ materialize_external_methods:
-                          │ Re-inject external methods    │◄─┘ mint external Method nodes from
-                          │ (Python, before registry)     │    References + External-Methods,
-                          └──────────────────────────────┘    project pass-only into References
-                                        │
-                                        ▼
-                          ┌──────────────────────────────┐
-                          │ Stage B: Relation Pass       │  → global relations[]
-                          │ (single LLM call)            │    (structural node↔node edges;
-                          └──────────────────────────────┘     one edge per external node)
-                                        │
-                                        ▼
-                          ┌──────────────────────────────┐
-                          │ Stage C: Content Fill        │  → 3 parallel LLM calls
-                          │ (parallel, per-section)      │    problem · method · evidence
-                          └──────────────────────────────┘    (units + finding-centric edges)
-                                        │
-                                        ▼
-                          ┌──────────────────────────────┐
-                          │ Assembly & Validation        │  → final section-IR JSON
-                          │ (Python, no LLM)             │    (one global relations[])
-                          └──────────────────────────────┘
+       ┌──────────────┬─────────────────┴───────────────────────┐
+       ▼              ▼                                           ▼
+ ┌───────────┐ ┌──────────────────────────────┐      ┌──────────────────┐
+ │ Metadata  │ │ Citation layer (serial)      │      │ Stage A: Census  │
+ │ (sidecar) │ │  Pass 1: paper-level         │      │ (single LLM call)│
+ └───────────┘ │    relations + signals       │      └──────────────────┘
+ title/authors │  Pass 2: ref metadata        │      INTERNAL-only nodes[]
+ /year/venue   │    (blob + Pass-1 keys)      │      (own method/testbed,
+               │  → 03_references (by cite_key)│      roles; NO edges)
+               └──────────────────────────────┘              │
+               paper relates to cited works (7-role          │
+               taxonomy) — paper-level, NOT graph nodes       │
+                                                              ▼
+              (Phase 1: Metadata + Citation + Census   ┌──────────────────────────────┐
+               run in parallel; Pass 2 follows Pass 1) │ Stage B: Relation Pass       │ → relations[]
+                                                       │ (single LLM call)            │   (INTERNAL node↔node
+                                                       └──────────────────────────────┘    edges only)
+                                                              │
+                                                              ▼
+                                                       ┌──────────────────────────────┐
+                                                       │ Stage C: Content Fill        │ → 3 parallel LLM calls
+                                                       │ (parallel, per-section)      │   problem·method·evidence
+                                                       └──────────────────────────────┘   (units + finding edges)
+                                                              │
+                                                              ▼
+                                                       ┌──────────────────────────────┐
+                                                       │ Assembly & Validation        │ → final section-IR JSON
+                                                       │ (Python, no LLM)             │   (one global relations[])
+                                                       └──────────────────────────────┘
 ```
 
-**Internal/external axis** (`section-ir-0.15`; see `docs/extraction-axis.md`): Stage A census is
-**internal-only** — it materializes the paper's own nodes (contribution/component/problem/metric/
-finding) and its testbed (datasets/benchmarks), NOT external prior-art methods. The external
-prior-art **methods** the contribution `builds_on` / `uses` / is `compared_against` are recovered by
-two parallel stages — the citation-anchored **References** pass and the dedicated prose
-**External Methods** pass — and `materialize_external_methods` mints them as Method nodes and
-re-injects them before Stage B (which draws one edge per external node). Metadata, References, and
-External Methods all run as independent Phase-1 sidecars, in parallel with the node census.
+**Internal/external axis** (`section-ir-0.16`; see `docs/extraction-axis.md`): the pipeline keeps two
+non-crossing layers. **Internal graph** — Stage A census is **internal-only** (the paper's own
+contribution/component/problem/metric/finding plus its testbed datasets/benchmarks), and Stage B draws
+only **internal** structural edges (`part_of`, `evaluates`, `co_contribution`, `assumes`, and
+`compares_to` between the paper's own variants). **Citation layer** — the paper's relations to the
+prior work it cites (the seven-role taxonomy `compares_with` / `uses_component` / `builds_on` /
+`inspired_by` / `adapts_idea_from` / `addresses_limitation_of` / `analyzes_property_of`; `background`
+is the residual skip bucket) are captured **paper-level** (the source is the paper as a whole, not any
+internal node) by a census-blind two-pass citation stage: Pass 1 emits
+`{cite_key, relations:[{role, signal}]}` (a verbatim evidence span per relation), Pass 2 resolves
+those cite_keys to bibliography metadata from the code-sliced reference blob, and a deterministic
+cite_key join produces `03_references.json`. External works are **never** graph nodes and there are no
+internal-unit↔external edges; the verbatim bibliography stays in `extraction_notes.references_blob` for
+display. Metadata and the citation layer run as Phase-1 sidecars in parallel with the census (the
+citation layer is internally serial — Pass 2 needs Pass 1's cite_keys).
 
 ## Installation
 
@@ -113,9 +117,10 @@ gets its own output subdirectory holding the staged intermediates and the final 
 <output_dir>/<paper_id>/
 ├── 01_census.json                              # stage A
 ├── 02_metadata.json                            # title/authors/year/venue (+ dirname backfill, has_code/has_data)
-├── 03_references.json                          # bibliography sidecar (+ reconciled provides_unit_ids)
+├── 03_citations.json                           # citation layer Pass 1: paper-level relations + verbatim signals
+├── 03_reference_metadata.json                  # citation layer Pass 2: bibliography metadata for the cited keys
+├── 03_references.json                          # joined citation layer (relations + metadata, by cite_key)
 ├── 04_relations.json                           # stage B subset (carries a note; canonical edges live in 06)
-├── 05_external_methods.json                    # external-methods sidecar (builds_on/uses/compared_against → re-injection)
 ├── 05_sections/{problem,method,evidence}.json  # stage C (per section, saved flat)
 ├── 06_extraction.json                          # ← final assembled section-IR (canonical)
 ├── 07_validation.json                          # validation issues ([] = clean)
@@ -126,9 +131,8 @@ gets its own output subdirectory holding the staged intermediates and the final 
 ```
 
 Deterministic agent-readiness enrichments ship in every fresh run (no flags): score rows carry
-`value_num`, Measures carry `has_quantitative_payload`, units with `cite_keys` carry resolved
-`ref_ids`, `extraction_notes.score_fidelity` is always present, and `marker_namespaces`
-disambiguates the two `§N` schemes. To retrofit an **older** corpus and build the corpus-level
+`value_num`, Measures carry `has_quantitative_payload`, `extraction_notes.score_fidelity` is always
+present, and `marker_namespaces` disambiguates the two `§N` schemes. To retrofit an **older** corpus and build the corpus-level
 retrieval artifacts (`_catalog.jsonl`, `_cards.jsonl`, `_result_rows.jsonl`, `_entity_index.json`):
 
 ```bash
@@ -144,8 +148,7 @@ reprocess. Common flags:
 | `--paper-concurrency N` | `10` | papers in flight at once |
 | `--llm-concurrency N` | `30` | concurrent LLM calls |
 | `--max-tokens N` | `32768` | output budget for content sections |
-| `--planning-max-tokens N` | `24576` | budget for census / relations / metadata / references / external methods |
-| `--no-external-methods` | _(off; pass on)_ | disable the external-methods prose pass (references-only external materialization) |
+| `--planning-max-tokens N` | `24576` | budget for census / relations / metadata / citation layer |
 | `--max-retries N` | `3` | retries per LLM call (re-issues on malformed JSON) |
 | `--force` | off | ignore resumability, reprocess everything |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
@@ -153,7 +156,7 @@ reprocess. Common flags:
 
 Run `.venv/bin/python -m production --help` for the full set.
 
-Blob-primary evidence and blob-primary references (below) are always on — they are the section-ir-0.12 behavior and the only mode the pipeline produces; the former `--no-blob-primary-*` opt-outs were removed.
+Blob-primary evidence and blob-scoped reference metadata (below) are always on — the only mode the pipeline produces; the former `--no-blob-primary-*` opt-outs were removed.
 
 **Content-cache warming** (cost lever, **on by default**; disable with `--no-warm-content-cache`).
 The three content sections (problem/method/evidence) share a byte-identical paper-inclusive prompt
@@ -180,15 +183,15 @@ and mounts the findings a table evidences via `Measure.finding_ids` (replacing t
 queryable high-value core is intact at near-zero cost. Validated in two A/Bs (−12.9% and −11.2% total
 cost, 20/20 valid, no loss) before it became the default.
 
-**Blob-primary references** (completion-cost lever, always on). The references analog of blob-primary evidence: code slices the
-full bibliography verbatim into `extraction_notes.references_blob` (header located among broadened
-candidates — numbered/bold/bare headers included — and the densest-in-references candidate wins);
-the LLM transcribes only the **graph-linked** references (those with a structural role —
-`builds_on`/`uses`/`compares_to` — or a provided name, ~40% of refs), and background references
-live in the blob. The renderer shows the structured linked entries above the verbatim bibliography.
-Validated in a warm A/B (references pass −62%, total −12.2%, 20/20 valid, no link loss). When no
-bibliography can be sliced, assembly records an `uncertain_assignments` warning and the renderer
-flags the structured list as graph-linked-only.
+**Blob-scoped reference metadata** (completion-cost lever, always on). Code slices the full
+bibliography verbatim into `extraction_notes.references_blob` (header located among broadened
+candidates — numbered/bold/bare headers included — and the densest-in-references candidate wins).
+The LLM never re-types the whole bibliography: the citation layer's **Pass 2** transcribes
+`{title, authors, venue, year}` for only the **substantively-related** cite_keys **Pass 1** found
+(those carrying one of the seven taxonomy roles, ~40% of refs), reading only the blob — not the whole
+paper. Background references live in the blob. The renderer shows the structured linked entries (with
+their verbatim relation `signals`) above the verbatim bibliography. When no bibliography can be
+sliced, Pass 2 is skipped and the renderer falls back to the verbatim blob.
 
 ### End-to-end smoke test (single papers)
 
@@ -230,8 +233,9 @@ blob-primary fields in `section-evidence.schema.json`, which are hand-edited int
 schema first (the committed `schemas/*.json` are the source of truth). If you change a schema, port
 any hand-edit back into the `section_pipeline.py` constants, **then** re-run the generator and verify
 `git diff schemas/` shows only the changes you intended — regeneration clobbers anything not ported.
-(`metadata-output.schema.json` and `references-output.schema.json` are hand-maintained and are not
-produced by the generator.)
+(The sidecar schemas — `metadata-output.schema.json`, `citations-output.schema.json`,
+`reference-metadata.schema.json` (and the legacy `references-output.schema.json`) — are
+hand-maintained and are not produced by the generator.)
 
 ## Configuration
 
@@ -242,7 +246,7 @@ produced by the generator.)
 | `MODEL` | `deepseek-v4-pro` | extraction model |
 
 Token budgets default to **32K** for content sections and **24K** for the single-shot
-planning/aux calls (census, relation pass, metadata, references, external methods); both are tunable on the CLI.
+planning/aux calls (census, relation pass, metadata, citation layer); both are tunable on the CLI.
 
 ### Model compatibility
 
@@ -293,25 +297,29 @@ One full-paper call produces:
   `node_id` prefix (`mth:`/`exp:`/`mea:`/`fnd:`) follows from the role's type and is reused
   verbatim as the final unit id.
 
-Scoping rules (`section-ir-0.15` internal/external axis — see below): the census is
+Scoping rules (`section-ir-0.16` internal/external axis — see below): the census is
 **internal-only**. A **named model is a Method**, never a testbed node, but the census materializes
-only the paper's OWN methods (`contribution`/`component`); **external prior-art methods**
-(`builds_on`/`uses`/`compared_against`) are NOT census-emitted — they are re-injected by the
-external stages. **Apparatus is not a node** (hardware and metric-scoring models are dropped).
-**Baselines are still captured in full**, just materialized externally — every compared-against
-system becomes a lightweight `compared_against` Method (re-injected), and its number is a row in the
-relevant `Measure.scores[]`. Testbed nodes (and re-injected external methods) carry `cite_keys` (the
-in-text bibliography marker), the deterministic join key for reference linking.
+only the paper's OWN methods (`contribution`/`component`); **external prior-art methods** the paper
+builds on, reuses, or compares against are NOT census nodes at all — the paper's relations to them are
+captured paper-level by the citation layer's seven-role taxonomy (never as graph nodes or
+internal-unit edges).
+**Apparatus is not a node** (hardware and metric-scoring models are dropped). **Baseline numbers are
+still captured in full** — an external baseline's number stays verbatim in the source-table blob, and
+the paper's relation to that baseline is a `compares_with` fact in the citation layer; the paper's own
+baseline variants stay internal `component`/`contribution` Methods. Testbed nodes carry `cite_keys`
+(the in-text bibliography marker).
 
 ### Stage B — Relation Pass
 
 **Prompt:** `prompts/section-extraction/relation-pass.md` · **Schema:**
 `schemas/relation-pass-output.schema.json`
 
-One call over the full paper plus the complete flat node list. It establishes the structural
-node↔node edges (`part_of`, `builds_on`, `uses`, `assumes`, `co_contribution`, `compares_to`,
-`evaluates`) with the whole node set in view — so cross-section composition and measure-subject
-binding need no forward references and no reconcile crutches.
+One call over the full paper plus the complete flat node list. It establishes the **internal**
+structural node↔node edges (`part_of`, `assumes`, `co_contribution`, `compares_to`, `evaluates`)
+with the whole node set in view — so cross-section composition and measure-subject binding need no
+forward references and no reconcile crutches. It draws no `builds_on`/`uses` edges: those are the
+paper's relations to external prior work, captured paper-level by the citation layer, and
+`compares_to` here connects only the paper's own peer variants.
 
 ### Stage C — Parallel Content Fill
 
@@ -338,29 +346,30 @@ For each of the three sections:
 
 All three sections run in parallel.
 
-### Sidecars — metadata, references & external methods
+### Sidecars — metadata & the citation layer
 
-In parallel with the census, three single-shot calls run: `document` metadata (title, authors, year,
-venue), the bibliography (**references**), and the **external-methods** pass (`section-ir-0.15`).
+In parallel with the census, two Phase-1 stages run: `document` metadata (title, authors, year,
+venue) and the **citation layer** (`section-ir-0.16`).
 
-**External methods + re-injection.** Because the census is internal-only, the external prior-art
-methods the contribution `builds_on` / `uses` / is `compared_against` are recovered from two sources
-and re-injected before Stage B by `materialize_external_methods`: the **References** pass (citation/
-table-anchored) and the dedicated **External Methods** prose pass (which sweeps method-section prose
-for the lineage/dependency references under-emits). The two sources are merged (dedup by name +
-cite-key bridge; `builds_on` > `compared_against` > `uses`), minted as Method nodes, and Stage B then
-draws one edge per external node. A pass-only external (no references entry) is also projected back
-into `references` (with `title = name`) so it joins by `reconcile_reference_units` and enters the
-cross-paper entity index. Disable the prose pass with `--no-external-methods`.
+**Citation layer (paper-level).** The paper's relations to the prior work it cites are captured as
+paper-level facts — the source is the paper as a whole, not any internal node — by a census-blind
+two-pass stage:
 
-After assembly, `reconcile_reference_units` backfills each reference's `relation.provides_unit_ids`
-by matching the reference to a materialized node — first by `cite_keys` (exact, grounded in the
-paper's own citation), then by a unique name match — and (FG-12) backfills contribution→target unit
-edges from reference roles. Reference roles use the same vocabulary as the unit-graph edges — a
-citation role is an edge-in-waiting: `builds_on`/`uses`/`compares_to` each become the edge of the
-same name, while `background` is the lone context-only role with no edge. Each backfilled edge is
-tagged `origin: "reference"` so a citation-derived edge can be told apart from a natively-authored
-one.
+- **Pass 1** (`prompts/citations-extraction.md`): scans the full paper and emits, per
+  substantively-related cited work, `{cite_key, relations:[{role, signal}]}` with `role` from the
+  seven-role taxonomy `{compares_with, uses_component, builds_on, inspired_by, adapts_idea_from,
+  addresses_limitation_of, analyzes_property_of}` and `signal` a verbatim this-paper-as-actor evidence
+  span (a required gate). `background` (incl. apparatus) is the residual skip bucket — those citations
+  are not emitted; they stay in the verbatim reference blob.
+- **Pass 2** (`prompts/reference-metadata.md`): reads ONLY the code-sliced reference blob plus Pass
+  1's cite_keys and resolves each to `{title, authors, venue, year}`. It runs after Pass 1 (it needs
+  its cite_keys); a Pass-2 failure keeps the Pass-1 relations.
+- **Join** (`assemble_citation_references`): merges the two by cite_key (exact-raw preferred,
+  normalized fallback) into `03_references.json` — one entry per cited work with
+  `relation.{roles, signals}` and bibliographic fields. `provides_unit_ids` is always `[]`: the
+  citation layer mints no nodes and draws no internal-unit↔external edges, so there is **no reconcile
+  step**. The verbatim bibliography stays in `extraction_notes.references_blob` for display, and the
+  cross-paper entity index (`build_agent_index.py`) clusters these entries by `title`.
 
 ### Assembly & Validation
 
@@ -411,7 +420,7 @@ Per-type `role` vocabulary (`Problem` and `Measure` carry no `role`):
 | type | `role` ∈ |
 |---|---|
 | `Document` | `research_article`, `review`, `meta_analysis`, `methodology`, `benchmark_survey` (derived from the contribution) |
-| `Method` | `contribution`, `component` (internal) · `builds_on`, `uses`, `compared_against` (external, re-injected) |
+| `Method` | `contribution`, `component` (the paper's own methods; external prior-art works are not Method nodes — the paper's relations to them live paper-level in the citation layer) |
 | `ExperimentSetup` | **substrate** `dataset`, `benchmark`, `task`, `theoretical_setting`, `structural_class` (+ `contribution_resource`, the dataset/benchmark root) · **configuration** `data_split`, `inference_protocol`, `training_config`, `ensembling`, `population` |
 | `Finding` | `descriptive`, `mechanistic`, `comparative`, `modeling`, `ablation_finding`, `failure_mode`, `theorem`, `lemma`, `bound` |
 
@@ -470,7 +479,8 @@ Each LLM call has a paired prompt + JSON schema:
 | Method section | `section-extraction-pass.md` + `section-modules/method.md` | `section-method.schema.json` |
 | Evidence section | `section-extraction-pass.md` + `section-modules/evidence.md` (blob-primary) | `section-evidence.schema.json` |
 | Metadata (sidecar) | `metadata-extraction.md` | `metadata-output.schema.json` |
-| References (sidecar) | `references-extraction.md` (blob-primary) | `references-output.schema.json` |
+| Citation relations (Pass 1) | `citations-extraction.md` | `citations-output.schema.json` |
+| Reference metadata (Pass 2) | `reference-metadata.md` | `reference-metadata.schema.json` |
 
 In json_object mode the schema is rendered into the prompt as the OUTPUT FORMAT CONTRACT instead of
 sent as `response_format` — see [Model compatibility](#model-compatibility).
@@ -486,7 +496,8 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 │   ├── llm.py  outputs.py  progress.py  #   async transport, atomic writes, progress
 ├── prompts/
 │   ├── metadata-extraction.md           # Metadata sidecar prompt
-│   ├── references-extraction.md         # References sidecar prompt (blob-primary)
+│   ├── citations-extraction.md          # Citation layer Pass 1 — paper-level relations + signals
+│   ├── reference-metadata.md            # Citation layer Pass 2 — bibliography metadata
 │   └── section-extraction/
 │       ├── node-census.md               # Stage A prompt
 │       ├── relation-pass.md             # Stage B prompt
@@ -496,7 +507,8 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 ├── schemas/                             # JSON schemas (generated; evidence schema's blob-primary fields are hand-edited — see "Regenerate schemas")
 │   ├── node-census-output.schema.json   relation-pass-output.schema.json
 │   ├── section-{problem,method,evidence}.schema.json
-│   └── metadata-output.schema.json      references-output.schema.json
+│   ├── metadata-output.schema.json      citations-output.schema.json  reference-metadata.schema.json
+│   └── references-output.schema.json    external-methods-output.schema.json   # legacy (pre-0.16)
 ├── tools/
 │   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
 │   ├── render_extraction.py             # Render extraction JSON → HTML
@@ -529,7 +541,23 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 ## Versioning
 
-Current IR version: **`section-ir-0.15`** (`extraction_notes.input_mode = node_census_pipeline`).
+Current IR version: **`section-ir-0.16`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.16 is the **paper-level citation layer** revision (additive; the validator accepts 0.12–0.16). It
+replaces the references + external-methods sidecars and the `materialize_external_methods`
+re-injection with two decoupled, census-blind passes:
+
+- **Citation relations (Pass 1)** emit, per graph-linked cited work, `{cite_key, relations:[{role,
+  signal}]}` — **paper-level** relations (the source is the paper as a whole, not an internal node)
+  with a verbatim evidence span per role.
+- **Reference metadata (Pass 2)** transcribes `{title, authors, venue, year}` for only those
+  cite_keys, reading the code-sliced reference blob; a deterministic cite_key join produces
+  `03_references.json`.
+- **No external nodes / no re-injection**: external prior-art works are never graph nodes and there
+  are no internal-unit↔external edges (no `provides_unit_ids`, no unit `ref_ids`, no reconcile). The
+  census stays purely internal and Stage B draws only internal edges; numeric baselines still survive
+  in the source-table blob and cross-paper clustering keys on reference titles. See
+  `docs/extraction-axis.md`.
 
 0.14 is the **unified-equations** revision (breaking for the Method shape; the validator accepts
 0.12/0.13, and `tools/retrofit_objective_function.py` migrates an existing corpus in place):
@@ -568,9 +596,11 @@ produces only blob-primary output):
   baselines and whole ablation grids left in the code-sliced verbatim table blob rather than
   transcribed. A `headline_result` one-liner backstops the contribution number and `finding_ids`
   mounts the Findings a table evidences (replacing the Finding↔Measure edges).
-- **Blob-primary references**: the references pass transcribes only graph-linked references; the
-  full bibliography is code-sliced verbatim into `extraction_notes.references_blob`
-  (`extraction_notes.blob_primary_references` marks the mode) and background refs live there.
+- **Blob-primary references**: the full bibliography is code-sliced verbatim into
+  `extraction_notes.references_blob` (`extraction_notes.blob_primary_references` marks the mode) and
+  background refs live there; only the graph-linked subset is transcribed structured. (0.16 moved the
+  structured transcription from the references pass to the citation layer's Pass 2; the blob backstop
+  is unchanged.)
 - **Lean formulas**: the per-symbol `{symbol, description}` glossary was dropped from Method
   `formulas[]`/`objective_function` (~25% of method output, prose with no graph consumer); the
   equations themselves are kept.

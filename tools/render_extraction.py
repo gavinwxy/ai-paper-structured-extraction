@@ -1081,11 +1081,19 @@ def render_references_panel(
                     parts.append(f"<span class='ref-link rel-dangling'>{name}</span>")
             link_html = f"<div class='ref-links'>&rarr; {''.join(parts)}</div>"
         roles_html = f"<span class='ref-roles'>{escape(', '.join(roles))}</span>" if roles else ""
+        # section-ir-0.16: per-relation verbatim signal spans (role -> the sentence in the paper
+        # that states this relation). Shown beneath the entry as the evidence for each role.
+        signals = relation.get("signals") if isinstance(relation.get("signals"), dict) else {}
+        signal_html = "".join(
+            f'<div class="ref-signal"><span class="ref-signal-role">{escape(str(role))}</span> '
+            f'&ldquo;{escape(str(span))}&rdquo;</div>'
+            for role, span in signals.items() if span
+        )
         rows += (
             f'<div class="{entry_cls}">'
             f'<span class="ref-id">[{escape(str(rid))}]</span> {escape(author_str)} '
             f'<span class="ref-title">&ldquo;{escape(title)}&rdquo;</span>{venue_str}{roles_html}'
-            f'{link_html}</div>\n'
+            f'{link_html}{signal_html}</div>\n'
         )
     extra = f" &middot; {linked} linked to units" if linked else ""
     # Blob-primary: the verbatim full bibliography (code-sliced) shown beneath the structured linked
@@ -1171,8 +1179,12 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     total_sections = len(data.get("sections") or [])
     total_links = len(all_links)
     plan_coverage = notes.get("plan_coverage", {})
+    # section-ir-0.16 renamed must_covered/must_total -> node_covered/node_total (salience removed,
+    # coverage now spans the full census); fall back to the old keys for pre-0.16 outputs.
+    cov_covered = plan_coverage.get("node_covered", plan_coverage.get("must_covered", 0)) if isinstance(plan_coverage, dict) else 0
+    cov_total = plan_coverage.get("node_total", plan_coverage.get("must_total", 0)) if isinstance(plan_coverage, dict) else 0
     cov_value = (
-        f"{plan_coverage.get('must_covered', 0)}/{plan_coverage.get('must_total', 0)}"
+        f"{cov_covered}/{cov_total}"
         if isinstance(plan_coverage, dict) and plan_coverage else "n/a"
     )
 
