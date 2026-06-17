@@ -546,16 +546,47 @@ def _is_deepseek_model(model: str) -> bool:
     return "deepseek" in model.lower()
 
 
+def _is_qwen_model(model: str) -> bool:
+    """Qwen models served via the OpenAI-compatible proxy. Like DeepSeek they (a) need their
+    default reasoning suppressed by an explicit ``extra_body`` toggle — but with Qwen's own key
+    (``{"enable_thinking": False}``, not DeepSeek's ``{"thinking": {"type": "disabled"}}``) — and
+    (b) the proxy ignores ``response_format`` json_schema for them, so the schema is conveyed
+    in-prompt (json_object mode), exactly as for DeepSeek.
+    """
+    return "qwen" in model.lower()
+
+
+def _uses_json_object_mode(model: str) -> bool:
+    """Models whose decoding cannot be schema-bound, so the JSON shape is spelled out in the
+    prompt instead of via ``response_format``: official DeepSeek (api.deepseek.com, no
+    json_schema) and Qwen on the proxy (which ignores json_schema). See ``_structured_output_mode``
+    and ``_augment_prompt_for_json_object``.
+    """
+    return _is_deepseek_model(model) or _is_qwen_model(model)
+
+
+def _thinking_off_extra_body(model: str) -> dict | None:
+    """The ``extra_body`` that disables this model's default reasoning, or ``None`` when the model
+    has no such toggle. DeepSeek and Qwen reason by default and use DIFFERENT keys; the extraction
+    pipeline runs both thinking-OFF (faster, no quality lift on this corpus).
+    """
+    if _is_deepseek_model(model):
+        return {"thinking": {"type": "disabled"}}
+    if _is_qwen_model(model):
+        return {"enable_thinking": False}
+    return None
+
+
 def _structured_output_mode(model: str) -> str:
     """How this model accepts a structured-output constraint.
 
     - ``"json_schema"`` (default): the model constrains decoding to a JSON schema via
       ``response_format`` (the OpenAI-compatible / Gemini proxy). The schema does the enforcing.
-    - ``"json_object"`` (DeepSeek): the model only guarantees *some* valid JSON object; the
+    - ``"json_object"`` (DeepSeek / Qwen): the model only guarantees *some* valid JSON object; the
       schema cannot be sent, so the shape must be spelled out in the prompt instead (see
       ``schema_to_prompt_spec`` / ``_augment_prompt_for_json_object``).
     """
-    return "json_object" if _is_deepseek_model(model) else "json_schema"
+    return "json_object" if _uses_json_object_mode(model) else "json_schema"
 
 
 def _supports_prompt_cache_kwargs(model: str) -> bool:
@@ -3491,11 +3522,12 @@ def _call_llm(
     )
     if response_format is not None:
         kwargs["response_format"] = response_format
-    # DeepSeek reasons by default; the extraction pipeline runs it with thinking DISABLED
-    # (faster, and reasoning gave no quality lift on this corpus). The proxy accepts the
-    # toggle via extra_body; gated to deepseek so other models are untouched.
-    if _is_deepseek_model(model):
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    # DeepSeek and Qwen reason by default; the extraction pipeline runs them with thinking
+    # DISABLED (faster, no quality lift on this corpus) via each family's own extra_body toggle.
+    # Models without such a toggle are untouched.
+    _thinking_extra = _thinking_off_extra_body(model)
+    if _thinking_extra is not None:
+        kwargs["extra_body"] = _thinking_extra
     # The explicit prompt-cache routing kwargs are OpenAI-proxy features; the official DeepSeek
     # API rejects unknown params (its caching is automatic), so only send them where supported.
     if _supports_prompt_cache_kwargs(model):

@@ -14,7 +14,7 @@ from openai import AsyncOpenAI
 # (not ValueError) the worker's parse-retry loops — which catch only (JSONDecodeError, ValueError) —
 # do NOT re-retry. A same-budget retry of a truncation is futile at temperature 0, so it fails fast
 # to the paper-level handler at ~1x cost instead of ~4x.
-from section_pipeline import TruncationError, _is_deepseek_model, _supports_prompt_cache_kwargs
+from section_pipeline import TruncationError, _supports_prompt_cache_kwargs, _thinking_off_extra_body
 
 logger = logging.getLogger(__name__)
 
@@ -141,10 +141,12 @@ class LLMClient:
         )
         if response_format is not None:
             kwargs["response_format"] = response_format
-        # DeepSeek reasons by default; run extraction with thinking DISABLED (faster, no
-        # quality lift on this corpus). Gated to deepseek so other models are untouched.
-        if _is_deepseek_model(model):
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        # DeepSeek and Qwen reason by default; run extraction with thinking DISABLED (faster, no
+        # quality lift on this corpus) via each family's own extra_body toggle. Models without
+        # such a toggle are untouched.
+        _thinking_extra = _thinking_off_extra_body(model)
+        if _thinking_extra is not None:
+            kwargs["extra_body"] = _thinking_extra
         # The explicit prompt-cache routing kwargs are OpenAI-proxy features; the official DeepSeek
         # API rejects unknown params (its caching is automatic). The worker already passes None for
         # deepseek — this guard keeps a future caller from 400-ing every call.

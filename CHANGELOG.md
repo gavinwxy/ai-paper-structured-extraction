@@ -10,6 +10,24 @@
 
 ---
 
+## 默认抽取模型：`deepseek-v4-pro` → `qwen3.5-35b-a3b`（均 thinking-off）
+
+**日期**：2026-06-17　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+默认模型切到 `qwen3.5-35b-a3b`，继续 **thinking-off**（`config.py` / `cli.py`）。配套传输层改造：
+- **thinking-off 按模型族注入**：统一收口到 `_thinking_off_extra_body`（`section_pipeline.py`）——
+  Qwen `{"enable_thinking": False}`、DeepSeek `{"thinking": {"type": "disabled"}}`，其余模型不注入；
+  同步 `_call_llm` 与异步 `production/llm.py` 两处调用点共用。
+- **结构化输出模式扩展**：新增 `_uses_json_object_mode`，让 **Qwen 与 DeepSeek 同走 json_object**
+  （代理对 Qwen 忽略 json_schema response_format，schema 由 `schema_to_prompt_spec` 注入 prompt）；
+  其余模型仍 json_schema。
+- **prompt-cache kwargs**：Qwen 走 OpenAI 兼容代理，实测 **接受** `prompt_cache_key`/
+  `prompt_cache_retention`（200，缓存预热照常生效）；仅**官方 DeepSeek**（api.deepseek.com）拒绝，
+  故仅在那里省略（`_supports_prompt_cache_kwargs` 不变）。
+- max_tokens 默认仍 32K（A/B 实测 qwen thinkOFF 10 篇无截断）；README「Model compatibility」整节改写。
+
+> 上节 evidence A/B 即基于该默认模型（qwen3.5-35b-a3b thinkOFF）实测，故默认切换与瘦身一并验证。
+
 ## evidence 提示词瘦身：流水线化重排 + 密度 −16.3%（A/B 无回归）
 
 **日期**：2026-06-17　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`

@@ -95,7 +95,7 @@ Create a `.env` with your API key:
 API_KEY=sk-...                  # API-KEY (with a hyphen) is also accepted
 # optional overrides:
 # BASE_URL=http://35.220.164.252:3888/v1
-# MODEL=deepseek-v4-pro
+# MODEL=qwen3.5-35b-a3b
 ```
 
 The default endpoint is an OpenAI-compatible proxy (`http://35.220.164.252:3888/v1`); a fallback
@@ -109,7 +109,7 @@ proxy lives at `http://34.13.73.248:3888/v1`. You can also point at official Dee
 Extract every paper in a directory:
 
 ```bash
-.venv/bin/python -m production <input_dir> <output_dir> --model deepseek-v4-pro
+.venv/bin/python -m production <input_dir> <output_dir> --model qwen3.5-35b-a3b
 ```
 
 `<input_dir>` is a **flat** directory of `*.md` papers (discovery is non-recursive). Each paper
@@ -166,7 +166,7 @@ prefix but would otherwise fire concurrently, so the provider's automatic prefix
 they race and the paper is re-sent uncached up to 3×. Warming runs the cheapest section (`problem`)
 to completion first to warm that prefix; the other two then cache it. On a **cold** proxy this
 recovers ~25 pts of content-section prompt into cache (≈6% of effective cost / ≈3–4% real $ at the
-deepseek-v4-pro rate card), validated 12/12 papers; on an already-warm proxy it is redundant but
+proxy rate card), validated 12/12 papers; on an already-warm proxy it is redundant but
 harmless (it never worsens cache — only `method`/`evidence` improve). It costs ~one section of serial
 latency per paper, so pass `--no-warm-content-cache` for latency-priority runs or when the proxy is
 demonstrably warm. Inspect `relations` cached% in the telemetry to tell whether a proxy is warm
@@ -244,31 +244,37 @@ any hand-edit back into the `section_pipeline.py` constants, **then** re-run the
 |---|---|---|
 | `API_KEY` / `API-KEY` | — | API authentication, loaded from `.env` |
 | `BASE_URL` | `http://35.220.164.252:3888/v1` | OpenAI-compatible endpoint |
-| `MODEL` | `deepseek-v4-pro` | extraction model |
+| `MODEL` | `qwen3.5-35b-a3b` | extraction model |
 
 Token budgets default to **32K** for content sections and **24K** for the single-shot
 planning/aux calls (census, relation pass, metadata, citation layer); both are tunable on the CLI.
 
 ### Model compatibility
 
-The default model is **`deepseek-v4-pro`**, run with **reasoning/thinking disabled** (faster, and
+The default model is **`qwen3.5-35b-a3b`**, run with **reasoning/thinking disabled** (faster, and
 reasoning gave no quality lift on this corpus). Thinking-off is enforced in the transport, not the
-model name: every call injects `extra_body={"thinking": {"type": "disabled"}}` when the model name
-matches `deepseek*` (both the sync `_call_llm` in `section_pipeline.py` and the async
-`production/llm.py`).
+model name: every call injects the family's own toggle via `_thinking_off_extra_body` — Qwen gets
+`extra_body={"enable_thinking": False}`, DeepSeek gets `extra_body={"thinking": {"type": "disabled"}}`
+— in both the sync `_call_llm` (`section_pipeline.py`) and the async `production/llm.py`. A model with
+no such toggle is sent none.
 
-Structured output is **model-adaptive**, detected from the model name (`_structured_output_mode`):
+Structured output is **model-adaptive**, detected from the model name (`_structured_output_mode` /
+`_uses_json_object_mode`):
 
-- **json_schema mode** (any non-`deepseek*` model, e.g. the Gemini/OpenAI-compatible proxy) — the
-  per-stage JSON schema is sent in `response_format` with `strict: true`, so decoding is
-  schema-constrained and the prompts are unchanged.
-- **json_object mode** (the default, `deepseek*`) — DeepSeek rejects `response_format: json_schema`,
-  so the pipeline sends `{"type": "json_object"}` and renders the *same* schema into the prompt as
-  an **OUTPUT FORMAT CONTRACT** (`schema_to_prompt_spec`): keys, required/optional fields, enum
-  values, id patterns — the constraints strict decoding used to enforce. The contract is derived
-  from the schema, so it never drifts, and the deterministic [assembly repairs](#assembly--validation)
-  absorb the benign quirks strict decoding would have rejected. (DeepSeek also rejects the proxy's
-  cache-key kwargs, so they are omitted for `deepseek*`.)
+- **json_object mode** (the default `qwen*`, and `deepseek*`) — the proxy ignores
+  `response_format: json_schema` for Qwen, and official DeepSeek rejects it outright, so the pipeline
+  sends `{"type": "json_object"}` and renders the *same* schema into the prompt as an **OUTPUT FORMAT
+  CONTRACT** (`schema_to_prompt_spec`): keys, required/optional fields, enum values, id patterns — the
+  constraints strict decoding used to enforce. The contract is derived from the schema, so it never
+  drifts, and the deterministic [assembly repairs](#assembly--validation) absorb the benign quirks
+  strict decoding would have rejected.
+- **json_schema mode** (any other model, e.g. the Gemini/OpenAI-compatible proxy) — the per-stage JSON
+  schema is sent in `response_format` with `strict: true`, so decoding is schema-constrained and the
+  prompts are unchanged.
+
+Qwen runs on the OpenAI-compatible proxy, which **accepts** the prompt-cache routing kwargs
+(`prompt_cache_key`/`prompt_cache_retention`), so cache-warming applies. Only **official DeepSeek**
+(`api.deepseek.com`) rejects those kwargs (`_supports_prompt_cache_kwargs`); they are omitted there.
 
 To run against official DeepSeek (smaller output ceiling — lower the budgets if a call 400s or
 truncates):
