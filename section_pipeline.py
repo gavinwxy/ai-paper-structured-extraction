@@ -403,6 +403,12 @@ UNIT_ID_PREFIX_BY_TYPE: dict[str, str] = {
     "ExperimentSetup": "exp:",
     "Measure": "mea:",
 }
+# Reverse of UNIT_ID_PREFIX_BY_TYPE: an id-prefix -> the unit type that prefix canonically denotes
+# (`exp:` -> ExperimentSetup). Used by _reconcile_misrouted_units to repair a unit whose typed-array
+# placement disagrees with its (authoritative) id-prefix.
+UNIT_TYPE_BY_ID_PREFIX: dict[str, str] = {
+    prefix: utype for utype, prefix in UNIT_ID_PREFIX_BY_TYPE.items()
+}
 ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
     "Document": {"id", "type", "doc_id", "title", "kind", "thesis", "headline_result", "provenance",
                  "topics", "tasks", "domain"},
@@ -899,6 +905,83 @@ def _rewrite_relation_endpoints(relations: list[dict[str, Any]], replacements: d
                 relation[key] = replacements[value]
 
 
+def _canonical_type_for_id(uid: Any) -> str | None:
+    """The unit type an id's prefix canonically denotes (`exp:foo` -> 'ExperimentSetup'), else None."""
+    if not isinstance(uid, str) or ":" not in uid:
+        return None
+    return UNIT_TYPE_BY_ID_PREFIX.get(uid.split(":", 1)[0] + ":")
+
+
+def _reconcile_misrouted_units(
+    sections: list[dict[str, Any]], census: dict[str, Any] | None
+) -> list[str]:
+    """Repair units whose typed-array placement disagrees with their canonical id-prefix.
+
+    The evidence section materializes BOTH kind=dataset/benchmark Contributions and substrate
+    ExperimentSetup nodes; on analysis/causal papers the model occasionally routes a census `exp:`
+    substrate into `contributions[]` (type=Contribution) — sometimes in addition to the correct
+    `experiment_setups[]` copy (a double-emit), sometimes alone. After flattening, the mis-typed
+    copy collides with the correct one and `_dedup_unit_ids` keeps the contributions-first copy,
+    overwriting the ExperimentSetup — yielding a phantom benchmark "Contribution" and breaking every
+    `setup_id` that points at it.
+
+    The id-prefix is canonical (census nodes are re-prefixed from their settled type upstream), so
+    reconcile type -> prefix: when a prefix-correct twin already exists, drop the mis-typed copy;
+    otherwise re-type the lone copy in place. Census typing, when present, must agree with the prefix
+    for the repair to fire (defensive — never guess against the census). Must run before the dedups.
+    """
+    census_type: dict[str, str] = {}
+    if census:
+        for node in census.get("nodes", []) or []:
+            if isinstance(node, dict) and isinstance(node.get("node_id"), str):
+                census_type[node["node_id"]] = node.get("type")
+
+    warnings: list[str] = []
+    for section in sections:
+        units = section.get("units")
+        if not isinstance(units, list):
+            continue
+        # ids that already carry a prefix-correct-typed unit in this section
+        prefix_correct_ids = {
+            unit["id"]
+            for unit in units
+            if isinstance(unit, dict)
+            and isinstance(unit.get("id"), str)
+            and _canonical_type_for_id(unit["id"]) == unit.get("type")
+        }
+        kept: list[Any] = []
+        for unit in units:
+            if not (
+                isinstance(unit, dict)
+                and isinstance(unit.get("id"), str)
+                and isinstance(unit.get("type"), str)
+            ):
+                kept.append(unit)
+                continue
+            uid, utype = unit["id"], unit["type"]
+            canonical = _canonical_type_for_id(uid)
+            if canonical is None or canonical == utype:
+                kept.append(unit)
+                continue
+            census_t = census_type.get(uid)
+            if census_t is not None and census_t != canonical:
+                # census disagrees with the prefix too — don't guess; let validation flag it.
+                kept.append(unit)
+                continue
+            if uid in prefix_correct_ids:
+                warnings.append(
+                    f"Dropped mis-routed {utype} copy of {uid} (kept prefix-correct {canonical})"
+                )
+                continue
+            unit["type"] = canonical
+            warnings.append(
+                f"Re-typed mis-routed unit {uid} from {utype} to {canonical} (id-prefix canonical)"
+            )
+            kept.append(unit)
+        section["units"] = kept
+    return warnings
+
+
 def _dedup_experiment_setups(
     sections: list[dict[str, Any]],
     relations: list[dict[str, Any]],
@@ -1083,6 +1166,11 @@ def _normalize_provenance_markers(
 
     Applied to both unit provenance and (when given) global relation provenance, so a relation's
     markers are repaired the same way units' are before relation-provenance validation runs.
+
+    Also defaults a unit's missing / non-list `provenance` to `[]` (and wraps a bare `"§5"` string
+    into `["§5"]`) so a model that dropped the field — seen on hard papers — fails validation only on
+    the genuine "Finding/Measure must have non-empty provenance" check, not the generic, noisier
+    "provenance must be a list" malformed-shape warning.
     """
     warnings: list[str] = []
     seen: set[str] = set()
@@ -1125,6 +1213,13 @@ def _normalize_provenance_markers(
             provenance = unit.get("provenance")
             if isinstance(provenance, list):
                 unit["provenance"] = _collapse(provenance)
+            elif isinstance(provenance, str) and provenance.strip():
+                # A bare "§5" instead of ["§5"] — wrap, then collapse like any list.
+                unit["provenance"] = _collapse([provenance])
+            else:
+                # D2: the model omitted `provenance` (or emitted null / a non-marker shape). Default
+                # to [] so the genuine non-empty-provenance check is the only signal that fires.
+                unit["provenance"] = []
 
     for relation in relations or []:
         if not isinstance(relation, dict):
@@ -3271,6 +3366,10 @@ def assemble_extraction(
     assembly_warnings: list[str] = []
     assembly_warnings.extend(_sanitize_unit_text(sections))
     assembly_warnings.extend(_sanitize_unit_ids(sections, relations))
+    # Reconcile any unit the evidence section mis-routed into the wrong typed array (an `exp:`
+    # substrate emitted as a Contribution) back to its prefix-canonical type BEFORE the dedups, so
+    # the spurious copy is dropped/re-typed instead of winning the id-collision.
+    assembly_warnings.extend(_reconcile_misrouted_units(sections, census))
     assembly_warnings.extend(
         _dedup_experiment_setups(sections, relations, all_census_node_ids(census))
     )
