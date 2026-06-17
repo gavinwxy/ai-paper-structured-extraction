@@ -6,17 +6,17 @@ per-section content fill (stage C); stage descriptions embed the release tag fro
 ``section_pipeline.IR_VERSION``. This script owns exactly five committed schemas,
 generated from the controlled vocabularies in ``section_pipeline.py``:
 ``section-{problem,method,evidence}.schema.json``, ``node-census-output.schema.json``
-and ``relation-pass-output.schema.json``. The other two structured-output contracts —
-``metadata-output.schema.json`` and ``references-output.schema.json`` — are
-hand-maintained and NOT generated here. It is authoritative only while kept in sync
+and ``relation-pass-output.schema.json``. The other structured-output contracts —
+``metadata-output.schema.json``, ``citations-output.schema.json`` and
+``reference-metadata.schema.json`` — are hand-maintained and NOT generated here. It is authoritative only while kept in sync
 with the five owned ``schemas/*.json``: schema changes are sometimes hand-edited into
 the committed schemas first (e.g. blob-primary evidence), so port any hand-edit back
 here, then VERIFY after running this script that ``git diff schemas/`` shows only the
 changes you intended (regeneration clobbers anything not ported).
 
-Each unit carries two classificatory axes: a generic ``type`` (the scientific-method-anchored
-scope) and a fine-grained ``role`` (the discipline-specific differentia). Problem and Measure
-have no sub-axis and carry no ``role``.
+Each unit carries a primary ``type`` and, on the multi-kind types (Contribution, ExperimentSetup,
+Finding), a ``kind`` sub-axis (the discipline-specific differentia). Component, Problem and Measure
+are single-level and carry no ``kind``.
 """
 
 from __future__ import annotations
@@ -32,21 +32,21 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from section_pipeline import (  # noqa: E402
     COMPARISON_DIRECTIONS,
-    EXPERIMENT_SETUP_ROLES,
+    CONTRIBUTION_KINDS,
+    EXPERIMENT_SETUP_KINDS,
+    FINDING_KINDS,
     FINDING_POLARITIES,
-    FINDING_ROLES,
     FORMULA_ROLES,
     IR_VERSION,
     MEASURE_OBJECTIVE_CLASSES,
     MEASURE_TABLE_ROLES,
     METHOD_KINDS,
-    INTERNAL_NODE_ROLES,
-    METHOD_ROLES,
-    NODE_ROLES,
+    NODE_TYPES,
     SCORE_VALUE_KINDS,
     SECTION_AUTHORS_RELATIONS,
     STAGE_B_RELATIONS,
     STAGE_C_RELATIONS,
+    SUBSTRATE_KINDS,
 )
 
 SCHEMAS_DIR = PROJECT_ROOT / "schemas"
@@ -55,12 +55,15 @@ ID_PATTERN = r"^[a-z][a-z0-9_]*:[a-z0-9_]+$"
 # Typed unit arrays each content section (stage C) returns.
 SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
     "problem": ["problems"],
-    "method": ["methods"],
-    "evidence": ["measures", "experiment_setups", "findings"],
+    # A Contribution is materialized by the section that describes it: kind method/theory in the
+    # method section, kind dataset/benchmark/finding in the evidence section — so `contributions`
+    # appears in both (section-ir-0.17).
+    "method": ["contributions", "components"],
+    "evidence": ["contributions", "measures", "experiment_setups", "findings"],
 }
 
 # Fields that are optional on a unit type (everything else in its property set is required).
-# method_kind is now an optional descriptive attribute (the role is the required differentia);
+# method_kind is an optional finer descriptor (the required differentia on a Contribution is `kind`);
 # ExperimentSetup carries an optional description and cite_keys.
 # `implementation_notes` is optional (0.10, FG-2): a non-implementation Method — a theorem/lemma/
 # bound/definition or a resource/taxonomy deliverable — carries no reproducibility notes, so it is
@@ -73,7 +76,8 @@ OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
     "Measure": {"comparison_direction", "objective_class",
                 "source_table_marker", "caption_marker", "table_role", "headline_result",
                 "finding_ids"},
-    "Method": {"method_kind", "inputs", "outputs", "formulas", "implementation_notes"},
+    "Contribution": {"method_kind", "inputs", "outputs", "formulas", "implementation_notes"},
+    "Component": {"method_kind", "inputs", "outputs", "formulas", "implementation_notes"},
     "ExperimentSetup": {"description"},
     # FG-11 (section-ir-0.10): optional Finding quantitative payload.
     "Finding": {"polarity", "effect_size", "scope"},
@@ -81,36 +85,33 @@ OPTIONAL_FIELDS_BY_TYPE: dict[str, set[str]] = {
 
 ARRAY_TYPE_NAMES: dict[str, str] = {
     "problems": "Problem",
-    "methods": "Method",
+    "contributions": "Contribution",
+    "components": "Component",
     "experiment_setups": "ExperimentSetup",
     "measures": "Measure",
     "findings": "Finding",
 }
 
-# Census node roles and the unit-level role vocabularies, with explicit ordering for stable
-# schemas. Census roles are listed in search-cluster order (the_method, testbed, yardsticks,
-# the_problem). Section-ir-0.15: the census is internal-only — the prior-art METHOD roles
-# (builds_on / compared_against / uses) are NOT census-emittable (the external stage materializes
-# them), so they are absent from NODE_ROLE_ORDER and the census node_role enum, but stay in
-# METHOD_ROLE_ORDER below because re-injected external Method UNITS still carry them (`uses` is
-# Increment 2.1 — a backbone/base-model the contribution depends on without extending).
-NODE_ROLE_ORDER = [
-    "contribution", "contribution_resource", "contribution_finding", "component",
-    "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
-    "metric",
-    "problem",
-]
-METHOD_ROLE_ORDER = ["contribution", "component", "builds_on", "uses", "compared_against"]
-EXPERIMENT_SETUP_ROLE_ORDER = [
-    "dataset", "benchmark", "task", "theoretical_setting", "structural_class",
-    "contribution_resource",
+# Census node types and the unit-level kind vocabularies, with explicit ordering for stable
+# schemas (section-ir-0.17). Census types are listed in search-cluster order (the_solution,
+# evaluation_frame, the_problem). The census is internal-only: prior-art methods are NOT census
+# nodes (the citation layer captures them). Findings are not census nodes either — every Finding
+# is born during evidence content fill — so Finding is absent from CENSUS_TYPE_ORDER, but
+# FINDING_KIND_ORDER still drives the evidence-section Finding `kind` enum.
+CENSUS_TYPE_ORDER = ["Contribution", "Component", "ExperimentSetup", "Measure", "Problem"]
+CONTRIBUTION_KIND_ORDER = ["method", "dataset", "benchmark", "theory", "finding"]
+EXPERIMENT_SETUP_KIND_ORDER = [
+    "dataset", "benchmark", "task",
     "data_split", "inference_protocol", "training_config", "ensembling", "population",
 ]
-FINDING_ROLE_ORDER = [
+FINDING_KIND_ORDER = [
     "descriptive", "mechanistic", "comparative", "modeling", "ablation_finding", "failure_mode",
     "theorem", "lemma", "bound",
 ]
-STAGE_B_RELATION_ORDER = ["part_of", "builds_on", "uses", "assumes", "co_contribution",
+# The census `kind` enum = the kinds emittable in the census (Contribution kinds + substrate kinds);
+# required on a Contribution/ExperimentSetup node, omitted on Component/Measure/Problem.
+CENSUS_KIND_ORDER = ["method", "dataset", "benchmark", "theory", "finding", "task"]
+STAGE_B_RELATION_ORDER = ["part_of", "builds_on", "uses", "co_contribution",
                           "compares_to", "evaluates"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
 # problem authors only `motivates` (Problem -> the census Method/ExperimentSetup it justifies);
@@ -124,9 +125,9 @@ STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
 }
 # One-line gloss per stage-C relation, joined into the schema field description.
 STAGE_C_RELATION_GLOSS: dict[str, str] = {
-    "about": "about = a Finding is about a Method or ExperimentSetup (never a Measure — mount table↔finding links via the Measure's finding_ids)",
-    "supports": "supports = a Finding, or a theorem/proof Method, supports a Finding (never Measure→Finding)",
-    "motivates": "motivates = a Problem motivates the Method/ExperimentSetup that addresses it",
+    "about": "about = a Finding is about a Contribution/Component or ExperimentSetup (never a Measure — mount table↔finding links via the Measure's finding_ids)",
+    "supports": "supports = a Finding, or a theory Contribution, supports a Finding (never Measure→Finding)",
+    "motivates": "motivates = a Problem motivates the Contribution/Component/ExperimentSetup that addresses it",
 }
 
 # The relation order lists above ARE the schema enums, and a new relation cannot be
@@ -146,10 +147,11 @@ if _STAGE_C_UNION != STAGE_C_RELATIONS:
     )
 
 ENUM_ORDER: dict[str, list[str]] = {
-    "node_role": NODE_ROLE_ORDER,
-    "method_role": METHOD_ROLE_ORDER,
-    "experiment_setup_role": EXPERIMENT_SETUP_ROLE_ORDER,
-    "finding_role": FINDING_ROLE_ORDER,
+    "census_type": CENSUS_TYPE_ORDER,
+    "census_kind": CENSUS_KIND_ORDER,
+    "contribution_kind": CONTRIBUTION_KIND_ORDER,
+    "experiment_setup_kind": EXPERIMENT_SETUP_KIND_ORDER,
+    "finding_kind": FINDING_KIND_ORDER,
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function",
                     "resource", "taxonomy", "theorem", "lemma", "bound", "definition"],
     "formula_role": ["objective"],
@@ -161,10 +163,11 @@ ENUM_ORDER: dict[str, list[str]] = {
 }
 
 ENUM_VALUES: dict[str, set[str]] = {
-    "node_role": INTERNAL_NODE_ROLES,
-    "method_role": METHOD_ROLES,
-    "experiment_setup_role": EXPERIMENT_SETUP_ROLES,
-    "finding_role": FINDING_ROLES,
+    "census_type": set(NODE_TYPES),
+    "census_kind": set(CONTRIBUTION_KINDS) | set(SUBSTRATE_KINDS),
+    "contribution_kind": set(CONTRIBUTION_KINDS),
+    "experiment_setup_kind": set(EXPERIMENT_SETUP_KINDS),
+    "finding_kind": set(FINDING_KINDS),
     "method_kind": METHOD_KINDS,
     "formula_role": FORMULA_ROLES,
     "comparison_direction": COMPARISON_DIRECTIONS,
@@ -239,7 +242,7 @@ def scores_schema(description: str) -> dict[str, Any]:
             "required": ["variant", "value", "variance", "system_id", "setup_id"],
             "additionalProperties": False,
             "properties": {
-                "variant": {"type": "string", "description": "Name of the contribution configuration this score row reports, as the paper labels it (e.g. 'Transformer (big)', 'Ours (ResNet-101)'); on a contribution_resource root's rows, the evaluated system's label"},
+                "variant": {"type": "string", "description": "Name of the contribution configuration this score row reports, as the paper labels it (e.g. 'Transformer (big)', 'Ours (ResNet-101)'); on a dataset/benchmark Contribution's rows, the evaluated system's label"},
                 "value": {
                     "type": "string",
                     "description": "Reported score encoded as a string, including numeric values",
@@ -250,7 +253,7 @@ def scores_schema(description: str) -> dict[str, Any]:
                 },
                 "system_id": {
                     "type": "string",
-                    "description": "ID of the contribution Method this row reports (e.g. 'mth:transformer'). In prose mode (a paper with no table grids), a transcribed baseline row carries the baseline's Method id instead; on a contribution_resource root's evaluated-system rows, the evaluated Method's id. Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture).",
+                    "description": "ID of the contribution (a Contribution/Component) this row reports (e.g. 'con:transformer'). In prose mode (a paper with no table grids), a transcribed baseline row carries the baseline's id instead; on a dataset/benchmark Contribution's evaluated-system rows, the evaluated system's id. Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture).",
                 },
                 "setup_id": {
                     "type": "string",
@@ -262,11 +265,11 @@ def scores_schema(description: str) -> dict[str, Any]:
                 ),
                 "opponent_id": {
                     "type": "string",
-                    "description": "Optional (FG-6): for a pairwise/win-rate row (A-vs-B), the id of the Method this row's system was compared against — `system_id` is system A, `opponent_id` is system B, `value` is A's win rate vs B. Omit for an ordinary absolute-score row.",
+                    "description": "Optional (FG-6): for a pairwise/win-rate row (A-vs-B), the id of the Contribution/Component this row's system was compared against — `system_id` is system A, `opponent_id` is system B, `value` is A's win rate vs B. Omit for an ordinary absolute-score row.",
                 },
                 "judge_id": {
                     "type": "string",
-                    "description": "Optional (FG-6): for a judged row (LLM-as-judge or human evaluation), the id of the judge — a Method, or an inference_protocol/population ExperimentSetup that was materialized for the evaluator. Omit when the score needs no judge.",
+                    "description": "Optional (FG-6): for a judged row (LLM-as-judge or human evaluation), the id of the judge — a Contribution/Component, or an inference_protocol/population ExperimentSetup that was materialized for the evaluator. Omit when the score needs no judge.",
                 },
             },
         },
@@ -342,8 +345,8 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
     schemas: dict[str, dict[str, Any]] = {
         "ExperimentSetup": {
             **base_unit_properties("ExperimentSetup"),
-            "role": enum_schema(
-                "experiment_setup_role",
+            "kind": enum_schema(
+                "experiment_setup_kind",
                 "Which experimental ingredient this is — a substrate the method is tried on "
                 "(dataset/benchmark/task) or a configuration that scopes a measure "
                 "(data_split/inference_protocol/training_config/ensembling/population)",
@@ -362,7 +365,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
         },
         "Finding": {
             **base_unit_properties("Finding"),
-            "role": enum_schema("finding_role", "Classification of the finding"),
+            "kind": enum_schema("finding_kind", "Classification of the finding"),
             "statement": string_schema("The finding as a single declarative sentence"),
             "polarity": enum_schema(
                 "finding_polarity",
@@ -380,27 +383,46 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
                 "tasks', 'in low-resource regimes'); omit when unrestricted"
             ),
         },
-        "Method": {
-            **base_unit_properties("Method"),
-            "role": enum_schema(
-                "method_role",
-                "Argumentative role: contribution (the single primary method/system), component "
-                "(a sub-method that is part_of the contribution), builds_on (prior work extended), "
-                "uses (an external prior method/backbone/base-model depended on without extending), "
-                "or compared_against (a baseline)",
+        "Contribution": {
+            **base_unit_properties("Contribution"),
+            "kind": enum_schema(
+                "contribution_kind",
+                "What KIND of deliverable this contribution is: method (an algorithm/technique/"
+                "architecture/model), dataset, benchmark, theory (a proven formal result), or "
+                "finding (an empirical/analysis result — the deliverable of an analysis paper with "
+                "no novel artifact)",
             ),
-            "name": string_schema("Name of the method"),
+            "name": string_schema("Name of the contribution"),
             "method_kind": enum_schema(
                 "method_kind",
-                "Optional structural classification of the method; omit when unclear",
+                "Optional finer structural classification on a kind=method/theory contribution "
+                "(algorithm/model_architecture/training_strategy/objective_function for a method; "
+                "theorem/lemma/bound/definition for a theory; resource/taxonomy for a non-algorithmic "
+                "deliverable); omit otherwise",
             ),
-            "description": string_schema("Prose description of the method; empty string when unknown"),
-            "inputs": string_array_schema("Inputs to the method; omit when the paper does not state them"),
-            "outputs": string_array_schema("Outputs of the method; omit when the paper does not state them"),
+            "description": string_schema("Prose description of the contribution; empty string when unknown"),
+            "inputs": string_array_schema("Inputs to the method; omit when not stated or the contribution is not an algorithm"),
+            "outputs": string_array_schema("Outputs of the method; omit when not stated or the contribution is not an algorithm"),
             "formulas": formulas_schema(
-                "Key defining equations of the method, each with a short label; the entry tagged "
-                "role='objective' is the optimization objective/loss; omit the field when the "
-                "method states no equations"
+                "Key defining equations, each with a short label; the entry tagged role='objective' "
+                "is the optimization objective/loss; omit the field when the contribution states no equations"
+            ),
+            "implementation_notes": string_schema("Key implementation details; empty string when none are reported"),
+        },
+        "Component": {
+            **base_unit_properties("Component"),
+            "name": string_schema("Name of the component (a sub-method/module that is part_of the contribution)"),
+            "method_kind": enum_schema(
+                "method_kind",
+                "Optional finer structural classification of the component "
+                "(algorithm/model_architecture/training_strategy/objective_function); omit when unclear",
+            ),
+            "description": string_schema("Prose description of the component; empty string when unknown"),
+            "inputs": string_array_schema("Inputs to the component; omit when the paper does not state them"),
+            "outputs": string_array_schema("Outputs of the component; omit when the paper does not state them"),
+            "formulas": formulas_schema(
+                "Key defining equations of the component, each with a short label; the entry tagged "
+                "role='objective' is the optimization objective/loss; omit the field when the component states no equations"
             ),
             "implementation_notes": string_schema("Key implementation details; empty string when none are reported"),
         },
@@ -411,7 +433,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "setup_ids": measure_setup_ids_schema(),
             "comparison_direction": enum_schema("comparison_direction", "Whether higher or lower values are preferred; omit when unspecified"),
             "objective_class": enum_schema("measure_objective_class", "Optional (FG-6): which axis of a multi-objective evaluation this measure sits on — primary_quality (the headline quality metric, the default — omit), cost_efficiency (latency/compute/memory/params), fairness, safety, or robustness. Set it on the non-primary axes of a trade-off so a cost/fairness/safety measure is not read as uniformly positive evidence."),
-            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception — prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception — a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused); when rows grade the resource by object/category rather than by system, the headline column's rows (printed row label as variant). Third exception — a censused metric reported only in figures/prose in a paper that HAS tables: transcribe its prose- or caption-stated numbers here with no source_table_marker (never values read off a figure's axes)."),
+            "scores": scores_schema("Flat array of reported scores under this measure — one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception — prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception — a resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused); when rows grade the resource by object/category rather than by system, the headline column's rows (printed row label as variant). Third exception — a censused metric reported only in figures/prose in a paper that HAS tables: transcribe its prose- or caption-stated numbers here with no source_table_marker (never values read off a figure's axes)."),
             # Blob-primary evidence (section-ir-0.12): the measure binds to its source table by
             # marker; code slices the table verbatim so the model never retypes baseline rows.
             "source_table_marker": string_schema(
@@ -428,7 +450,7 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
                 "Optional (blob-primary): main_result (a headline comparison — emit the "
                 "contribution method's own score rows) or ablation (component/sensitivity study, "
                 "or a motivation/diagnostic study whose cells are Δ/gain/correlation quantities "
-                "of prior or base models (for a contribution_resource root, evaluated-system "
+                "of prior or base models (for a resource root, evaluated-system "
                 "rows ON the resource count as contribution rows) — emit no score rows; the "
                 "source table carries it). Defaults to main_result.",
             ),
@@ -545,11 +567,11 @@ def node_census_schema() -> dict[str, Any]:
         "title": "Node Census Output",
         "description": (
             f"Stage A of {IR_VERSION}: a flat census of every argumentatively load-bearing "
-            "node, each tagged with one granular role (its type is derived from the role), with "
-            "no relations. The census emits Method nodes, the substrate ExperimentSetup nodes "
-            "(dataset/benchmark/task), Measure nodes, and the single research-problem Problem "
-            "node (RF-08). The only Finding node is the optional contribution_finding. "
-            "Configuration ExperimentSetup units (splits/protocols) are born during content fill."
+            "node, each tagged with its type (plus a kind on Contribution/ExperimentSetup), with "
+            "no relations. The census emits Contribution nodes (the root deliverable(s)), Component "
+            "nodes (sub-modules), the substrate ExperimentSetup nodes (dataset/benchmark/task), "
+            "Measure nodes, and the single research-problem Problem node (RF-08). Findings are born "
+            "during content fill; configuration ExperimentSetup units (splits/protocols) too."
         ),
         "required": ["spine_summary", "nodes"],
         "additionalProperties": False,
@@ -560,6 +582,12 @@ def node_census_schema() -> dict[str, Any]:
                 "additionalProperties": False,
                 "description": "Summary of the paper's contribution and argument structure",
                 "properties": {
+                    "research_problem": string_schema(
+                        "Optional orientation annotation (RF-08): one sentence stating the central "
+                        "unmet need or unresolved question the paper addresses. A summary annotation, "
+                        "NOT a node — the single research-problem Problem node remains the structured "
+                        "graph unit; do NOT drop that node because this field is filled."
+                    ),
                     "central_contribution": string_schema("One sentence naming the main contribution."),
                     "argument_flow": string_schema(
                         "One sentence describing how problem, method, and evidence fit together."
@@ -596,38 +624,41 @@ def node_census_schema() -> dict[str, Any]:
                 "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
                 "items": {
                     "type": "object",
-                    "required": ["node_id", "role", "name", "gloss", "source_scope", "cite_keys"],
+                    "required": ["node_id", "type", "name", "gloss", "source_scope", "cite_keys"],
                     "additionalProperties": False,
                     "properties": {
                         "node_id": id_schema(
-                            "Node id; the prefix follows from the role's type — mth: for "
-                            "contribution/component, exp: for "
-                            "contribution_resource/dataset/benchmark/task/theoretical_setting/"
-                            "structural_class, mea: for metric, fnd: for contribution_finding, "
-                            "prb: for problem"
+                            "Node id; the prefix follows from the type — con: for Contribution, "
+                            "cmp: for Component, exp: for ExperimentSetup, mea: for Measure, "
+                            "prb: for Problem. Lowercase ASCII/digits/underscores, with acronyms "
+                            "lowercased (map, not mAP); reused verbatim as the final unit id, so "
+                            "choose it once and never reuse it."
                         ),
-                        "role": enum_schema(
-                            "node_role",
-                            "Argumentative role, in search-cluster order. the_method: the root — "
-                            "contribution (a method/system), contribution_resource (a dataset/"
-                            "benchmark deliverable), or contribution_finding (a result/finding "
-                            "deliverable for an analysis paper with no novel method/resource) — "
-                            "plus component. testbed: dataset, benchmark, task, "
-                            "theoretical_setting, structural_class. yardsticks: metric. "
-                            "the_problem: problem (the single research problem the paper "
-                            "addresses). Prior-art methods the paper builds on or compares "
-                            "against are NOT censused here — the citation layer captures them.",
+                        "type": enum_schema(
+                            "census_type",
+                            "Node type, in search-cluster order. the_solution: Contribution (the "
+                            "paper's root deliverable) or Component (a sub-module that is part_of the "
+                            "contribution). evaluation_frame: ExperimentSetup (a dataset/benchmark/"
+                            "task the work runs on) or Measure (a metric). the_problem: Problem (the "
+                            "single research problem). Prior-art methods the paper builds on or "
+                            "compares against are NOT census nodes — the citation layer captures "
+                            "them; Findings are born during content fill.",
+                        ),
+                        "kind": enum_schema(
+                            "census_kind",
+                            "REQUIRED on a Contribution (method/dataset/benchmark/theory/finding — "
+                            "what the deliverable IS) and on an ExperimentSetup (dataset/benchmark/"
+                            "task). OMIT on Component, Measure, and Problem (they are single-level).",
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
-                        "gloss": string_schema("One short phrase describing the node"),
-                        "source_scope": string_array_schema("Section markers where the node is introduced or defined, e.g. ['§3']"),
+                        "gloss": string_schema("One short phrase stating what the node intrinsically IS — not how it relates to any other node (no 'used by', 'part of', 'improves', 'evaluated on'); relations are the next pass's job."),
+                        "source_scope": string_array_schema("Section markers — the paper's own printed heading number(s) where the node is introduced or defined, e.g. ['§3']; echo them from the text, never fabricate a number the paper does not print."),
                         "cite_keys": string_array_schema(
                             "In-text bibliography citation marker(s) attached to this node, as "
                             "bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' "
-                            "for author-year). Fill for cited testbed nodes (dataset/benchmark) "
+                            "for author-year). Fill for cited evaluation-frame nodes (dataset/benchmark) "
                             "drawn from cited data, e.g. 'evaluated on ImageNet [8]' -> ['8']. "
-                            "Empty [] for any root (contribution/contribution_resource/"
-                            "contribution_finding) and every component (your own work), for "
+                            "Empty [] for any Contribution/Component (your own work), for "
                             "task/metric/problem nodes, and when no citation is attached."
                         ),
                     },
@@ -663,7 +694,7 @@ def relation_pass_schema() -> dict[str, Any]:
                             "type": "string",
                             "enum": STAGE_B_RELATION_ORDER,
                             "description": (
-                                "One of the seven structural relation types — semantics and "
+                                "One of the six structural relation types — semantics and "
                                 "direction rules are defined in the system prompt."
                             ),
                         },

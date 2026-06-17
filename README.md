@@ -1,7 +1,7 @@
 # Section-IR Extraction Pipeline
 
 A three-stage LLM pipeline that reads a scientific paper (Markdown) and extracts its
-**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.16`):
+**scientific-discovery throughline** into structured **section-IR** (`section-ir-0.17`):
 
 ```
 problem → method → evidence
@@ -9,13 +9,15 @@ problem → method → evidence
 
 - **problem** — the single research problem the paper addresses (one trunk; the old multi-tag
   `context` section collapsed to one).
-- **method** — the technical apparatus: the contribution and its components (the paper's **own**
-  methods). External prior-art methods are NOT materialized here — the paper's relations to the works
-  it builds on, reuses, compares with, is inspired by, adapts, critiques, or analyzes are captured
-  paper-level by the citation layer's seven-role taxonomy (see the internal/external axis below).
+- **method** — the technical apparatus: the paper's root deliverable (a `Contribution` of kind
+  `method`/`theory`) and its sub-modules (`Component`s) — the paper's **own** methods. External
+  prior-art methods are NOT materialized here — the paper's relations to the works it builds on,
+  reuses, compares with, is inspired by, adapts, critiques, or analyzes are captured paper-level by
+  the citation layer's seven-role taxonomy (see the internal/external axis below).
 - **evidence** — the merged experiment + analysis layer. It carries both *what was measured*
-  (`Measure`, `ExperimentSetup`) and *what those measurements mean* (`Finding`), and it hosts the
-  **headline contribution finding** — so there is no separate `claim` section.
+  (`Measure`, `ExperimentSetup`) and *what those measurements mean* (`Finding`), it materializes any
+  `dataset`/`benchmark`/`finding` `Contribution`, and it hosts the **headline contribution finding**
+  — so there is no separate `claim` section.
 
 The discovery arc closes with a synthesized `resolves` edge from the headline finding back to the
 problem, and the one-sentence contribution is lifted onto the `Document` as `thesis`.
@@ -35,8 +37,8 @@ The output is a single JSON object with four top-level keys — `document`, `sec
  │ (sidecar) │ │  Pass 1: paper-level         │      │ (single LLM call)│
  └───────────┘ │    relations + signals       │      └──────────────────┘
  title/authors │  Pass 2: ref metadata        │      INTERNAL-only nodes[]
- /year/venue   │    (blob + Pass-1 keys)      │      (own method/testbed,
-               │  → 03_references (by cite_key)│      roles; NO edges)
+ /year/venue   │    (blob + Pass-1 keys)      │      (Contribution/Component/
+               │  → 03_references (by cite_key)│      testbed; type+kind; NO edges)
                └──────────────────────────────┘              │
                paper relates to cited works (7-role          │
                taxonomy) — paper-level, NOT graph nodes       │
@@ -59,10 +61,10 @@ The output is a single JSON object with four top-level keys — `document`, `sec
                                                        └──────────────────────────────┘
 ```
 
-**Internal/external axis** (`section-ir-0.16`; see `docs/extraction-axis.md`): the pipeline keeps two
+**Internal/external axis** (`section-ir-0.17`; see `docs/extraction-axis.md`): the pipeline keeps two
 non-crossing layers. **Internal graph** — Stage A census is **internal-only** (the paper's own
-contribution/component/problem/metric/finding plus its testbed datasets/benchmarks), and Stage B draws
-only **internal** structural edges (`part_of`, `evaluates`, `co_contribution`, `assumes`, and
+Contribution/Component/Problem/Measure plus its testbed datasets/benchmarks), and Stage B draws
+only **internal** structural edges (`part_of`, `evaluates`, `co_contribution`, and
 `compares_to` between the paper's own variants). **Citation layer** — the paper's relations to the
 prior work it cites (the seven-role taxonomy `compares_with` / `uses_component` / `builds_on` /
 `inspired_by` / `adapts_idea_from` / `addresses_limitation_of` / `analyzes_property_of`; `background`
@@ -234,8 +236,7 @@ schema first (the committed `schemas/*.json` are the source of truth). If you ch
 any hand-edit back into the `section_pipeline.py` constants, **then** re-run the generator and verify
 `git diff schemas/` shows only the changes you intended — regeneration clobbers anything not ported.
 (The sidecar schemas — `metadata-output.schema.json`, `citations-output.schema.json`,
-`reference-metadata.schema.json` (and the legacy `references-output.schema.json`) — are
-hand-maintained and are not produced by the generator.)
+`reference-metadata.schema.json` — are hand-maintained and are not produced by the generator.)
 
 ## Configuration
 
@@ -290,23 +291,25 @@ One full-paper call produces:
 
 - `spine_summary` — the central contribution and argument flow (and, optionally,
   `headline_result`, the paper's headline established result).
-- `nodes[]` — a flat list of every load-bearing node, each with a single granular **`role`**, a
-  **`salience`** (`must`/`should`), and **no relations**. The coarse `type`
-  (`Method`/`ExperimentSetup`/`Measure`/`Finding`) and the document root are *derived* from `role`;
-  the `role` is then carried onto the materialized unit as its fine-grained differentia. Each
-  `node_id` prefix (`mth:`/`exp:`/`mea:`/`fnd:`) follows from the role's type and is reused
-  verbatim as the final unit id.
+- `nodes[]` — a flat list of every load-bearing node, each with a primary **`type`**, a **`kind`**
+  (only on the multi-kind census types — `Contribution` and `ExperimentSetup`), and **no relations**.
+  Each node carries `node_id`, `type`, `kind`, `name`, `gloss`, `source_scope`, and `cite_keys`; the
+  per-unit `role` field is **gone** (0.17 — `type` is primary, `kind` is the differentia). The census
+  node types are `Contribution`, `Component`, `ExperimentSetup`, `Measure`, `Problem`. Each `node_id`
+  prefix (`con:`/`cmp:`/`exp:`/`mea:`/`prb:`) follows from the node's `type` and is reused verbatim as
+  the final unit id.
 
-Scoping rules (`section-ir-0.16` internal/external axis — see below): the census is
-**internal-only**. A **named model is a Method**, never a testbed node, but the census materializes
-only the paper's OWN methods (`contribution`/`component`); **external prior-art methods** the paper
-builds on, reuses, or compares against are NOT census nodes at all — the paper's relations to them are
-captured paper-level by the citation layer's seven-role taxonomy (never as graph nodes or
-internal-unit edges).
+Scoping rules (`section-ir-0.17` internal/external axis — see below): the census is
+**internal-only**. A **named model is a Contribution/Component**, never a testbed node, but the census
+materializes only the paper's OWN methods (a `Contribution` root plus its `Component`s); **external
+prior-art methods** the paper builds on, reuses, or compares against are NOT census nodes at all — the
+paper's relations to them are captured paper-level by the citation layer's seven-role taxonomy (never
+as graph nodes or internal-unit edges). **Findings are not census nodes either** — every `Finding` is
+born during evidence content fill.
 **Apparatus is not a node** (hardware and metric-scoring models are dropped). **Baseline numbers are
 still captured in full** — an external baseline's number stays verbatim in the source-table blob, and
 the paper's relation to that baseline is a `compares_with` fact in the citation layer; the paper's own
-baseline variants stay internal `component`/`contribution` Methods. Testbed nodes carry `cite_keys`
+baseline variants stay internal `Contribution`/`Component` nodes. Testbed nodes carry `cite_keys`
 (the in-text bibliography marker).
 
 ### Stage B — Relation Pass
@@ -315,7 +318,7 @@ baseline variants stay internal `component`/`contribution` Methods. Testbed node
 `schemas/relation-pass-output.schema.json`
 
 One call over the full paper plus the complete flat node list. It establishes the **internal**
-structural node↔node edges (`part_of`, `assumes`, `co_contribution`, `compares_to`, `evaluates`)
+structural node↔node edges (`part_of`, `co_contribution`, `compares_to`, `evaluates`)
 with the whole node set in view — so cross-section composition and measure-subject binding need no
 forward references and no reconcile crutches. It draws no `builds_on`/`uses` edges: those are the
 paper's relations to external prior work, captured paper-level by the citation layer, and
@@ -378,10 +381,10 @@ After all sections return, `assemble_extraction` (Python, no LLM):
 1. Flattens the typed unit arrays into `section.units[]`, and merges the stage-B edges with each
    section's `relations[]` into a single top-level `relations[]`.
 2. Runs deterministic, lossy-but-safe repairs (logged to `extraction_notes.uncertain_assignments`):
-   stamp census roles onto materialized units; sanitize control chars; dedup ExperimentSetups and
+   stamp the census `type`/`kind` onto materialized units; sanitize control chars; dedup ExperimentSetups and
    duplicate ids; drop empty sections; normalize provenance markers; repair score refs and anchors;
    normalize degenerate optional enums; dedup / drop-dangling / drop-invalid relations against the
-   type matrix; **synthesize the `resolves` edge**; derive `Document.role` (FG-3), `thesis`, and
+   type matrix; **synthesize the `resolves` edge**; derive `Document.kind` (FG-3), `thesis`, and
    `headline_result`; recompute `covers_entries`.
 3. Runs `validate_section_ir()` — the authoritative runtime contract.
 4. Saves the JSON and the rendered HTML.
@@ -399,50 +402,61 @@ candidate transcription error; a Measure with no table matches at all is recorde
 rowspan/colspan layout, and it writes only this notes block — never touching units, scores, or
 relations.
 
-Coverage is measured against the census `must` nodes; an unmaterialized must-node surfaces in
+Coverage is measured against all census nodes; an unmaterialized census node surfaces in
 `extraction_notes.uncovered_items`.
 
 ## The section-IR data model
 
-### Unit types & the two-level taxonomy
+### Unit types & the type/kind taxonomy
 
-Every unit carries two classificatory axes: a small, discipline-neutral **`type`** (anchored on the
-scientific method — *Identify a Problem → Design an Experiment → Collect Results → Construct a
-Conclusion*) and a fine-grained **`role`** (the AI/ML-specific differentia). Swapping disciplines
-means swapping the per-type role vocabularies, never the `type` set.
+The **`type`** is primary — a small, discipline-neutral set anchored on the scientific method
+(*Identify a Problem → Design an Experiment → Collect Results → Construct a Conclusion*). A second,
+finer **`kind`** axis (the AI/ML-specific differentia) exists **only on the multi-kind types**; a type
+is two-level iff it has more than one sub-kind. Swapping disciplines means swapping the per-type kind
+vocabularies, never the `type` set. (Pre-0.17 the `type` was *derived* from a granular per-unit
+`role`; that `role` field is now eliminated — see [Versioning](#versioning).)
 
-Six allowed unit types:
+Seven allowed unit types:
 
-`Document` · `Problem` · `Method` · `ExperimentSetup` · `Measure` · `Finding`
+`Document` · `Problem` · `Contribution` · `Component` · `ExperimentSetup` · `Measure` · `Finding`
 
-Per-type `role` vocabulary (`Problem` and `Measure` carry no `role`):
+`Contribution` (the paper's root deliverable) and `Component` (a sub-module, `part_of` a
+`Contribution`) are the two types that descend from the old single `Method` type. `Component`,
+`Measure`, and `Problem` are **single-level** (no `kind`). Per-type `kind` vocabulary for the
+multi-kind types:
 
-| type | `role` ∈ |
+| type | `kind` ∈ |
 |---|---|
 | `Document` | `research_article`, `review`, `meta_analysis`, `methodology`, `benchmark_survey` (derived from the contribution) |
-| `Method` | `contribution`, `component` (the paper's own methods; external prior-art works are not Method nodes — the paper's relations to them live paper-level in the citation layer) |
-| `ExperimentSetup` | **substrate** `dataset`, `benchmark`, `task`, `theoretical_setting`, `structural_class` (+ `contribution_resource`, the dataset/benchmark root) · **configuration** `data_split`, `inference_protocol`, `training_config`, `ensembling`, `population` |
+| `Contribution` | `method`, `dataset`, `benchmark`, `theory`, `finding` — *what the deliverable IS* (`method` = an algorithm/architecture/model; `theory` = a proven theorem/bound; `finding` = an analysis paper's result-as-deliverable) |
+| `ExperimentSetup` | **substrate** `dataset`, `benchmark`, `task` · **configuration** `data_split`, `inference_protocol`, `training_config`, `ensembling`, `population` |
 | `Finding` | `descriptive`, `mechanistic`, `comparative`, `modeling`, `ablation_finding`, `failure_mode`, `theorem`, `lemma`, `bound` |
 
-`Method`, the substrate `ExperimentSetup` roles, and `Measure` are **census nodes** (role-tagged in
-stage A). `Problem`, `Finding`, and the configuration `ExperimentSetup` roles are **born** during
-content fill — except the one `contribution_finding` root, which is a census node the evidence
-section materializes. `Method` also carries an optional structural `method_kind ∈ {algorithm,
+`Contribution`, `Component`, the substrate `ExperimentSetup` kinds, and `Measure` are **census
+nodes** (typed in stage A). `Problem`, `Finding`, and the configuration `ExperimentSetup` kinds are
+**born** during content fill (a `Problem` is the one census-planned node the problem section
+materializes; `Finding`s are born wholesale in the evidence section). A `Contribution` of kind
+`method`/`theory` and any `Component` also carry an optional structural `method_kind ∈ {algorithm,
 model_architecture, training_strategy, objective_function, resource, taxonomy, theorem, lemma, bound,
-definition}`, orthogonal to the argumentative `role`.
+definition}` — a finer sub-tag **under** `kind`, not a separate axis.
 
 ### Contribution roots
 
-At least one census node is a **root** — the paper's primary deliverable. There are three shapes:
+The paper's **root** is its `Contribution` node(s) — the primary deliverable. The kind says what
+shape it takes:
 
-| census role | unit type | id prefix | shape |
+| `Contribution` kind | id prefix | shape | materialized by |
 |---|---|---|---|
-| `contribution` | `Method` | `mth:` | a proposed method / algorithm / model |
-| `contribution_resource` | `ExperimentSetup` | `exp:` | a benchmark / dataset deliverable (FG-1) |
-| `contribution_finding` | `Finding` | `fnd:` | a result / finding (an analysis paper with no proposed artifact; FG-5) |
+| `method` (or `theory`) | `con:` | a proposed method / algorithm / model (or a proven result) | method section |
+| `dataset` / `benchmark` | `con:` | a dataset / benchmark deliverable (FG-1) — hosts its own score rows (a `Measure`'s `setup_id` may point at it) | evidence section |
+| `finding` | `con:` | a result / finding deliverable (an analysis paper with no proposed artifact; FG-5) | evidence section |
 
 Normally exactly one root; a paper with **co-equal primary contributions** (FG-7) tags each as a
-root, and they are linked by `co_contribution`.
+`Contribution`, and they are linked by `co_contribution`. An **analysis paper** has a root
+`Contribution` of kind `finding`, and its headline `Finding` is `about` it like any other paper (the
+old "finding-root materializes as a `Finding` with no `about`-edge" special case is gone). A
+`dataset`/`benchmark` `Contribution` hosts its own score rows directly, replacing the old `resource`
+`ExperimentSetup` root mechanism.
 
 ### Relations (global)
 
@@ -450,16 +464,15 @@ root, and they are linked by `co_contribution`.
 
 | relation | source → target | authored by |
 |---|---|---|
-| `part_of` | {Method, ExperimentSetup} → {Method, ExperimentSetup} | relation pass (B) |
-| `builds_on` | {Method, ExperimentSetup} → same | relation pass (B) |
-| `uses` | {Method, ExperimentSetup} → same | relation pass (B) |
-| `assumes` | Method → ExperimentSetup | relation pass (B) |
-| `co_contribution` | {Method, ExperimentSetup} → same | relation pass (B) |
-| `compares_to` | {Method, ExperimentSetup, Measure} → same | relation pass (B) |
-| `evaluates` | Measure → Method | relation pass (B) |
-| `about` | Finding → {Method, ExperimentSetup, Measure} | content (evidence) |
-| `supports` | {Measure, Finding, Method} → Finding | content (evidence) |
-| `motivates` | Problem → {Method, ExperimentSetup} | content (problem) |
+| `part_of` | {Component, ExperimentSetup} → {Contribution, Component, ExperimentSetup} | relation pass (B) |
+| `builds_on` | {Contribution, Component, ExperimentSetup} → same | relation pass (B) |
+| `uses` | {Contribution, Component, ExperimentSetup} → same | relation pass (B) |
+| `co_contribution` | Contribution → Contribution | relation pass (B) |
+| `compares_to` | {Contribution, Component, ExperimentSetup, Measure} → same | relation pass (B) |
+| `evaluates` | Measure → {Contribution, Component} | relation pass (B) |
+| `about` | Finding → {Contribution, Component, ExperimentSetup, Measure} | content (evidence) |
+| `supports` | {Measure, Finding, Contribution, Component} → Finding | content (evidence) |
+| `motivates` | Problem → {Contribution, Component, ExperimentSetup} | content (problem) |
 | `resolves` | Finding → Problem | assembly (synthesized) |
 
 The matrix lives in `RELATION_MATRIX` in `section_pipeline.py`. `motivates` opens the discovery arc
@@ -507,8 +520,7 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 ├── schemas/                             # JSON schemas (generated; evidence schema's blob-primary fields are hand-edited — see "Regenerate schemas")
 │   ├── node-census-output.schema.json   relation-pass-output.schema.json
 │   ├── section-{problem,method,evidence}.schema.json
-│   ├── metadata-output.schema.json      citations-output.schema.json  reference-metadata.schema.json
-│   └── references-output.schema.json    external-methods-output.schema.json   # legacy (pre-0.16)
+│   └── metadata-output.schema.json      citations-output.schema.json  reference-metadata.schema.json
 ├── tools/
 │   ├── generate_section_schemas.py      # Regenerate all schemas from section_pipeline.py constants
 │   ├── render_extraction.py             # Render extraction JSON → HTML
@@ -527,7 +539,7 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 
 `validate_section_ir()` in `section_pipeline.py` is the authoritative runtime contract. It checks:
 
-- Unit type-specific required fields and the per-type `role` vocabulary.
+- Unit type-specific required fields and the per-type `kind` vocabulary (on the multi-kind types).
 - The global relation matrix (source/target type pairing); endpoints must resolve to a unit defined
   anywhere.
 - ID uniqueness and referential integrity.
@@ -535,13 +547,40 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 - `Measure` constraints — `name`, `unit`, non-empty `scores`, and a `setup_ids` list (which must be
   present but may be empty — an ablation measure may carry none). Each score row is
   `{variant, value, variance, system_id, setup_id}` plus optional FG-6 `opponent_id`/`judge_id` for
-  pairwise/judge rows; a non-empty `system_id` must resolve to a `Method` and a non-empty `setup_id`
-  to a section-local `ExperimentSetup`. `setup_ids` entries must point to section-local
-  `ExperimentSetup` units.
+  pairwise/judge rows; a non-empty `system_id` must resolve to a `Contribution`/`Component` and a
+  non-empty `setup_id` to a section-local `ExperimentSetup` (or a `dataset`/`benchmark` `Contribution`
+  that hosts its own rows). `setup_ids` entries must point to section-local `ExperimentSetup` units.
 
 ## Versioning
 
-Current IR version: **`section-ir-0.16`** (`extraction_notes.input_mode = node_census_pipeline`).
+Current IR version: **`section-ir-0.17`** (`extraction_notes.input_mode = node_census_pipeline`).
+
+0.17 is the **type-system** revision (the validator accepts 0.12–0.17). It makes `type` primary and
+demotes the old granular `role` to a `kind` sub-axis carried **only** on the multi-kind types:
+
+- **`Method` splits into `Contribution` + `Component`.** The single `Method` type is retired; the
+  paper's root deliverable is a `Contribution` and a sub-module is a `Component` (`part_of` a
+  `Contribution`). The seven unit types are now `Document` · `Problem` · `Contribution` ·
+  `Component` · `ExperimentSetup` · `Measure` · `Finding`. New id-prefixes `con:` / `cmp:` replace
+  the retired `mth:`.
+- **`role` → `kind` (the differentia).** The per-unit `role` field is eliminated; `kind` is present
+  only on `Document` / `Contribution` / `ExperimentSetup` / `Finding`. `Component`, `Measure`, and
+  `Problem` are single-level. `Contribution.kind ∈ {method, dataset, benchmark, theory, finding}` is
+  the Lean-5 vocabulary of *what the deliverable is*; `Finding.kind` is the old Finding
+  `role`/`claim_kind`; `Document.kind` is the old doc role.
+- **`resource` → `Contribution`.** A dataset/benchmark the paper itself delivers is now a
+  `Contribution` of kind `dataset`/`benchmark` (hosting its own score rows — a `Measure`'s `setup_id`
+  may point at it), replacing the 0.10 `resource` `ExperimentSetup` root.
+- **`Finding` leaves the census.** Findings are no longer census nodes — every `Finding` is born at
+  evidence content fill, and an analysis paper's root is a `Contribution` of kind `finding` that its
+  headline `Finding` is `about` (the old finding-root special case is gone). Census node types are
+  now `Contribution`, `Component`, `ExperimentSetup`, `Measure`, `Problem`; each emits
+  `{node_id, type, kind, name, gloss, source_scope, cite_keys}`.
+- **`method_kind` retained** as an OPTIONAL finer structural sub-tag on a `Contribution` of kind
+  `method`/`theory` and on a `Component` (same `{algorithm, …, definition}` vocabulary). Relation
+  names are unchanged; endpoints were repointed to the new types (e.g. `part_of` = Component →
+  Contribution, `co_contribution` = Contribution ↔ Contribution, `evaluates` = Measure →
+  Contribution/Component).
 
 0.16 is the **paper-level citation layer** revision (additive; the validator accepts 0.12–0.16). It
 replaces the references + external-methods sidecars and the `materialize_external_methods`
@@ -579,8 +618,8 @@ string — the validator accepts both):
   `tasks` (community task names), and `domain` (one coarse research domain); assembly lifts them
   onto the Document unit (`document.topics/tasks/domain`) and `tools/build_agent_index.py` lifts
   them into `_catalog.jsonl` for corpus routing.
-- **Problem census node (RF-08)**: the research problem is a stage-A census node (role `problem`,
-  `prb:` id, a fifth `the_problem` search cluster) so it is recallable and salience-tagged; the
+- **Problem census node (RF-08)**: the research problem is a stage-A census node (type `Problem`,
+  `prb:` id, the `the_problem` search cluster) so it is recallable; the
   problem section materializes it under the census id and still authors the full `description` +
   `motivates` edge. Stage B gives `prb:` nodes no edge (same discipline as the `fnd:` root).
 - **Span index (RF-11)**: assembly emits `extraction_notes.span_index` — a verbatim text prefix of
@@ -619,7 +658,7 @@ natively-authored edge. It is additive over 0.10 except the references `roles` e
 
 0.10 is an **additive generalization** of 0.9 — 0.9-shaped output stays structurally valid except
 the `ir_version` string. It stops the empirical-CV monoculture from coercing other genres (FG-1…
-FG-12): a non-Method contribution (`contribution_resource`), a theory home (`method_kind +=
+FG-12): a non-Method contribution (`resource`), a theory home (`method_kind +=
 theorem/lemma/bound/definition`, `Finding.role += theorem/lemma/bound`, symbolic score values,
 `assumes`), a derived `Document.role`, the `builds_on`/`uses`/`co_contribution` edges, non-leaderboard
 evaluation (pairwise/judge score fields, multi-objective measures), a Finding-as-root analysis paper,
@@ -628,7 +667,7 @@ an optional Finding quantitative payload, and reference-role edge backfill.
 ## Design notes & archived material
 
 The data model is specified in [The section-IR data model](#the-section-ir-data-model) above; the
-constants in `section_pipeline.py` (`RELATION_MATRIX`, `ROLE_VOCAB_BY_TYPE`, `UNIT_TYPES`, …) are the
+constants in `section_pipeline.py` (`RELATION_MATRIX`, `KIND_VOCAB_BY_TYPE`, `UNIT_TYPES`, …) are the
 authoritative source from which the JSON schemas are generated.
 
 Historical paradigm-based code and legacy utilities are in `archive/`. Do not treat archived

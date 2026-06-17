@@ -2,11 +2,11 @@ SECTION FOCUS: problem
 
 This section opens the paper's discovery arc: it states the **research problem** — the unresolved question or unmet need the work addresses. It is the premise that makes the contribution necessary and intelligible, and the thing the evidence will ultimately resolve.
 
-The census plans the research problem as a `prb:` node (role `problem`) in `node_registry`; this section **materializes** it — write the Problem unit with **that exact `prb:` id** (its census `name`/`gloss` are the handle; you author the full `description` here from the paper). If the registry carries no `problem` node (the census missed it), create the Problem yourself with a fresh `prb:` id — the problem must exist either way. Choose `anchor_id` from the Problem unit. This section authors one edge type, `motivates` (see Relations).
+The census plans the research problem as a `prb:` node (type `Problem`) in `node_registry`; this section **materializes** it — write the Problem unit with **that exact `prb:` id** (its census `name`/`gloss` are the handle; you author the full `description` here from the paper). If the registry carries no `Problem` node (the census missed it), create the Problem yourself with a fresh `prb:` id — the problem must exist either way. Choose `anchor_id` from the Problem unit. This section authors one edge type, `motivates` (see Relations).
 
 ## Units you may define
 
-Only `Problem` units (array `problems`). **Typically exactly one** — the single research problem, under the census `prb:` id when the registry has one. Define a second only when the paper genuinely pursues two independent problems (the census may have tagged both); never split one problem into background/gap/motivation fragments.
+Only `Problem` units (array `problems`). **Typically exactly one** — the single research problem, under the census `prb:` id when the registry has one. Define a second only when the paper genuinely pursues two independent problems (the census may have tagged both); never split one problem into background/gap/motivation fragments. A `Problem` is single-level and carries no `kind`.
 
 ### Problem — the research problem
 Fields: `description`.
@@ -18,11 +18,11 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 
 | relation | source → target | meaning |
 |---|---|---|
-| `motivates` | Problem → {Method, ExperimentSetup} | this problem is what the node addresses / why it exists |
+| `motivates` | Problem → {Contribution, Component, ExperimentSetup} | this problem is what the node addresses / why it exists |
 
-- Author one `motivates` edge from the Problem; pick `target_id` by the root's `role` in `node_registry`: (1) `contribution` or `contribution_resource` → that node. (2) `contribution_finding` (`motivates` cannot target a Finding) → the Method or ExperimentSetup the paper investigates: a `builds_on`/`compared_against`/`component` Method, or the `task`/`benchmark` it probes. (3) If the problem is specifically about one dataset/task, target that `exp:` node instead.
-- `source_id` is the Problem unit you define in this section. `target_id` must be an existing `node_registry` id of type Method or ExperimentSetup — never a Problem or Finding, never invented. Emit `[]` only when no registry node maps.
-- You do **not** author the closing `resolves` edge (the finding that answers this problem). That edge is added automatically downstream, from the contribution the problem motivates and the finding that is about it.
+- Author one `motivates` edge from the Problem to the **root Contribution** (a `con:` node — it always exists, whatever the paper's kind: a method, dataset/benchmark, theory, or finding deliverable is all a `Contribution` now). When the census tagged co-equal Contributions, target the **primary** one (the deliverable the title/abstract centers on). A `Component` (`cmp:`) or `ExperimentSetup` (`exp:`) is an acceptable target only when needed — e.g. the problem is specifically about one dataset/task, in which case target that `exp:` node instead.
+- `source_id` is the Problem unit you define in this section. `target_id` must be an existing `node_registry` id of type Contribution, Component, or ExperimentSetup — never a Problem or Finding, never invented. Emit `[]` only when no registry node maps.
+- You do **not** author the closing `resolves` edge (the finding that answers this problem). That edge is added automatically downstream, from the Contribution the problem motivates and the finding that is about it.
 
 ## Extraction focus
 
@@ -34,7 +34,7 @@ This section authors one edge type in `relations[]`, binding the problem to the 
 
 - Do not emit several Problem units for one problem (no background/gap/motivation split) — that is the old over-tagged shape; collapse it into one focused statement.
 - Do not create a Finding unit for the contribution here; the contribution finding belongs in the evidence section.
-- Do not create Method units here; a system named as background belongs in the `description`. (The paper's own comparison variants are Methods materialized in the method section; external baselines it merely compares against are not Method units at all — the paper's relation to them is captured paper-level by the citation layer, and their numbers are preserved verbatim by the evidence stage.)
+- Do not create Contribution or Component units here; a system named as background belongs in the `description`. (The paper's own contribution and its sub-modules are materialized in the method/evidence sections; external baselines it merely compares against are not units at all — the paper's relation to them is captured paper-level by the citation layer, and their numbers are preserved verbatim by the evidence stage.)
 - Do not create a Problem for paper-structural remarks ("this paper is organized as follows").
 
 ## Worked example
@@ -52,7 +52,7 @@ This section authors one edge type in `relations[]`, binding the problem to the 
       }
     ],
     "relations": [
-      {"source_id": "prb:seq_dependency", "relation": "motivates", "target_id": "mth:transformer", "provenance": ["§2"]}
+      {"source_id": "prb:seq_dependency", "relation": "motivates", "target_id": "con:transformer", "provenance": ["§2"]}
     ]
   }
 }

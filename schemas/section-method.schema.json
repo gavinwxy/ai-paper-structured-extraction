@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Method Section Output",
-  "description": "Structured output schema for the method section content extraction. Typed unit arrays: methods. Valid unit types: Method.",
+  "description": "Structured output schema for the method section content extraction. Typed unit arrays: contributions, components. Valid unit types: Contribution, Component.",
   "required": [
     "section"
   ],
@@ -12,7 +12,8 @@
       "required": [
         "section_type",
         "anchor_id",
-        "methods"
+        "contributions",
+        "components"
       ],
       "additionalProperties": false,
       "properties": {
@@ -27,16 +28,16 @@
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
         },
-        "methods": {
+        "contributions": {
           "type": "array",
-          "description": "Method units extracted for this section",
+          "description": "Contribution units extracted for this section",
           "items": {
             "type": "object",
             "required": [
               "id",
               "type",
               "provenance",
-              "role",
+              "kind",
               "name",
               "description"
             ],
@@ -50,7 +51,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Method"
+                  "Contribution"
                 ],
                 "description": "Unit type discriminator"
               },
@@ -61,20 +62,20 @@
                   "type": "string"
                 }
               },
-              "role": {
+              "kind": {
                 "type": "string",
                 "enum": [
-                  "contribution",
-                  "component",
-                  "builds_on",
-                  "uses",
-                  "compared_against"
+                  "method",
+                  "dataset",
+                  "benchmark",
+                  "theory",
+                  "finding"
                 ],
-                "description": "Argumentative role: contribution (the single primary method/system), component (a sub-method that is part_of the contribution), builds_on (prior work extended), uses (an external prior method/backbone/base-model depended on without extending), or compared_against (a baseline)"
+                "description": "What KIND of deliverable this contribution is: method (an algorithm/technique/architecture/model), dataset, benchmark, theory (a proven formal result), or finding (an empirical/analysis result \u2014 the deliverable of an analysis paper with no novel artifact)"
               },
               "name": {
                 "type": "string",
-                "description": "Name of the method"
+                "description": "Name of the contribution"
               },
               "method_kind": {
                 "type": "string",
@@ -90,25 +91,25 @@
                   "bound",
                   "definition"
                 ],
-                "description": "Optional structural classification of the method; omit when unclear"
+                "description": "Optional finer structural classification on a kind=method/theory contribution (algorithm/model_architecture/training_strategy/objective_function for a method; theorem/lemma/bound/definition for a theory; resource/taxonomy for a non-algorithmic deliverable); omit otherwise"
               },
               "description": {
                 "type": "string",
-                "description": "Prose description of the method; empty string when unknown"
+                "description": "Prose description of the contribution; empty string when unknown"
               },
               "inputs": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "Inputs to the method; omit when the paper does not state them"
+                "description": "Inputs to the method; omit when not stated or the contribution is not an algorithm"
               },
               "outputs": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "Outputs of the method; omit when the paper does not state them"
+                "description": "Outputs of the method; omit when not stated or the contribution is not an algorithm"
               },
               "formulas": {
                 "type": "array",
@@ -141,7 +142,118 @@
                     }
                   }
                 },
-                "description": "Key defining equations of the method, each with a short label; the entry tagged role='objective' is the optimization objective/loss; omit the field when the method states no equations"
+                "description": "Key defining equations, each with a short label; the entry tagged role='objective' is the optimization objective/loss; omit the field when the contribution states no equations"
+              },
+              "implementation_notes": {
+                "type": "string",
+                "description": "Key implementation details; empty string when none are reported"
+              }
+            }
+          }
+        },
+        "components": {
+          "type": "array",
+          "description": "Component units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "name",
+              "description"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Component"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the component (a sub-method/module that is part_of the contribution)"
+              },
+              "method_kind": {
+                "type": "string",
+                "enum": [
+                  "algorithm",
+                  "model_architecture",
+                  "training_strategy",
+                  "objective_function",
+                  "resource",
+                  "taxonomy",
+                  "theorem",
+                  "lemma",
+                  "bound",
+                  "definition"
+                ],
+                "description": "Optional finer structural classification of the component (algorithm/model_architecture/training_strategy/objective_function); omit when unclear"
+              },
+              "description": {
+                "type": "string",
+                "description": "Prose description of the component; empty string when unknown"
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Inputs to the component; omit when the paper does not state them"
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Outputs of the component; omit when the paper does not state them"
+              },
+              "formulas": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "expression"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Short label for the equation, e.g. 'Scaled Dot-Product Attention'; empty string when unnamed"
+                    },
+                    "expression": {
+                      "type": "string",
+                      "description": "The equation itself, as LaTeX or plain text, e.g. 'softmax(QK^T/sqrt(d_k))V'"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "objective"
+                      ],
+                      "description": "Functional tag: 'objective' marks the loss/optimization target the method minimizes/maximizes (at most one entry per distinct objective; a method with no stated objective tags nothing). Omit on ordinary defining equations."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "One line on what the objective optimizes; only on a role='objective' entry \u2014 omit on all other formulas"
+                    }
+                  }
+                },
+                "description": "Key defining equations of the component, each with a short label; the entry tagged role='objective' is the optimization objective/loss; omit the field when the component states no equations"
               },
               "implementation_notes": {
                 "type": "string",

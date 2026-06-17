@@ -34,7 +34,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-UNIT_TYPES = ["Method", "ExperimentSetup", "Measure", "Finding", "Problem"]
+UNIT_TYPES = ["Contribution", "Component", "ExperimentSetup", "Measure", "Finding", "Problem"]
 FIELD_EDGES = ["subject_id", "target_ids", "evaluated_on", "context_ids", "setup_ids"]
 
 

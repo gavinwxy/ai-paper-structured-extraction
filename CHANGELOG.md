@@ -1,12 +1,71 @@
 # 更新日志（section-ir 抽取框架）
 
 本文件整理 `section-ir` 论文抽取框架从 **0.10** 起的主要改动。
-当前 `IR_VERSION = section-ir-0.15`，`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14, 0.15}`（见 `section_pipeline.py`）。
+当前 `IR_VERSION = section-ir-0.17`，`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14, 0.15, 0.16, 0.17}`（见 `section_pipeline.py`）。
 
 版本主线分支：`planning-stage-redesign-deepseek-light`（0.12+），
 0.10 在 `planning-stage-redesign-deepseek-heavy-fix` 上落地。
 
 格式约定：每个版本列出主题、关键改动与对应 commit；带 A/B 实测数字的结论尽量给出量化结果。
+
+---
+
+## section-ir-0.17 — 类型系统重构：type 为主、role→kind、Method 拆分为 Contribution + Component
+
+**日期**：2026-06-17　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`　**未提交**
+
+把分类轴从"由细粒度 `role` 派生 `type`"翻转为 **`type` 为主、`kind` 仅作为多 kind 类型上的次级差异轴**。
+**逐单元 `role` 字段彻底删除**：`type` 是主轴，`kind` 是差异（一个类型当且仅当有多个子 kind 时才是两级）。
+
+### 类型集（7 个）
+- 旧的单一 `Method` 类型**拆分为两个**：**`Contribution`**（本文根交付物）与 **`Component`**
+  （子模块，`part_of` 一个 `Contribution`）。`Method` 退役。
+- 七个单元类型：`Document` · `Problem` · `Contribution` · `Component` · `ExperimentSetup` · `Measure` · `Finding`。
+
+### `kind` 差异轴（仅多 kind 类型携带）
+- `Contribution.kind ∈ {method, dataset, benchmark, theory, finding}`——交付物**是什么**
+  （method=算法/架构/模型；theory=已证定理/界；finding=分析型论文的"结果即交付物"）。**Lean-5**。
+- `ExperimentSetup.kind ∈ {dataset, benchmark, task}` + 配置类（data_split / inference_protocol /
+  training_config / ensembling / population）。**`resource` 移除**。
+- `Finding.kind ∈ {descriptive, mechanistic, comparative, modeling, ablation_finding, failure_mode,
+  theorem, lemma, bound}`（即旧 Finding 的 `role` / `claim_kind`）。
+- `Document.kind ∈ {research_article, review, …}`（旧 doc role）。
+- **`Component` / `Measure` / `Problem` 单级，无 `kind`**。
+- `method_kind` **保留**（用户决定）为可选的**更细结构子标签**，挂在 kind=method/theory 的
+  `Contribution` 或 `Component` 上 `∈ {algorithm, model_architecture, training_strategy,
+  objective_function, resource, taxonomy, theorem, lemma, bound, definition}`——是 `kind` **之下**的
+  子标签，不是独立轴。
+
+### id 前缀
+- `con:`（Contribution）· `cmp:`（Component）· `exp:` · `mea:` · `fnd:` · `prb:` · `doc:`。
+  旧 `mth:` 前缀退役。
+
+### census（stage A）
+- 每节点产出 `{node_id, type, kind（仅 Contribution/ExperimentSetup）, name, gloss, source_scope,
+  cite_keys}`——**无 `role`**。
+- census 节点类型：`Contribution` / `Component` / `ExperimentSetup` / `Measure` / `Problem`。
+  **Finding 与先行方法不再是 census 节点**——Finding 全部在 content fill 阶段诞生；先行方法属引用层。
+
+### 根 / 物化映射
+- 论文的**根**就是 `Contribution` 节点；同级共贡献由 `co_contribution`（Contribution↔Contribution）连接。
+  旧特殊角色 `contribution` / `resource` / `finding` 折叠为 Contribution 的 kind（method / dataset|benchmark / finding）。
+- **dataset/benchmark 的 `Contribution` 自持其 score 行**（某 `Measure` 的 `setup_id` 可指向它），
+  取代旧的 `resource` ExperimentSetup 机制。
+- 物化：method 段产出 `Contribution`(kind method/theory) + `Component`；evidence 段产出
+  `Contribution`(kind dataset/benchmark/finding) + `Measure` + `ExperimentSetup` + `Finding`；problem 段产出 `Problem`。
+- **分析型论文**：根是 kind=finding 的 `Contribution`，headline `Finding` 像普通论文一样 `about` 它
+  （旧"finding-root 物化为无 about 边的 Finding"特例移除）。
+
+### 关系
+- 关系名不变（`part_of`, `builds_on`, `uses`, `co_contribution`, `compares_to`, `evaluates`,
+  `about`, `supports`, `motivates`, `resolves`）；端点改指新类型：
+  `part_of` = Component→Contribution；`co_contribution` = Contribution↔Contribution；
+  `evaluates` = Measure→Contribution/Component；`about` = Finding→Contribution/Component/ExperimentSetup；
+  `supports` = Measure/Finding/Contribution/Component→Finding；`motivates` = Problem→Contribution/Component/ExperimentSetup。
+
+### 版本
+- `IR_VERSION = section-ir-0.17`；`ACCEPTED_IR_VERSIONS = {0.12, 0.13, 0.14, 0.15, 0.16, 0.17}`。
+  代码 / schemas / prompts / tools / 测试已全量迁移至 0.17。
 
 ---
 
@@ -295,6 +354,9 @@ RF-01…22 全量实现，分三波落地；A/B 干净，CVPR-seg 同域 50 篇 
 
 | 版本 | 日期 | 一句话主题 | 默认行为变化 |
 |------|------|-----------|-------------|
+| 0.17 | 06-17 | 类型系统重构：type 为主、role→kind | Method→Contribution+Component、删 role、Lean-5 Contribution kind、resource→Contribution、Finding 离开 census、新 con:/cmp: 前缀 |
+| 0.16 | 06-16 | 论文级引用层 + census 纯内部 / 移除 salience | references+external-methods sidecar 收敛为两遍 census-blind 引用层；census 节点删 `salience` |
+| 0.15 | 06-16 | 内/外抽取轴解耦 | census 纯内部 + 外部方法 re-inject（builds_on/uses/compared_against） |
 | 0.13 | 06-11 | Agent 可检索性（RF-01…22） | 元数据回填、Problem 节点、span_index、保真度常开 |
 | 0.12 | 06-09→10 | 成本攻坚 + blob-primary | 缓存预热、blob-primary evidence/references、精简公式全部默认开启（−22% $/篇 冷启动） |
 | 0.11 | 06-08 | references 角色 ≡ unit-graph 边 | cite-key join 45%→95.5% |

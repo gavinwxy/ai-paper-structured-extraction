@@ -57,10 +57,13 @@ SECTION_SUBTITLES = {
     "method": "the technical apparatus",
     "evidence": "what was measured & what it means",
 }
-# Per-type badge colours (orthogonal to the section accent).
+# Per-type badge colours (orthogonal to the section accent). section-ir-0.17 split the old
+# Method type into Contribution (the root deliverable, keeps Method's blue) and Component (a
+# sub-module, a lighter blue).
 TYPE_COLORS = {
     "Problem": "#f59e0b",
-    "Method": "#3b82f6",
+    "Contribution": "#3b82f6",
+    "Component": "#60a5fa",
     "ExperimentSetup": "#a855f7",
     "Measure": "#14b8a6",
     "Finding": "#22c55e",
@@ -79,7 +82,6 @@ REL_OUT = {
     "part_of": "part of",
     "builds_on": "builds on",
     "uses": "uses",
-    "assumes": "assumes",
     "co_contribution": "co-contribution with",
     "compares_to": "compared with",
     "evaluates": "evaluates",
@@ -92,7 +94,6 @@ REL_IN = {
     "part_of": "includes",
     "builds_on": "extended by",
     "uses": "used by",
-    "assumes": "assumed by",
     "co_contribution": "co-contribution with",
     "compares_to": "compared with",
     "evaluates": "evaluated by",
@@ -107,7 +108,6 @@ REL_COLOR = {
     "co_contribution": "#64748b",
     "builds_on": "#3b82f6",
     "uses": "#3b82f6",
-    "assumes": "#3b82f6",
     "compares_to": "#64748b",
     "evaluates": "#14b8a6",
     "about": "#22c55e",
@@ -273,8 +273,8 @@ def build_metric_datasets(data: dict, unit_index: dict[str, dict]) -> dict[str, 
     return out
 
 
-# Method-role render order (contribution first, baselines last). Accepts both the 0.9
-# unit role names and the legacy edge-derived names.
+# Method-family render order (contribution first, baselines last). Keyed by the display role
+# classify_methods derives from each unit's type + edges (section-ir-0.17 has no unit role).
 METHOD_ROLE_RANK = {
     "contribution": 0, "component": 1, "builds_on": 2, "other": 2,
     "compared_against": 3, "baseline": 3,
@@ -282,9 +282,12 @@ METHOD_ROLE_RANK = {
 
 
 def classify_methods(data: dict, unit_index: dict[str, dict]) -> dict[str, str]:
-    """Best-effort Method role: prefer the unit's own 0.9 `role`, else derive from edges
-    (contribution = part_of root; component = part_of source; baseline = compares_to endpoint)."""
-    methods = {uid for uid, u in unit_index.items() if u.get("type") == "Method"}
+    """Best-effort display role for a method-family unit (section-ir-0.17 has no unit `role`).
+
+    Seed from the unit's TYPE — Contribution -> "contribution", Component -> "component" — then
+    let the edges refine it (a compares_to endpoint becomes "compared_against"; a part_of source
+    becomes "component"; otherwise the seeded role stands)."""
+    methods = {uid for uid, u in unit_index.items() if u.get("type") in {"Contribution", "Component"}}
     part_src: set[str] = set()
     part_tgt: set[str] = set()
     compares: set[str] = set()
@@ -305,15 +308,17 @@ def classify_methods(data: dict, unit_index: dict[str, dict]) -> dict[str, str]:
         derived_contribution = roots[0]
 
     for m in methods:
-        own = (unit_index.get(m) or {}).get("role")
-        if own:
-            roles[m] = own
-        elif m == derived_contribution:
+        utype = (unit_index.get(m) or {}).get("type")
+        # A Contribution is the root deliverable — never a baseline; seed it directly.
+        if utype == "Contribution" or m == derived_contribution:
             roles[m] = "contribution"
-        elif m in part_src:
-            roles[m] = "component"
+        # A Component that is a compares_to endpoint is an external comparator (baseline);
+        # otherwise it is a sub-module ("component"). compares_to is the only baseline signal
+        # now that units carry no `role`.
         elif m in compares:
             roles[m] = "compared_against"
+        elif utype == "Component" or m in part_src:
+            roles[m] = "component"
         else:
             roles[m] = "other"
     # Guarantee a single contribution for arc/ordering even if none was tagged.
@@ -518,7 +523,9 @@ def render_unit_relations(uid: str, out_edges: dict, in_edges: dict, unit_index:
 
 # `source_table_marker`/`caption_marker`/`table_role` are the 0.12 blob-addressing metadata —
 # consumed by the evidence-section metric blocks, suppressed (never dumped raw) on plain cards.
-META_FIELDS = {"id", "type", "provenance", "role", "source_table_marker", "caption_marker", "table_role"}
+# `kind` is the section-ir-0.17 differentia (the old per-unit `role` is gone); it drives the type
+# badge / display role, so it is suppressed here rather than dumped raw in the leftover table.
+META_FIELDS = {"id", "type", "provenance", "kind", "source_table_marker", "caption_marker", "table_role"}
 # Scalar fields shown as pills. Includes the 0.10 optional payloads: Measure `objective_class`
 # (FG-6) and the Finding quantitative payload `polarity`/`effect_size`/`scope` (FG-11), each shown
 # only when populated.
@@ -531,7 +538,9 @@ RICH_FIELDS = {"formulas", "objective_function", "inputs", "outputs", "scores", 
 
 def _role_badge(unit: dict, roles_final: dict) -> str:
     uid, utype = unit.get("id", ""), unit.get("type", "")
-    role = unit.get("role") or (roles_final.get(uid) if utype == "Method" else None)
+    # section-ir-0.17: units carry no `role`; the display role of a method-family unit is the one
+    # classify_methods derived from its type + edges.
+    role = roles_final.get(uid) if utype in {"Contribution", "Component"} else None
     if not role or role == "other":
         return ""
     cls = f"role role-{escape(str(role))}"
@@ -588,7 +597,7 @@ def render_unit_card(
                 f"<div class='prose'>{escape(str(unit[f]))}</div></div>"
             )
     rich = ""
-    if utype == "Method":
+    if utype in {"Contribution", "Component"}:
         rich += render_chips("Inputs", unit.get("inputs"))
         rich += render_chips("Outputs", unit.get("outputs"))
         rich += render_formulas(unit.get("formulas"))
@@ -1151,9 +1160,11 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     dataset_by_metric = build_metric_datasets(data, unit_index)
     roles_final = classify_methods(data, unit_index)
 
+    # Baselines are edge-derived only now (section-ir-0.17 units carry no `role`): a method-family
+    # unit (Contribution/Component) whose classify_methods role is the compares_to-endpoint role.
     baseline_ids = {
         uid for uid, u in unit_index.items()
-        if u.get("type") == "Method" and (u.get("role") == "compared_against" or roles_final.get(uid) in ("compared_against", "baseline"))
+        if u.get("type") in {"Contribution", "Component"} and roles_final.get(uid) in ("compared_against", "baseline")
     }
     baseline_keys = {_norm(unit_index.get(uid, {}).get("name", "")) for uid in baseline_ids}
     baseline_keys.discard("")

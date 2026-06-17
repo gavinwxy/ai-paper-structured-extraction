@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Relation Pass Output",
-  "description": "Stage B of section-ir-0.16: structural edges over the full node set. Sees every node, so cross-section composition and measure-subject binding are captured here with no forward references.",
+  "description": "Stage B of section-ir-0.17: structural edges over the full node set. Sees every node, so cross-section composition and measure-subject binding are captured here with no forward references.",
   "required": [
     "relations"
   ],
@@ -31,12 +31,11 @@
               "part_of",
               "builds_on",
               "uses",
-              "assumes",
               "co_contribution",
               "compares_to",
               "evaluates"
             ],
-            "description": "One of the seven structural relation types \u2014 semantics and direction rules are defined in the system prompt."
+            "description": "One of the six structural relation types \u2014 semantics and direction rules are defined in the system prompt."
           },
           "target_id": {
             "type": "string",

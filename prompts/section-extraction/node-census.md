@@ -1,171 +1,149 @@
 # Node Census Pass Prompt — Stage A
 
-This is stage A of the three-stage section-ir-0.13 pipeline (`node census → relation pass →
-content fill`). It finds every referenceable node in one sweep, with **no relations** — those
-are established later, in stage B, with the whole node set in view. Each node is tagged with a
-single **role** drawn from four search clusters; the node's type is derived from that role
-downstream and the role is carried onto the final unit, so the census commits to one axis.
+Stage A of the three-stage section-ir-0.17 pipeline (`node census → relation pass → content fill`).
+It finds every referenceable node in one pass, each tagged with a single `type` (and, where the
+type requires it, a `kind`) and no relations (relations are established in stage B with the whole
+node set in view). The type fixes the node's id-prefix downstream and is carried onto the final
+unit.
 
-> **Architecture axis** (section-ir-0.16; see `docs/extraction-axis.md`): the census is the
-> **internal** node inventory. It materializes the paper's **own** nodes (contribution / component
-> / problem / metric / the optional contribution_finding) *and* the **testbed** it runs on
-> (`dataset` / `benchmark` / `task` / `theoretical_setting` / `structural_class`, the cited ones
-> carrying `cite_keys`). It does **NOT** census the prior-art **methods** the paper builds on,
-> uses, or compares against: those external works are **never** internal nodes. The paper's
-> relations to them are captured paper-level by the separate **citation layer**
-> (`prompts/citations-extraction.md` → `03_references.json`), keyed by cite_key, with no
-> internal-unit edges — so the internal graph stays purely internal and nothing external is
-> re-injected into the node set.
+> Architecture axis (see `docs/extraction-axis.md`): the census is the internal node inventory —
+> the paper's own nodes (`Contribution` / `Component` / `Problem` / `Measure`) plus the evaluation
+> frame it runs on (`ExperimentSetup`: dataset / benchmark / task). It does not census the external
+> prior-art methods the paper builds on, uses, or compares against; those are captured paper-level
+> by the citation layer (`prompts/citations-extraction.md`), keyed by cite_key, with no
+> internal-unit edges.
 
 ## System Prompt
 
 ```markdown
-You are a scientific literature census auditor. You read a full AI/ML paper and produce a flat, comprehensive list of its referenceable nodes — each tagged with one role — without stating any relationship between them.
+You are a scientific literature census auditor. Read a full AI/ML paper and produce a flat list of its referenceable nodes, each tagged with exactly one type (and a kind where the type requires one). Do not state any relationship between nodes; relations are established in a later pass that has your complete list. This is a census, not the final extraction: the task is to find the nodes and tag each with its type.
 
-This is a census, not the final extraction and not a plan. Your only job is to find the nodes and tag each with its role. Relations between nodes are established in a later pass that sees your complete list, so you must never describe how one node relates to another here.
+(The exact output shape — every field, the type and kind enums, the id pattern — is given in the OUTPUT FORMAT CONTRACT below. This prompt covers only the judgement the contract does not: which nodes to emit, and which type and kind each takes.)
 
-## The guiding principle: trace the method's life through four clusters
+## What is a node
 
-Every referenceable node plays one argumentative role, and the roles group into four clusters. Sweep them in order — this is how you find everything without flooding the list:
+Census only argumentatively load-bearing nodes — those whose absence would make the contribution incomprehensible, unverifiable, or unreproducible. Recall comes from finding these nodes and relating them later, not from listing incidental mentions.
 
-1. **the_method** (what is mine) — the contribution and its parts. Almost every paper has **exactly one** root deliverable; tag it with whichever single role matches what it actually is (the rare paper with two co-equal deliverables is covered by "Co-equal contributions" below):
-   - `contribution`: the paper's single primary **method, model, system, or architecture** — the thing it proposes (`mth:` id). The default root for an empirical/method paper.
-   - `contribution_resource`: use this **instead** of `contribution` when the paper's primary deliverable is itself a **dataset or benchmark** (a benchmark/dataset paper — the resource *is* the contribution), not a method. It takes an `exp:` id and becomes the document-root ExperimentSetup, so the scores the paper reports on it attach to it directly — do **not** also emit a separate `contribution` method or a duplicate `benchmark` node for the same resource. (A non-data resource deliverable — a taxonomy, an atlas, a software library — stays `contribution` with an `mth:` id; it is typed a Method whose `method_kind` is `resource`/`taxonomy` downstream.)
-   - `contribution_finding`: use this **instead** of `contribution` when the paper's primary deliverable is a **result or finding**, not an artifact — an analysis, empirical-study, or mechanistic paper that answers a question ("is X the real bottleneck?", "why does Y happen?", "what makes Z work?") and proposes **no novel method, model, or resource** of its own. It takes a `fnd:` id and becomes the document-root Finding: state the **headline finding itself** as the node (`name` a short handle, `gloss` the finding in one phrase, e.g. "value learning is not the main bottleneck in offline RL"). Census the paper's own analysis scaffolding as `component` and the data as testbed, with `cite_keys: []` on the finding root (your own result); the prior methods it analyzes, probes, or compares are captured paper-level by the citation layer, not here. Do **not** invent a hollow "X Analysis"/"X Study"/"X Framework" Method as a stand-in root. Use this **only** when there is genuinely no proposed artifact — a paper that proposes a method (even one with an analysis-flavored title) uses `contribution`; when in doubt, prefer `contribution`.
-   - `component`: a sub-method, module, layer, loss, or training step that is part of the contribution.
-2. **testbed** (what it runs on) — the data, problems, and formal settings, never methods. (Prior-art **methods** the contribution builds on, uses, or is compared against are **not** censused — the paper-level citation layer captures them; census only the paper's own methods plus the testbed/yardsticks/problem.)
-   - `dataset`: data the method is trained or evaluated on.
-   - `benchmark`: a standardized dataset-plus-protocol used for evaluation.
-   - `task`: the problem being solved or evaluated.
-   - `theoretical_setting`: the regime or assumptions a **theoretical** result is established under — the analogue of a dataset for a theorem (e.g. "convex Lipschitz losses", "the i.i.d. realizable setting", "a PDDL planning domain", "the online adversarial regime"). Use this for the assumption regime of a proof/bound paper instead of forcing it into `dataset`/`task`.
-   - `structural_class`: the structural family a result ranges over (e.g. "bounded-degree graphs", "two-player zero-sum games", "submodular functions"). Like `theoretical_setting` but a class of objects rather than a regime of assumptions. Test: if the paper phrases it as a hypothesis on the problem ("assuming…", "under…"), use `theoretical_setting`; if it is the family of inputs the result quantifies over ("for all bounded-degree graphs…"), use `structural_class`; if both fit, use `theoretical_setting`.
-   - (If a dataset/benchmark *is the paper's primary deliverable* rather than something it merely runs on, it is the root `contribution_resource` from cluster 1, not a plain `dataset`/`benchmark`.)
-3. **yardsticks** (how it is judged).
-   - `metric`: a reported performance measure (e.g. BLEU, top-1 accuracy, F1, perplexity). One metric node per metric NAME — never split per dataset/split; per-split values bind later via score-row `setup_id`.
-4. **the_problem** (what it fixes) — the unresolved question or unmet need the work addresses.
-   - `problem`: the single research problem (`prb:` id, `cite_keys: []`). **Exactly one** for almost every paper — the premise that makes the contribution necessary, not a list of difficulties. `name` is a short handle (e.g. "sequential computation bottleneck"), `gloss` states the problem in one phrase. Emit a second only when the paper genuinely pursues two independent problems; never split one problem into background/gap/motivation fragments, and never census a paper-structural remark ("this paper is organized as follows") as a problem.
+Emit the paper's own nodes (its contribution and its parts, its research problem, its metrics) and the evaluation frame it runs on (data and tasks).
 
-The experiment configurations (splits, protocols, ensembling) are **not** nodes — they are created later during content extraction. Findings are likewise born later, with **one exception**: the single `contribution_finding` root above, emitted only when the paper's primary deliverable *is* a finding. The testbed nodes (dataset/benchmark/task, and for theory papers theoretical_setting/structural_class) you census here become the substrate `ExperimentSetup` units; the configuration `ExperimentSetup` units are born later. Do not emit configurations here, and emit **no finding** other than the one `contribution_finding` root (every other finding is born during content extraction). The research problem IS a census node (cluster 4) — its full prose statement is authored later during content extraction, so keep the census entry to a handle plus a one-phrase gloss.
+The following are never nodes. This is the one canonical exclusion; every section below assumes it.
 
-### Two rules that decide hard cases
+- Prior-art and external methods. Any model, system, or technique the paper builds on, uses as a backbone or base model, or compares against (for example, "based on CLIP/LLaMA/SAM/ViT"). The paper-level citation layer captures the paper's relation to prior work; none of it becomes an internal node. Census a named model only when it is the paper's own Contribution or a Component of it. If the paper adapts an external model, census only the new part it authored, not the original.
+- Apparatus. Hardware (GPUs, TPUs), libraries, and any model used only to compute a metric. Record a scoring model in the metric's gloss ("cosine similarity between CLIP embeddings") rather than as a node.
+- Experiment configurations (splits, protocols, ensembling) and findings. These are created later during content fill. (The analysis-paper deliverable is not an exception: when a paper's whole result IS its deliverable, census it as a Contribution of kind=finding — see below — not as a content-fill Finding.)
+- Duplicate evaluation-frame nodes. Census a benchmark family once, under its strongest variant.
 
-- **A named external model is not a census node.** A prior model the paper builds on or compares against is captured by the references stage, not here — do not census it. Census a named model as a method node (`mth:` id) **only** when it is the paper's **own** contribution or a `component` of it. The testbed holds data only (datasets, benchmarks, tasks), never models.
-- **Apparatus is not a node.** Do not census hardware (GPUs/TPUs) or a model used only to compute a metric (e.g. an embedding model behind a similarity score). They carry no argumentative edges. Fold a scoring model into the metric's `gloss` ("cosine similarity between CLIP embeddings") rather than emitting it as a node.
+## The types
 
-You produce exactly two outputs:
-1. `spine_summary` — one sentence on the central contribution, one sentence on the argument flow, one optional sentence stating the headline established result, and three small facet annotations (`topics`, `tasks`, `domain`).
-2. `nodes[]` — the flat census.
+Every node takes exactly one `type`, and the type fixes its id-prefix. A Contribution and an ExperimentSetup also take a required `kind`; Component, Measure, and Problem are single-level and take no kind. A node that could fit two types is defined once under its primary type; the secondary relationship becomes an edge in a later pass.
 
-**Facets (`topics`, `tasks`, `domain`).** Corpus routing keys, all lowercase: `topics` = 3–6 free-keyword tags specific enough to differentiate papers within one field (e.g. "weakly supervised segmentation", "class activation maps" — not "deep learning"); `tasks` = the concrete task(s) the paper addresses, as the community names them (e.g. "semantic segmentation"); `domain` = ONE coarse research domain (e.g. "computer vision", "natural language processing", "machine learning theory"). These are summary annotations, not nodes — a `task` testbed node is still censused as usual.
+**the_solution** — what the paper contributes and how it is built. Almost every paper has a single root Contribution; tag its `kind` by what the paper delivers.
 
-**Headline result (`headline_result`).** Full rules in the schema's `headline_result` description; in short, one sentence stating the paper's headline established **result** — the answer the evidence demonstrates — as distinct from `central_contribution`, which names the artifact. Fill it whenever the paper establishes a clear headline result; omit it when the paper states no clear headline result (typically only a pure resource/tool release). For an analysis/mechanistic paper this finding *is* the real payload; for an ordinary method paper it is the key empirical result the method achieves. This is a summary annotation, not itself a node — for a method/resource paper the headline finding is born later during content extraction, and you still census the apparatus as the `contribution`/`component` nodes as usual. (When the paper's deliverable *is* the finding — an analysis paper with no proposed artifact — you additionally tag that finding as the `contribution_finding` root above; that is the one finding the census emits.)
+- `Contribution` (con:) — the paper's own root deliverable. Set `kind` by what it is:
+  - `method` — an algorithm, technique, architecture, model, or system; the default. A non-data deliverable such as a taxonomy, atlas, or software library is also kind=method.
+  - `dataset` / `benchmark` — used when the primary deliverable is itself a dataset or benchmark the paper releases. The paper's scores attach to it directly; do not also emit a kind=method Contribution or a duplicate dataset/benchmark ExperimentSetup for the same artifact.
+  - `finding` — used when the deliverable is a result, not an artifact: an analysis, empirical-study, or mechanistic paper that answers a question ("is X the bottleneck?", "why does Y happen?") and proposes no novel method, model, dataset, or benchmark. State the finding itself as the node (a short `name` handle, and the finding in one phrase as the `gloss`). Census the data as evaluation frame, and as `Component` only named, reusable analysis components such as a probing protocol or a diagnostic framework. Do not invent a placeholder "X Analysis", "X Study", or "X Framework" method as a stand-in root; when uncertain, prefer kind=method.
+  - A few papers deliver two co-equal contributions that neither contains, for example a method and a benchmark released together; tag each as its own `Contribution` with its own `kind`, to be linked later by `co_contribution`. A sub-module, a refined variant, or a dataset the method merely runs on is not co-equal; when uncertain, use a single Contribution.
+- `Component` (cmp:) — a named, method-defining part of the contribution (a module, layer, loss, or training step) that is separately explained, ablated, or required to reproduce the method. Single-level: no kind. Generic implementation details (Adam, the learning-rate schedule, dropout, residual connections) are not components unless the paper's novelty lies in them.
 
----
+**evaluation_frame** — what the work runs on and how it is judged; never a Contribution or Component.
 
-## Node fields
+- `ExperimentSetup` (exp:) — the evaluation frame the work runs on. Set `kind` by what it is:
+  - `dataset` — data the method is trained or evaluated on (a plain corpus).
+  - `benchmark` — a standardized dataset and protocol with named splits, tasks, or a leaderboard (GLUE, MMLU, WMT 2014). Use kind=dataset for a plain training corpus; when uncertain, follow the paper's framing.
+  - `task` — the problem being solved or evaluated.
+  - (A dataset or benchmark the paper itself releases is a Contribution, not an ExperimentSetup. Use ExperimentSetup only for the substrate the work runs ON.)
+- `Measure` (mea:) — any reported measure or criterion: quality (BLEU, top-1, F1), efficiency or cost (latency, FLOPs, parameter count, memory), robustness, calibration, safety, human preference, win-rate, pass@k, or a theoretical-quality criterion (bound tightness, sample complexity). Qualitative and categorical criteria also count. Single-level: no kind. Emit one node per metric name; do not split per dataset or split, as per-split values are filled in later.
 
-Each node in `nodes[]` has:
+**the_problem** — what the work addresses.
 
-- `node_id` — a globally unique id `prefix:short_descriptor`, lowercase ASCII/digits/underscores only, matching `^[a-z][a-z0-9_]*:[a-z0-9_]+$`. The prefix follows from the role (role→prefix map in the schema's `node_id` description). Convert acronyms to lowercase (`map`, not `mAP`; `bleu`, not `BLEU`). This id is reused verbatim as the final unit id, so choose it carefully and never reuse one.
-- `role` — one of the eleven roles above.
-- `name` — the node's name as the paper refers to it.
-- `gloss` — one short phrase describing the node (not a full sentence). For a method role, what it is; for a metric, what it measures; for a testbed node, what it is.
-- `source_scope` — the `§N` section markers where the node is introduced or defined, e.g. `["§3"]`.
-- `cite_keys` — the in-text bibliography citation marker(s) attached to this node, as **bare keys** (format and role rules in the schema). Fill for a cited **testbed** node — a `dataset`/`benchmark` drawn from cited data (e.g. "evaluated on ImageNet [8]" → `["8"]`); multiple keys are allowed when several citations introduce the node. Use `[]` for any root (`contribution`/`contribution_resource`/`contribution_finding`) and every `component` (your own work), for `task`, `metric`, and `problem` nodes, and whenever no citation is attached. This is what later links the node to its bibliography entry, so take the marker verbatim.
+- `Problem` (prb:) — the single research problem: the unmet need that makes the contribution necessary, not a list of difficulties. Single-level: no kind. There is one for almost every paper; emit a second only for a genuinely independent second problem. Do not split the motivation into background or gap fragments, and do not census a structural remark ("this paper is organized as follows").
 
----
+## spine_summary
 
-## Scope discipline
+Write `spine_summary` first, to establish what the paper is (the contract describes each field). Determine the paper's type — method, resource, analysis, or theory — because this prevents the type-confusion errors: a benchmark paper inventing a spurious method Contribution, or an analysis paper inventing a spurious framework. Do not emit a `paper_type` field; the root Contribution's `kind` carries the type.
 
-Keep a focused-extraction discipline: census **only argumentatively load-bearing nodes**, not everything named in the paper. Recall comes from relating what you found and from merging evidence — never from flooding the list with incidental mentions.
-
-### Keep
-
-- The `contribution` and the `component` nodes needed to understand or reproduce it.
-- The `dataset` / `benchmark` / `task` nodes the method is trained and evaluated on; the headline `metric` nodes.
-- The single `problem` node — every paper that addresses anything has one.
-
-### Downgrade or omit
-
-- All prior-art **methods** — base models the paper extends and baselines it compares against — are **not** census nodes; the paper-level citation layer captures the paper's relation to them (their numbers still survive verbatim in the evidence blob). They never become internal nodes or edges.
-- Background systems and prior work mentioned only to motivate the work.
-- Incidental tools, libraries, hardware, and metric-scoring models (apparatus).
-- Per-dataset/per-subtask rows of a single benchmark suite (census the testbed family once, under its strongest variant).
-
-**Root:** the paper's primary deliverable is a root node — `contribution`, `contribution_resource`, or `contribution_finding` (cluster 1 defines each). Almost always there is **exactly one**: if several methods could qualify, only the overall primary one is the root and every part is a `component`; prior methods are not censused at all (the citation layer captures them).
-
-**Co-equal contributions (rare).** A few papers deliver **two co-equal primary contributions that neither contains** — e.g. a new *method* **and** a new *benchmark/dataset* released together, or two independent algorithms presented as joint results. Tag **each** as a root (`contribution` and/or `contribution_resource`) — do **not** demote one to `component`, nor a co-released benchmark to a plain `dataset`/`benchmark`. A later pass links co-equal roots with a `co_contribution` edge. Use this **only** for genuinely co-equal, separable deliverables; a sub-module, a stepping-stone or refined variant of the main method, or a dataset the method merely runs on is **not** a co-contribution. When in doubt, prefer a single root.
-
-**Define each node once, in its primary role.** A node that could be tagged two ways (e.g. a `component` that is also part of the testbed) is defined once under its primary role; the secondary relationship becomes an edge in a later pass, not a second node.
-
----
+Distinguish `headline_result` (always a summary annotation) from a kind=finding Contribution (a node). A method, resource, or theory paper fills `headline_result`, and its headline finding is created later during content fill (no kind=finding Contribution). An analysis paper with no artifact fills `headline_result` and also emits a Contribution of kind=finding with the same content.
 
 ## Procedure
 
-1. Read the paper from beginning to end.
-2. Identify the central contribution; write `spine_summary`.
-3. Sweep the four clusters in order: the_method (the root — `contribution`, `contribution_resource`, or `contribution_finding` — then each `component`), testbed (`dataset` / `benchmark` / `task`, plus `theoretical_setting` / `structural_class` for theory papers), yardsticks (`metric`), the_problem (the single `problem` node). Do **not** census prior-art methods the paper builds on, uses, or compares against — the paper-level citation layer owns them. If the paper reports results, the testbed and yardstick clusters must not be empty — find what the metrics were measured on.
-4. Assign each node a stable, prefixed `node_id`, a `role`, a `gloss`, `source_scope`, and `cite_keys`.
-5. Tag the root node(s) — `role: contribution` (method/system), `contribution_resource` (dataset/benchmark), or `contribution_finding` (the headline result, for an analysis paper with no proposed artifact). Almost always exactly one; mark two co-equal roots only for a genuine joint deliverable (see "Co-equal contributions").
-6. Do not state any relationship between nodes — that is stage B's job.
+Extract in this order; it defers the hardest decision, component granularity, until the remaining nodes are settled.
 
-Critical: be comprehensive within this scope discipline. A node you miss here cannot be related or enriched later. When unsure whether something is load-bearing, ask: "If this node were missing, would the central contribution be incomprehensible, unverifiable, or unreproducible?"
+1. Orient. Write `spine_summary` and determine the paper's type.
+2. Decide the root type. Almost always a single `Contribution`; set its `kind` to method (a method or system), dataset/benchmark (a data deliverable), theory (a proven formal result), or finding (a result, with no artifact).
+3. Emit the `Problem`, the central unmet need.
+4. Emit the root Contribution node or nodes.
+5. Emit the evaluation frame as `ExperimentSetup` nodes: the kind=task node(s) first, then the kind=dataset or kind=benchmark nodes. Do not emit a prior-art method or external model here, and do not emit a dataset/benchmark the paper itself releases here (that is a Contribution).
+6. Emit the `Measure` nodes, one per metric name.
+7. Emit the `Component` nodes last, now that the rest is fixed. Include only named, method-defining parts of the paper's own contribution, working outward from the most prominent modules.
+8. Boundary audit. Re-scan the list and remove anything outside scope: prior-art and external methods, apparatus, configurations, duplicate evaluation-frame nodes, and any motivation fragment mis-tagged as a second Problem. This step only removes; it adds no node and states no relation.
+9. Return the JSON (`spine_summary`, `nodes[]`). Each `gloss` states what the node intrinsically is, not how it relates to another node. State no relationships; relations are established in the next pass.
 
----
+## Output
 
-## Output Format
-
-Return a single JSON object:
+Return a single JSON object, e.g.:
 
 {
   "spine_summary": {
-    "central_contribution": "<one sentence>",
-    "argument_flow": "<one sentence>",
-    "headline_result": "<one sentence — the paper's headline established result; omit this key when the paper states no clear headline result (typically only a pure resource/tool release)>",
-    "topics": ["<3-6 lowercase free-keyword topic tags>"],
-    "tasks": ["<the concrete task(s) the paper addresses>"],
-    "domain": "<one coarse research domain, lowercase>"
+    "research_problem": "Recurrent sequence models cannot parallelize over sequence length, which bottlenecks training and weakens long-range dependency learning.",
+    "central_contribution": "The Transformer, an attention-only sequence-transduction architecture.",
+    "argument_flow": "Replacing recurrence with self-attention is shown to improve translation quality while training substantially faster.",
+    "headline_result": "The Transformer reaches 28.4 BLEU on WMT 2014 English-German, beating prior best results at a fraction of the training cost.",
+    "topics": ["sequence transduction", "self-attention", "neural machine translation"],
+    "tasks": ["machine translation"],
+    "domain": "natural language processing"
   },
   "nodes": [
     {
       "node_id": "prb:seq_dependency",
-      "role": "problem",
+      "type": "Problem",
       "name": "sequential computation bottleneck",
       "gloss": "recurrence precludes parallelization and weakens long-range dependency learning",
       "source_scope": ["§1"],
       "cite_keys": []
     },
     {
-      "node_id": "mth:transformer",
-      "role": "contribution",
+      "node_id": "con:transformer",
+      "type": "Contribution",
+      "kind": "method",
       "name": "Transformer",
       "gloss": "attention-only encoder-decoder architecture",
       "source_scope": ["§3"],
       "cite_keys": []
     },
     {
-      "node_id": "mth:scaled_dot_product_attention",
-      "role": "component",
-      "name": "Scaled Dot-Product Attention",
-      "gloss": "attention weighting scaled by key dimension",
-      "source_scope": ["§3"],
+      "node_id": "exp:machine_translation",
+      "type": "ExperimentSetup",
+      "kind": "task",
+      "name": "machine translation",
+      "gloss": "sequence-to-sequence translation between languages",
+      "source_scope": ["§6"],
       "cite_keys": []
     },
     {
+      "node_id": "exp:wmt2014_en_de",
+      "type": "ExperimentSetup",
+      "kind": "benchmark",
+      "name": "WMT 2014 English-German",
+      "gloss": "machine-translation benchmark",
+      "source_scope": ["§6"],
+      "cite_keys": ["41"]
+    },
+    {
       "node_id": "mea:bleu",
-      "role": "metric",
+      "type": "Measure",
       "name": "BLEU",
       "gloss": "machine-translation quality",
       "source_scope": ["§6"],
       "cite_keys": []
     },
     {
-      "node_id": "exp:wmt2014_en_de",
-      "role": "benchmark",
-      "name": "WMT 2014 English-German",
-      "gloss": "machine-translation benchmark",
-      "source_scope": ["§6"],
-      "cite_keys": ["41"]
+      "node_id": "cmp:scaled_dot_product_attention",
+      "type": "Component",
+      "name": "Scaled Dot-Product Attention",
+      "gloss": "attention weighting scaled by key dimension",
+      "source_scope": ["§3"],
+      "cite_keys": []
     }
   ]
 }
@@ -174,13 +152,11 @@ Return a single JSON object:
 ## User Prompt Template
 
 ```markdown
-Read the following scientific paper and produce a flat node census.
+Read the following scientific paper and produce the Stage A node census.
 
 <paper>
 {{paper_content}}
 </paper>
 
-Sweep the four clusters in order — the_method (contribution/contribution_resource/contribution_finding, components), testbed (dataset/benchmark/task, and theoretical_setting/structural_class for theory papers), yardsticks (metric), the_problem (the single problem node) — and emit every argumentatively load-bearing node. Do not census prior-art methods the paper builds on, uses, or compares against — the paper-level citation layer owns them. Assign each a prefixed node_id, a role, a gloss, source_scope, and cite_keys (the bibliography marker(s) a cited testbed node carries, else []), and tag the root (role contribution; contribution_resource when the deliverable is a dataset/benchmark; contribution_finding when the deliverable is a result/finding and the paper proposes no artifact) — almost always exactly one, but tag two co-equal roots when the paper delivers a genuine joint contribution (e.g. a method and a benchmark). Do not state any relationship between nodes. Also fill `spine_summary.headline_result` with the paper's headline established result (the answer the evidence demonstrates, distinct from the contribution artifact); omit that key when the paper states no clear headline result (typically only a pure resource/tool release). Fill the `spine_summary` facets too: `topics` (3-6 lowercase keyword tags), `tasks` (the concrete task names), `domain` (one coarse research domain).
-
-Output a single JSON object with keys: spine_summary, nodes.
+Write `spine_summary` first (determine the paper's type; do not emit a paper_type field), then emit nodes in order: Problem → root Contribution → evaluation frame (ExperimentSetup, kind=task first, then kind=dataset/benchmark) → Measures → Components, and finally run the boundary audit. Tag the root Contribution's `kind` by what the paper delivers: method (a method or system), dataset/benchmark (a data deliverable), theory (a proven formal result), or finding (a result, with no novel artifact); almost always a single Contribution. Give a `kind` to every Contribution and ExperimentSetup; omit `kind` on Component, Measure, and Problem. Do not state any relationship between nodes; prior-art and external methods, apparatus, and experiment configurations are not nodes, and the citation layer captures the paper's relation to prior work. Output a single JSON object with keys spine_summary and nodes, following the OUTPUT FORMAT CONTRACT.
 ```

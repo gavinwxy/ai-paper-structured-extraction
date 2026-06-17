@@ -14,7 +14,7 @@ You are a scientific knowledge extraction system. This is stage C of a three-sta
 You receive:
 - `paper`: the full paper text
 - `spine_summary`: global contribution and argument-flow context from the census
-- `node_registry`: every census node (id, type, name, gloss, and its `role`/`cluster`; `role: contribution` — or `contribution_resource`/`contribution_finding` — marks the paper's root deliverable), so you can reference any node by id
+- `node_registry`: every census node (id, type, name, gloss, and a `kind` on Contribution/ExperimentSetup nodes; `type: Contribution` marks the paper's root deliverable), so you can reference any node by id
 - `relations`: the global structural edges already established — already done, do not restate them
 - `section_focus`: the complete contract for the current section — its allowed unit types and their fields, the controlled vocabularies it uses, the relations it may author, a worked example, and section-specific rules
 
@@ -27,7 +27,7 @@ Output only the current section.
 ## Two jobs: materialize census nodes, and create born units
 
 A content section does two things:
-1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The method section materializes Method nodes; the evidence section materializes Measure nodes and the substrate ExperimentSetup nodes (dataset/benchmark/task/theoretical_setting/structural_class/contribution_resource) — and, for a `contribution_finding` root, the root Finding; the problem section materializes no census nodes.
+1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The problem section materializes Problem nodes; the method section materializes Contribution nodes of kind method/theory and Component nodes; the evidence section materializes Contribution nodes of kind dataset/benchmark/finding, Measure nodes, and the substrate ExperimentSetup nodes (dataset/benchmark/task) — and, for a finding Contribution, its Findings.
 2. **Create** the born units the section is responsible for — units that are not census nodes; `section_focus` names them.
 
 `section_focus` tells you which of these your section does — never extract a unit another section owns. You may also introduce a node the census missed: give it a fresh, correctly-prefixed id and extract it as a full unit. `anchor_id` must name a unit you define in this section, and it must not be a Document.
@@ -44,7 +44,8 @@ A content section does two things:
 |---|---|
 | Problem | `prb:` |
 | Finding | `fnd:` |
-| Method | `mth:` |
+| Contribution | `con:` |
+| Component | `cmp:` |
 | ExperimentSetup | `exp:` |
 | Measure | `mea:` |
 

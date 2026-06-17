@@ -46,7 +46,6 @@ if str(REPO_ROOT) not in sys.path:
 from production.outputs import save_json  # noqa: E402
 from section_pipeline import (  # noqa: E402
     ACCEPTED_IR_VERSIONS,
-    CONTRIBUTION_ROLES,
     IR_VERSION,
     MARKER_NAMESPACES,
     STAGE_B_RELATIONS_NOTE,
@@ -239,13 +238,13 @@ def build_catalog_row(
         utype = unit.get("type")
         if utype == "Problem" and problem_description is None:
             problem_description = unit.get("description")
-        elif utype == "ExperimentSetup" and unit.get("role") in {"dataset", "benchmark"}:
+        elif utype == "ExperimentSetup" and unit.get("kind") in {"dataset", "benchmark"}:
             if unit.get("name") and unit["name"] not in datasets:
                 datasets.append(unit["name"])
         elif utype == "Measure":
             if unit.get("name") and unit["name"] not in metrics:
                 metrics.append(unit["name"])
-        elif utype == "Method" and unit.get("role") in CONTRIBUTION_ROLES:
+        elif utype == "Contribution":
             if unit.get("name") and unit["name"] not in contribution_names:
                 contribution_names.append(unit["name"])
 
@@ -269,7 +268,7 @@ def build_catalog_row(
         "topics": document.get("topics"),
         "tasks": document.get("tasks"),
         "domain": document.get("domain"),
-        "paper_type": document.get("role"),
+        "paper_type": document.get("kind"),
         "venue": metadata.get("venue"),
         "year": metadata.get("year"),
         "venue_source": metadata.get("venue_source"),
@@ -323,8 +322,10 @@ def build_cards(
         name = unit.get("name") or node.get("name") or uid
         text = _card_text(unit, gloss)
         aliases = derive_aliases(name)
-        role = unit.get("role") or node.get("role")
-        head = f"{unit.get('type')}/{role}" if role else f"{unit.get('type')}"
+        # section-ir-0.17: the differentia is `kind` (the per-unit `role` is gone); fall back to
+        # the census node's kind, then to type-only when the unit/node carries no kind.
+        kind = unit.get("kind") or node.get("kind")
+        head = f"{unit.get('type')}/{kind}" if kind else f"{unit.get('type')}"
         embed_text = f"{paper_title or paper_id} | {head}: {name}"
         if text:
             embed_text += f" — {text}"
@@ -334,7 +335,7 @@ def build_cards(
             "unit_id": uid,
             "section": stype,
             "type": unit.get("type"),
-            "role": role,
+            "kind": kind,
             "name": name,
             "text": text,
             "gloss": gloss,
@@ -362,7 +363,9 @@ def build_result_rows(paper_id: str, extraction: dict[str, Any]) -> list[dict[st
             setup = units_by_id.get(score.get("setup_id") or "", {})
             system = units_by_id.get(score.get("system_id") or "", {})
             setup_name = setup.get("name")
-            dataset = setup_name if setup.get("role") in {"dataset", "benchmark"} else None
+            # The setup is a dataset/benchmark by its `kind` now (section-ir-0.17). It may be an
+            # ExperimentSetup or a Contribution that IS the measured dataset/benchmark (hosts scores).
+            dataset = setup_name if setup.get("kind") in {"dataset", "benchmark"} else None
             system_name = system.get("name") or score.get("variant")
             value_num = score.get("value_num")
             if value_num is None and "value_num" not in score:
@@ -380,8 +383,10 @@ def build_result_rows(paper_id: str, extraction: dict[str, Any]) -> list[dict[st
                 "setup_id": score.get("setup_id") or None,
                 "system": system_name,
                 "system_id": score.get("system_id") or None,
-                "system_role": system.get("role"),
-                "is_paper_contribution": system.get("role") in CONTRIBUTION_ROLES,
+                # section-ir-0.17: units carry no `role`; the system's method-family class is its
+                # type (Contribution = the paper's own deliverable, Component = a sub-module).
+                "system_role": system.get("type"),
+                "is_paper_contribution": system.get("type") == "Contribution",
                 "variant": score.get("variant"),
                 "value_raw": score.get("value"),
                 "value_num": value_num,

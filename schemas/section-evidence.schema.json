@@ -1,7 +1,7 @@
 {
   "type": "object",
   "title": "Evidence Section Output",
-  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: measures, experiment_setups, findings. Valid unit types: Measure, ExperimentSetup, Finding. Authors relations.",
+  "description": "Structured output schema for the evidence section content extraction. Typed unit arrays: contributions, measures, experiment_setups, findings. Valid unit types: Contribution, Measure, ExperimentSetup, Finding. Authors relations.",
   "required": [
     "section"
   ],
@@ -12,6 +12,7 @@
       "required": [
         "section_type",
         "anchor_id",
+        "contributions",
         "measures",
         "experiment_setups",
         "findings",
@@ -29,6 +30,129 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
           "description": "ID of the unit that anchors this section; it must be defined in one typed unit array"
+        },
+        "contributions": {
+          "type": "array",
+          "description": "Contribution units extracted for this section",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "provenance",
+              "kind",
+              "name",
+              "description"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+                "description": "Unit identifier in lowercase prefix:descriptor format"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Contribution"
+                ],
+                "description": "Unit type discriminator"
+              },
+              "provenance": {
+                "type": "array",
+                "description": "Location markers for this unit: top-level section anchors such as ['\u00a71', '\u00a72']",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "method",
+                  "dataset",
+                  "benchmark",
+                  "theory",
+                  "finding"
+                ],
+                "description": "What KIND of deliverable this contribution is: method (an algorithm/technique/architecture/model), dataset, benchmark, theory (a proven formal result), or finding (an empirical/analysis result \u2014 the deliverable of an analysis paper with no novel artifact)"
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the contribution"
+              },
+              "method_kind": {
+                "type": "string",
+                "enum": [
+                  "algorithm",
+                  "model_architecture",
+                  "training_strategy",
+                  "objective_function",
+                  "resource",
+                  "taxonomy",
+                  "theorem",
+                  "lemma",
+                  "bound",
+                  "definition"
+                ],
+                "description": "Optional finer structural classification on a kind=method/theory contribution (algorithm/model_architecture/training_strategy/objective_function for a method; theorem/lemma/bound/definition for a theory; resource/taxonomy for a non-algorithmic deliverable); omit otherwise"
+              },
+              "description": {
+                "type": "string",
+                "description": "Prose description of the contribution; empty string when unknown"
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Inputs to the method; omit when not stated or the contribution is not an algorithm"
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Outputs of the method; omit when not stated or the contribution is not an algorithm"
+              },
+              "formulas": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "expression"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Short label for the equation, e.g. 'Scaled Dot-Product Attention'; empty string when unnamed"
+                    },
+                    "expression": {
+                      "type": "string",
+                      "description": "The equation itself, as LaTeX or plain text, e.g. 'softmax(QK^T/sqrt(d_k))V'"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "objective"
+                      ],
+                      "description": "Functional tag: 'objective' marks the loss/optimization target the method minimizes/maximizes (at most one entry per distinct objective; a method with no stated objective tags nothing). Omit on ordinary defining equations."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "One line on what the objective optimizes; only on a role='objective' entry \u2014 omit on all other formulas"
+                    }
+                  }
+                },
+                "description": "Key defining equations, each with a short label; the entry tagged role='objective' is the optimization objective/loss; omit the field when the contribution states no equations"
+              },
+              "implementation_notes": {
+                "type": "string",
+                "description": "Key implementation details; empty string when none are reported"
+              }
+            }
+          }
         },
         "measures": {
           "type": "array",
@@ -116,7 +240,7 @@
                   "properties": {
                     "variant": {
                       "type": "string",
-                      "description": "Name of the contribution configuration this score row reports, as the paper labels it (e.g. 'Transformer (big)', 'Ours (ResNet-101)'); on a contribution_resource root's rows, the evaluated system's label"
+                      "description": "Name of the contribution configuration this score row reports, as the paper labels it (e.g. 'Transformer (big)', 'Ours (ResNet-101)'); on a dataset/benchmark Contribution's rows, the evaluated system's label"
                     },
                     "value": {
                       "type": "string",
@@ -128,7 +252,7 @@
                     },
                     "system_id": {
                       "type": "string",
-                      "description": "ID of the contribution Method this row reports (e.g. 'mth:transformer'). In prose mode (a paper with no table grids), a transcribed baseline row carries the baseline's Method id instead; on a contribution_resource root's evaluated-system rows, the evaluated Method's id. Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture)."
+                      "description": "ID of the contribution (a Contribution/Component) this row reports (e.g. 'con:transformer'). In prose mode (a paper with no table grids), a transcribed baseline row carries the baseline's id instead; on a dataset/benchmark Contribution's evaluated-system rows, the evaluated system's id. Empty string when no node represents this row's system (e.g. an ensemble-of-baselines the census did not capture)."
                     },
                     "setup_id": {
                       "type": "string",
@@ -147,15 +271,15 @@
                     },
                     "opponent_id": {
                       "type": "string",
-                      "description": "Optional (FG-6): for a pairwise/win-rate row (A-vs-B), the id of the Method this row's system was compared against \u2014 `system_id` is system A, `opponent_id` is system B, `value` is A's win rate vs B. Omit for an ordinary absolute-score row."
+                      "description": "Optional (FG-6): for a pairwise/win-rate row (A-vs-B), the id of the Contribution/Component this row's system was compared against \u2014 `system_id` is system A, `opponent_id` is system B, `value` is A's win rate vs B. Omit for an ordinary absolute-score row."
                     },
                     "judge_id": {
                       "type": "string",
-                      "description": "Optional (FG-6): for a judged row (LLM-as-judge or human evaluation), the id of the judge \u2014 a Method, or an inference_protocol/population ExperimentSetup that was materialized for the evaluator. Omit when the score needs no judge."
+                      "description": "Optional (FG-6): for a judged row (LLM-as-judge or human evaluation), the id of the judge \u2014 a Contribution/Component, or an inference_protocol/population ExperimentSetup that was materialized for the evaluator. Omit when the score needs no judge."
                     }
                   }
                 },
-                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception \u2014 prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception \u2014 a contribution_resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused); when rows grade the resource by object/category rather than by system, the headline column's rows (printed row label as variant). Third exception \u2014 a censused metric reported only in figures/prose in a paper that HAS tables: transcribe its prose- or caption-stated numbers here with no source_table_marker (never values read off a figure's axes)."
+                "description": "Flat array of reported scores under this measure \u2014 one row per system. In blob-primary mode this carries ONLY the contribution method's own rows (table_role main_result), or is empty (table_role ablation); compared-against baselines stay in the source table, not here. Exception \u2014 prose mode (the paper has no table grids, so there is no table blob backstop): transcribe ALL reported comparison rows, the contribution's AND every compared-against baseline's. Second exception \u2014 a resource root: the headline evaluated-system rows ON the resource are the paper's own result (setup_id = the resource, system_id = the evaluated Method when censused); when rows grade the resource by object/category rather than by system, the headline column's rows (printed row label as variant). Third exception \u2014 a censused metric reported only in figures/prose in a paper that HAS tables: transcribe its prose- or caption-stated numbers here with no source_table_marker (never values read off a figure's axes)."
               },
               "source_table_marker": {
                 "type": "string",
@@ -171,7 +295,7 @@
                   "main_result",
                   "ablation"
                 ],
-                "description": "Optional (blob-primary): main_result (a headline comparison \u2014 emit the contribution method's own score rows) or ablation (component/sensitivity study, or a motivation/diagnostic study whose cells are \u0394/gain/correlation quantities of prior or base models (for a contribution_resource root, evaluated-system rows ON the resource count as contribution rows) \u2014 emit no score rows; the source table carries it). Defaults to main_result."
+                "description": "Optional (blob-primary): main_result (a headline comparison \u2014 emit the contribution method's own score rows) or ablation (component/sensitivity study, or a motivation/diagnostic study whose cells are \u0394/gain/correlation quantities of prior or base models (for a resource root, evaluated-system rows ON the resource count as contribution rows) \u2014 emit no score rows; the source table carries it). Defaults to main_result."
               },
               "headline_result": {
                 "type": "string",
@@ -197,7 +321,7 @@
               "id",
               "type",
               "provenance",
-              "role",
+              "kind",
               "name"
             ],
             "additionalProperties": false,
@@ -221,15 +345,12 @@
                   "type": "string"
                 }
               },
-              "role": {
+              "kind": {
                 "type": "string",
                 "enum": [
                   "dataset",
                   "benchmark",
                   "task",
-                  "theoretical_setting",
-                  "structural_class",
-                  "contribution_resource",
                   "data_split",
                   "inference_protocol",
                   "training_config",
@@ -258,7 +379,7 @@
               "id",
               "type",
               "provenance",
-              "role",
+              "kind",
               "statement"
             ],
             "additionalProperties": false,
@@ -282,7 +403,7 @@
                   "type": "string"
                 }
               },
-              "role": {
+              "kind": {
                 "type": "string",
                 "enum": [
                   "descriptive",
@@ -346,7 +467,7 @@
                   "about",
                   "supports"
                 ],
-                "description": "about = a Finding is about a Method or ExperimentSetup (never a Measure \u2014 mount table\u2194finding links via the Measure's finding_ids); supports = a Finding, or a theorem/proof Method, supports a Finding (never Measure\u2192Finding)."
+                "description": "about = a Finding is about a Contribution/Component or ExperimentSetup (never a Measure \u2014 mount table\u2194finding links via the Measure's finding_ids); supports = a Finding, or a theory Contribution, supports a Finding (never Measure\u2192Finding)."
               },
               "target_id": {
                 "type": "string",
