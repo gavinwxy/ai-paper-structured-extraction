@@ -27,7 +27,7 @@ Output only the current section.
 ## Two jobs: materialize census nodes, and create born units
 
 A content section does two things:
-1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The problem section materializes Problem nodes; the method section materializes Contribution nodes of kind method/theory and Component nodes; the evidence section materializes Contribution nodes of kind dataset/benchmark/finding, Measure nodes, and the substrate ExperimentSetup nodes (dataset/benchmark/task) — and, for a finding Contribution, its Findings.
+1. **Materialize** the census nodes it owns into full units, reusing each `node_id` verbatim as the unit `id` and filling the rich fields named in `section_focus`. The problem section materializes Problem nodes; the method section materializes Contribution nodes of kind method and Component nodes; the evidence section materializes Contribution nodes of kind dataset/benchmark/finding, Measure nodes, and the substrate ExperimentSetup nodes (dataset/benchmark/task) — and, for a finding Contribution, its Findings.
 2. **Create** the born units the section is responsible for — units that are not census nodes; `section_focus` names them.
 
 `section_focus` tells you which of these your section does — never extract a unit another section owns. You may also introduce a node the census missed: give it a fresh, correctly-prefixed id and extract it as a full unit. `anchor_id` must name a unit you define in this section, and it must not be a Document.

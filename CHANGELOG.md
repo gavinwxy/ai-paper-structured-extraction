@@ -23,15 +23,15 @@
 - 七个单元类型：`Document` · `Problem` · `Contribution` · `Component` · `ExperimentSetup` · `Measure` · `Finding`。
 
 ### `kind` 差异轴（仅多 kind 类型携带）
-- `Contribution.kind ∈ {method, dataset, benchmark, theory, finding}`——交付物**是什么**
-  （method=算法/架构/模型；theory=已证定理/界；finding=分析型论文的"结果即交付物"）。**Lean-5**。
+- `Contribution.kind ∈ {method, dataset, benchmark, finding}`——交付物**是什么**
+  （method=算法/架构/模型，或已证定理/界——用 method_kind theorem/lemma/bound 标注；finding=分析型论文的"结果即交付物"）。**Lean-4**（theory 折叠进 method，由 method_kind 承载形式化结果的区分）。
 - `ExperimentSetup.kind ∈ {dataset, benchmark, task}` + 配置类（data_split / inference_protocol /
   training_config / ensembling / population）。**`resource` 移除**。
 - `Finding.kind ∈ {descriptive, mechanistic, comparative, modeling, ablation_finding, failure_mode,
   theorem, lemma, bound}`（即旧 Finding 的 `role` / `claim_kind`）。
 - `Document.kind ∈ {research_article, review, …}`（旧 doc role）。
 - **`Component` / `Measure` / `Problem` 单级，无 `kind`**。
-- `method_kind` **保留**（用户决定）为可选的**更细结构子标签**，挂在 kind=method/theory 的
+- `method_kind` **保留**（用户决定）为可选的**更细结构子标签**，挂在 kind=method 的
   `Contribution` 或 `Component` 上 `∈ {algorithm, model_architecture, training_strategy,
   objective_function, resource, taxonomy, theorem, lemma, bound, definition}`——是 `kind` **之下**的
   子标签，不是独立轴。
@@ -51,7 +51,7 @@
   旧特殊角色 `contribution` / `resource` / `finding` 折叠为 Contribution 的 kind（method / dataset|benchmark / finding）。
 - **dataset/benchmark 的 `Contribution` 自持其 score 行**（某 `Measure` 的 `setup_id` 可指向它），
   取代旧的 `resource` ExperimentSetup 机制。
-- 物化：method 段产出 `Contribution`(kind method/theory) + `Component`；evidence 段产出
+- 物化：method 段产出 `Contribution`(kind method) + `Component`；evidence 段产出
   `Contribution`(kind dataset/benchmark/finding) + `Measure` + `ExperimentSetup` + `Finding`；problem 段产出 `Problem`。
 - **分析型论文**：根是 kind=finding 的 `Contribution`，headline `Finding` 像普通论文一样 `about` 它
   （旧"finding-root 物化为无 about 边的 Finding"特例移除）。

@@ -10,7 +10,7 @@ problem → method → evidence
 - **problem** — the single research problem the paper addresses (one trunk; the old multi-tag
   `context` section collapsed to one).
 - **method** — the technical apparatus: the paper's root deliverable (a `Contribution` of kind
-  `method`/`theory`) and its sub-modules (`Component`s) — the paper's **own** methods. External
+  `method`) and its sub-modules (`Component`s) — the paper's **own** methods. External
   prior-art methods are NOT materialized here — the paper's relations to the works it builds on,
   reuses, compares with, is inspired by, adapts, critiques, or analyzes are captured paper-level by
   the citation layer's seven-role taxonomy (see the internal/external axis below).
@@ -436,7 +436,7 @@ multi-kind types:
 nodes** (typed in stage A). `Problem`, `Finding`, and the configuration `ExperimentSetup` kinds are
 **born** during content fill (a `Problem` is the one census-planned node the problem section
 materializes; `Finding`s are born wholesale in the evidence section). A `Contribution` of kind
-`method`/`theory` and any `Component` also carry an optional structural `method_kind ∈ {algorithm,
+`method` and any `Component` also carry an optional structural `method_kind ∈ {algorithm,
 model_architecture, training_strategy, objective_function, resource, taxonomy, theorem, lemma, bound,
 definition}` — a finer sub-tag **under** `kind`, not a separate axis.
 
@@ -447,7 +447,7 @@ shape it takes:
 
 | `Contribution` kind | id prefix | shape | materialized by |
 |---|---|---|---|
-| `method` (or `theory`) | `con:` | a proposed method / algorithm / model (or a proven result) | method section |
+| `method` | `con:` | a proposed method / algorithm / model — or a proven formal result (tag it with `method_kind` theorem/lemma/bound/definition) | method section |
 | `dataset` / `benchmark` | `con:` | a dataset / benchmark deliverable (FG-1) — hosts its own score rows (a `Measure`'s `setup_id` may point at it) | evidence section |
 | `finding` | `con:` | a result / finding deliverable (an analysis paper with no proposed artifact; FG-5) | evidence section |
 
@@ -565,8 +565,9 @@ demotes the old granular `role` to a `kind` sub-axis carried **only** on the mul
   the retired `mth:`.
 - **`role` → `kind` (the differentia).** The per-unit `role` field is eliminated; `kind` is present
   only on `Document` / `Contribution` / `ExperimentSetup` / `Finding`. `Component`, `Measure`, and
-  `Problem` are single-level. `Contribution.kind ∈ {method, dataset, benchmark, theory, finding}` is
-  the Lean-5 vocabulary of *what the deliverable is*; `Finding.kind` is the old Finding
+  `Problem` are single-level. `Contribution.kind ∈ {method, dataset, benchmark, finding}` is
+  the Lean-4 vocabulary of *what the deliverable is* (a proven formal result roots as `method`,
+  with the theorem/lemma/bound distinction carried by `method_kind`); `Finding.kind` is the old Finding
   `role`/`claim_kind`; `Document.kind` is the old doc role.
 - **`resource` → `Contribution`.** A dataset/benchmark the paper itself delivers is now a
   `Contribution` of kind `dataset`/`benchmark` (hosting its own score rows — a `Measure`'s `setup_id`
@@ -577,7 +578,8 @@ demotes the old granular `role` to a `kind` sub-axis carried **only** on the mul
   now `Contribution`, `Component`, `ExperimentSetup`, `Measure`, `Problem`; each emits
   `{node_id, type, kind, name, gloss, source_scope, cite_keys}`.
 - **`method_kind` retained** as an OPTIONAL finer structural sub-tag on a `Contribution` of kind
-  `method`/`theory` and on a `Component` (same `{algorithm, …, definition}` vocabulary). Relation
+  `method` and on a `Component` (same `{algorithm, …, definition}` vocabulary; theorem/lemma/bound/
+  definition mark a proven formal result, which now roots as `kind: method`). Relation
   names are unchanged; endpoints were repointed to the new types (e.g. `part_of` = Component →
   Contribution, `co_contribution` = Contribution ↔ Contribution, `evaluates` = Measure →
   Contribution/Component).

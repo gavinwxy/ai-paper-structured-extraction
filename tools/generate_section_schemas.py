@@ -55,7 +55,7 @@ ID_PATTERN = r"^[a-z][a-z0-9_]*:[a-z0-9_]+$"
 # Typed unit arrays each content section (stage C) returns.
 SECTION_TYPED_ARRAYS: dict[str, list[str]] = {
     "problem": ["problems"],
-    # A Contribution is materialized by the section that describes it: kind method/theory in the
+    # A Contribution is materialized by the section that describes it: kind method in the
     # method section, kind dataset/benchmark/finding in the evidence section — so `contributions`
     # appears in both (section-ir-0.17).
     "method": ["contributions", "components"],
@@ -99,7 +99,7 @@ ARRAY_TYPE_NAMES: dict[str, str] = {
 # is born during evidence content fill — so Finding is absent from CENSUS_TYPE_ORDER, but
 # FINDING_KIND_ORDER still drives the evidence-section Finding `kind` enum.
 CENSUS_TYPE_ORDER = ["Contribution", "Component", "ExperimentSetup", "Measure", "Problem"]
-CONTRIBUTION_KIND_ORDER = ["method", "dataset", "benchmark", "theory", "finding"]
+CONTRIBUTION_KIND_ORDER = ["method", "dataset", "benchmark", "finding"]
 EXPERIMENT_SETUP_KIND_ORDER = [
     "dataset", "benchmark", "task",
     "data_split", "inference_protocol", "training_config", "ensembling", "population",
@@ -110,7 +110,7 @@ FINDING_KIND_ORDER = [
 ]
 # The census `kind` enum = the kinds emittable in the census (Contribution kinds + substrate kinds);
 # required on a Contribution/ExperimentSetup node, omitted on Component/Measure/Problem.
-CENSUS_KIND_ORDER = ["method", "dataset", "benchmark", "theory", "finding", "task"]
+CENSUS_KIND_ORDER = ["method", "dataset", "benchmark", "finding", "task"]
 STAGE_B_RELATION_ORDER = ["part_of", "builds_on", "uses", "co_contribution",
                           "compares_to", "evaluates"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
@@ -126,7 +126,7 @@ STAGE_C_RELATIONS_BY_SECTION: dict[str, list[str]] = {
 # One-line gloss per stage-C relation, joined into the schema field description.
 STAGE_C_RELATION_GLOSS: dict[str, str] = {
     "about": "about = a Finding is about a Contribution/Component or ExperimentSetup (never a Measure — mount table↔finding links via the Measure's finding_ids)",
-    "supports": "supports = a Finding, or a theory Contribution, supports a Finding (never Measure→Finding)",
+    "supports": "supports = a Finding, or a Contribution (e.g. one stating a proven theorem), supports a Finding (never Measure→Finding)",
     "motivates": "motivates = a Problem motivates the Contribution/Component/ExperimentSetup that addresses it",
 }
 
@@ -388,17 +388,17 @@ def typed_unit_schemas(section_type: str) -> dict[str, dict[str, Any]]:
             "kind": enum_schema(
                 "contribution_kind",
                 "What KIND of deliverable this contribution is: method (an algorithm/technique/"
-                "architecture/model), dataset, benchmark, theory (a proven formal result), or "
-                "finding (an empirical/analysis result — the deliverable of an analysis paper with "
-                "no novel artifact)",
+                "architecture/model, or a proven formal result such as a theorem/lemma/bound — tag "
+                "those with method_kind), dataset, benchmark, or finding (an empirical/analysis "
+                "result — the deliverable of an analysis paper with no novel artifact)",
             ),
             "name": string_schema("Name of the contribution"),
             "method_kind": enum_schema(
                 "method_kind",
-                "Optional finer structural classification on a kind=method/theory contribution "
-                "(algorithm/model_architecture/training_strategy/objective_function for a method; "
-                "theorem/lemma/bound/definition for a theory; resource/taxonomy for a non-algorithmic "
-                "deliverable); omit otherwise",
+                "Optional finer structural classification on a kind=method contribution "
+                "(algorithm/model_architecture/training_strategy/objective_function for an algorithmic "
+                "method; theorem/lemma/bound/definition for a proven formal result; resource/taxonomy "
+                "for a non-algorithmic deliverable); omit otherwise",
             ),
             "description": string_schema("Prose description of the contribution; empty string when unknown"),
             "inputs": string_array_schema("Inputs to the method; omit when not stated or the contribution is not an algorithm"),
@@ -646,7 +646,7 @@ def node_census_schema() -> dict[str, Any]:
                         ),
                         "kind": enum_schema(
                             "census_kind",
-                            "REQUIRED on a Contribution (method/dataset/benchmark/theory/finding — "
+                            "REQUIRED on a Contribution (method/dataset/benchmark/finding — "
                             "what the deliverable IS) and on an ExperimentSetup (dataset/benchmark/"
                             "task). OMIT on Component, Measure, and Problem (they are single-level).",
                         ),

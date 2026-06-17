@@ -71,10 +71,9 @@
                   "method",
                   "dataset",
                   "benchmark",
-                  "theory",
                   "finding"
                 ],
-                "description": "What KIND of deliverable this contribution is: method (an algorithm/technique/architecture/model), dataset, benchmark, theory (a proven formal result), or finding (an empirical/analysis result \u2014 the deliverable of an analysis paper with no novel artifact)"
+                "description": "What KIND of deliverable this contribution is: method (an algorithm/technique/architecture/model, or a proven formal result such as a theorem/lemma/bound \u2014 tag those with method_kind), dataset, benchmark, or finding (an empirical/analysis result \u2014 the deliverable of an analysis paper with no novel artifact)"
               },
               "name": {
                 "type": "string",
@@ -94,7 +93,7 @@
                   "bound",
                   "definition"
                 ],
-                "description": "Optional finer structural classification on a kind=method/theory contribution (algorithm/model_architecture/training_strategy/objective_function for a method; theorem/lemma/bound/definition for a theory; resource/taxonomy for a non-algorithmic deliverable); omit otherwise"
+                "description": "Optional finer structural classification on a kind=method contribution (algorithm/model_architecture/training_strategy/objective_function for an algorithmic method; theorem/lemma/bound/definition for a proven formal result; resource/taxonomy for a non-algorithmic deliverable); omit otherwise"
               },
               "description": {
                 "type": "string",
@@ -467,7 +466,7 @@
                   "about",
                   "supports"
                 ],
-                "description": "about = a Finding is about a Contribution/Component or ExperimentSetup (never a Measure \u2014 mount table\u2194finding links via the Measure's finding_ids); supports = a Finding, or a theory Contribution, supports a Finding (never Measure\u2192Finding)."
+                "description": "about = a Finding is about a Contribution/Component or ExperimentSetup (never a Measure \u2014 mount table\u2194finding links via the Measure's finding_ids); supports = a Finding, or a Contribution (e.g. one stating a proven theorem), supports a Finding (never Measure\u2192Finding)."
               },
               "target_id": {
                 "type": "string",

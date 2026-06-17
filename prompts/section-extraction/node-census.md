@@ -61,16 +61,16 @@ Every node takes exactly one `type`, and the type fixes its id-prefix. A Contrib
 
 ## spine_summary
 
-Write `spine_summary` first, to establish what the paper is (the contract describes each field). Determine the paper's type — method, resource, analysis, or theory — because this prevents the type-confusion errors: a benchmark paper inventing a spurious method Contribution, or an analysis paper inventing a spurious framework. Do not emit a `paper_type` field; the root Contribution's `kind` carries the type.
+Write `spine_summary` first, to establish what the paper is (the contract describes each field). Determine the paper's type — method (including a theory/proof paper), resource, or analysis — because this prevents the type-confusion errors: a benchmark paper inventing a spurious method Contribution, or an analysis paper inventing a spurious framework. Do not emit a `paper_type` field; the root Contribution's `kind` carries the type.
 
-Distinguish `headline_result` (always a summary annotation) from a kind=finding Contribution (a node). A method, resource, or theory paper fills `headline_result`, and its headline finding is created later during content fill (no kind=finding Contribution). An analysis paper with no artifact fills `headline_result` and also emits a Contribution of kind=finding with the same content.
+Distinguish `headline_result` (always a summary annotation) from a kind=finding Contribution (a node). A method, resource, or proof paper fills `headline_result`, and its headline finding is created later during content fill (no kind=finding Contribution). An analysis paper with no artifact fills `headline_result` and also emits a Contribution of kind=finding with the same content.
 
 ## Procedure
 
 Extract in this order; it defers the hardest decision, component granularity, until the remaining nodes are settled.
 
 1. Orient. Write `spine_summary` and determine the paper's type.
-2. Decide the root type. Almost always a single `Contribution`; set its `kind` to method (a method or system), dataset/benchmark (a data deliverable), theory (a proven formal result), or finding (a result, with no artifact).
+2. Decide the root type. Almost always a single `Contribution`; set its `kind` to method (a method or system — or a proven formal result, tagged with method_kind theorem/lemma/bound in the method section), dataset/benchmark (a data deliverable), or finding (a result, with no artifact).
 3. Emit the `Problem`, the central unmet need.
 4. Emit the root Contribution node or nodes.
 5. Emit the evaluation frame as `ExperimentSetup` nodes: the kind=task node(s) first, then the kind=dataset or kind=benchmark nodes. Do not emit a prior-art method or external model here, and do not emit a dataset/benchmark the paper itself releases here (that is a Contribution).
@@ -158,5 +158,5 @@ Read the following scientific paper and produce the Stage A node census.
 {{paper_content}}
 </paper>
 
-Write `spine_summary` first (determine the paper's type; do not emit a paper_type field), then emit nodes in order: Problem → root Contribution → evaluation frame (ExperimentSetup, kind=task first, then kind=dataset/benchmark) → Measures → Components, and finally run the boundary audit. Tag the root Contribution's `kind` by what the paper delivers: method (a method or system), dataset/benchmark (a data deliverable), theory (a proven formal result), or finding (a result, with no novel artifact); almost always a single Contribution. Give a `kind` to every Contribution and ExperimentSetup; omit `kind` on Component, Measure, and Problem. Do not state any relationship between nodes; prior-art and external methods, apparatus, and experiment configurations are not nodes, and the citation layer captures the paper's relation to prior work. Output a single JSON object with keys spine_summary and nodes, following the OUTPUT FORMAT CONTRACT.
+Write `spine_summary` first (determine the paper's type; do not emit a paper_type field), then emit nodes in order: Problem → root Contribution → evaluation frame (ExperimentSetup, kind=task first, then kind=dataset/benchmark) → Measures → Components, and finally run the boundary audit. Tag the root Contribution's `kind` by what the paper delivers: method (a method or system, or a proven formal result — tag the latter with method_kind theorem/lemma/bound), dataset/benchmark (a data deliverable), or finding (a result, with no novel artifact); almost always a single Contribution. Give a `kind` to every Contribution and ExperimentSetup; omit `kind` on Component, Measure, and Problem. Do not state any relationship between nodes; prior-art and external methods, apparatus, and experiment configurations are not nodes, and the citation layer captures the paper's relation to prior work. Output a single JSON object with keys spine_summary and nodes, following the OUTPUT FORMAT CONTRACT.
 ```

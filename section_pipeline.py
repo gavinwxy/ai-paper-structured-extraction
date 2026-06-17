@@ -117,7 +117,7 @@ SECTION_ALLOWED_UNIT_TYPES: dict[str, set[str]] = {
     "evidence": {"Contribution", "Measure", "ExperimentSetup", "Finding"},
 }
 # A Contribution (the paper's root deliverable) is materialized by the section that describes it:
-# kind method/theory in the method section, kind dataset/benchmark/finding in the evidence section,
+# kind method in the method section, kind dataset/benchmark/finding in the evidence section,
 # so Contribution is allowed in both (section-ir-0.17).
 # The unit type that should naturally anchor each section. Used when repairing an
 # anchor that names a non-local unit (e.g. an evidence section reaching for the
@@ -176,11 +176,13 @@ NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
 # carry no kind. `kind` is carried onto the materialized unit as its fine-grained differentia.
 
 # Contribution kind = WHAT KIND of deliverable the paper's root is (the user-facing artifact axis,
-# Lean 5): method (an algorithm/technique/architecture/model), dataset, benchmark, theory (a
-# proven formal result, e.g. a theorem/bound), finding (an empirical/analysis result — the
-# analysis-paper deliverable, FG-5, with no novel artifact). Census-emittable: all 5.
-CONTRIBUTION_KINDS = {"method", "dataset", "benchmark", "theory", "finding"}
-# (A Contribution of kind method/theory is materialized in the method section, dataset/benchmark/
+# Lean 4): method (an algorithm/technique/architecture/model, OR a proven formal result such as a
+# theorem/bound — tagged with method_kind theorem/lemma/bound/definition), dataset, benchmark,
+# finding (an empirical/analysis result — the analysis-paper deliverable, FG-5, with no novel
+# artifact). Census-emittable: all 4. (theory folded into method in 0.17 — method took on the
+# proven-result role, carried by method_kind.)
+CONTRIBUTION_KINDS = {"method", "dataset", "benchmark", "finding"}
+# (A Contribution of kind method is materialized in the method section, dataset/benchmark/
 # finding in the evidence section — see SECTION_ALLOWED_UNIT_TYPES and the section prompts.)
 
 # ExperimentSetup kind = the merged Entity-class/Setting-kind axis. The substrate kinds
@@ -285,16 +287,16 @@ KIND_VOCAB_BY_TYPE: dict[str, set[str]] = {
 }
 
 # `method_kind` survives (0.17 user decision) as an OPTIONAL finer structural descriptor on a
-# Contribution of kind method/theory (and on a Component) — a sub-tag UNDER `kind`, not a separate
+# Contribution of kind method (and on a Component) — a sub-tag UNDER `kind`, not a separate
 # axis. Scoped to AI/ML: `protocol`/`software_system` never fire on this corpus.
 # method_kind=`resource`/`taxonomy` marks a non-algorithmic deliverable (a taxonomy, an atlas, a
 # software library) under a Contribution of kind=method; method.md suppresses the algorithm-form
 # fields (inputs/outputs/formulas) for them. A dataset/benchmark deliverable is NOT a method_kind
 # — it is a Contribution of kind=dataset/benchmark (0.17), and it hosts its score rows natively
 # without a duplicate twin. method_kind=`theorem`/`lemma`/`bound`/`definition` marks a formal
-# statement/construct under a Contribution of kind=theory; method.md suppresses the algorithm-form
-# fields for them too. The *proven* result then lives as a Finding (kind theorem/lemma/bound) that
-# the theory Contribution `supports`.
+# statement/construct under a Contribution of kind=method (a proven-result paper now roots as
+# kind=method); method.md suppresses the algorithm-form fields for them too. The *proven* result
+# then lives as a Finding (kind theorem/lemma/bound) that the Contribution `supports`.
 METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function",
                 "resource", "taxonomy", "theorem", "lemma", "bound", "definition"}
 # Optional per-formula functional tag (0.14). The standalone `objective_function` field is gone:
@@ -358,8 +360,9 @@ RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
 # closing stroke of the discovery arc; it joins two units born in *different* parallel
 # sections, so no section can author it — assembly synthesizes it (_assign_resolves) from
 # the contribution-node join, which is globally visible.
-# `supports` (FG-2) now also accepts a Contribution source so a theory Contribution materialized in
-# the method section can `supports` the result-Finding born in evidence — the Contribution endpoint
+# `supports` (FG-2) now also accepts a Contribution source so a Contribution materialized in the
+# method section (e.g. one stating a proven theorem) can `supports` the result-Finding born in
+# evidence — the Contribution endpoint
 # is a census node visible to the evidence call, so it stays a stage-C edge.
 STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates", "builds_on", "uses",
                      "co_contribution"}
@@ -401,8 +404,8 @@ ALLOWED_FIELDS_BY_TYPE: dict[str, set[str]] = {
     "Problem": {"id", "type", "description", "provenance"},
     # Contribution = the paper's root deliverable (was a Method with role contribution, an
     # ExperimentSetup with role resource, or a Finding root). `kind` (method/dataset/benchmark/
-    # theory/finding) is the artifact axis; `method_kind` is the OPTIONAL finer structural descriptor
-    # under kind method/theory. Algorithm-form fields (inputs/outputs/formulas) carry on kind=method.
+    # finding) is the artifact axis; `method_kind` is the OPTIONAL finer structural descriptor
+    # under kind method. Algorithm-form fields (inputs/outputs/formulas) carry on kind=method.
     "Contribution": {
         "id",
         "type",

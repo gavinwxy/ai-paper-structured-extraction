@@ -90,11 +90,10 @@
               "method",
               "dataset",
               "benchmark",
-              "theory",
               "finding",
               "task"
             ],
-            "description": "REQUIRED on a Contribution (method/dataset/benchmark/theory/finding \u2014 what the deliverable IS) and on an ExperimentSetup (dataset/benchmark/task). OMIT on Component, Measure, and Problem (they are single-level)."
+            "description": "REQUIRED on a Contribution (method/dataset/benchmark/finding \u2014 what the deliverable IS) and on an ExperimentSetup (dataset/benchmark/task). OMIT on Component, Measure, and Problem (they are single-level)."
           },
           "name": {
             "type": "string",
