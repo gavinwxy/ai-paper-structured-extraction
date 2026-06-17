@@ -10,6 +10,23 @@
 
 ---
 
+## evidence 提示词瘦身：流水线化重排 + 密度 −16.3%（A/B 无回归）
+
+**日期**：2026-06-17　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+把 evidence 抽取模块从"百科式规范"改写为"流水线式操作手册"，在**逐字保留所有硬约束**前提下削掉散文/重复：
+- 新增显式 **五阶段 `## Procedure`** signpost（① 物化 census → ② 逐表三分类 skip/ablation/main_result
+  → ③ 补漏未被表覆盖的 measure → ④ 扫 prose/figure/limitations 出 findings → ⑤ 仅写 Finding-centric
+  关系 + 终检），把原先埋在长句里的"两轮 sweep"提到台面；逐表决策压成三选一。
+- `## Units` 字段定义由散文段改祈使式短句；dataset/benchmark-root 特例去重为单处 + 指针；
+  `## What to extract` 4→2 条、`## Anti-patterns` 去掉论证尾巴（保留 6 条护栏）。
+- **−16.3% 密度**（~8,170→~6,840 tok）；25 条被回归测试钉死的既往 A/B 胜出措辞**逐字保留**。
+- **A/B**（qwen3.5-35b-a3b thinkOFF，10 篇 benchmark，固定 census，复刻 worker 的 `build_table_index`
+  Source-table index 装配，单一变量=提示词）：10/10 valid；核心规则错误全部持平或 0（main-empty 3→3
+  系 028 单篇固有、两臂一致；ablation-非空 0、禁止结构边 0、Finding→Measure 0），headline→root 每篇均锚定。
+  召回**上升**：measures +19%、findings +13%（failure_mode +2）、registry 缺失 −4；completion +15.5%
+  （抽得更全→输出更多）。结论：无回归、净正向（本地 `tests/_qwen_evidence_ab_thinkOFF/RESULTS.md`）。
+
 ## section-ir-0.17 — 类型系统重构：type 为主、role→kind、Method 拆分为 Contribution + Component
 
 **日期**：2026-06-17　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`　**未提交**
