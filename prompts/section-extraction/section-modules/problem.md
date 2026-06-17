@@ -10,7 +10,7 @@ Only `Problem` units (array `problems`). **Typically exactly one** — the singl
 
 ### Problem — the research problem
 Fields: `description`.
-- `description`: one or two assertive sentences naming the problem. Be specific — *what* is unsolved, in *what* task or setting, and *why* existing approaches fall short. Fold the necessary background straight into this prose; do not spin background, motivation, or assumptions out into separate units. Carry the paper's real task names and the concrete limitation, not a vague restatement.
+- `description`: be specific — *what* is unsolved, in *what* task or setting, and *why* existing approaches fall short. Fold the necessary background straight into this prose; do not spin background, motivation, or assumptions out into separate units. Carry the paper's real task names and the concrete limitation, not a vague restatement.
 
 ## Relations
 

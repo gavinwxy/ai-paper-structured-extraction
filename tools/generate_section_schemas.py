@@ -693,8 +693,8 @@ def relation_pass_schema() -> dict[str, Any]:
                             "type": "string",
                             "enum": STAGE_B_RELATION_ORDER,
                             "description": (
-                                "One of the six structural relation types — semantics and "
-                                "direction rules are defined in the system prompt."
+                                "One of the four structural relation types — semantics and the "
+                                "lexical-ordering direction rule for symmetric edges are defined in the system prompt."
                             ),
                         },
                         "target_id": id_schema("Target node id"),

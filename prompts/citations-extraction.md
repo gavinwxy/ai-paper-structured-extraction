@@ -2,15 +2,7 @@
 
 Classify how THIS paper relates to each prior work it cites — a paper-level outward relation profile.
 
-> **Architecture axis** (section-ir-0.16; see `docs/extraction-axis.md`): this single census-blind
-> pass replaces the old references + external-methods sidecars. It scans the full paper and emits,
-> per cited work this paper has a substantive relationship with, only its `cite_key`, the relation
-> `role(s)` from the seven-role taxonomy below, and the verbatim `signal` span that states each
-> relation. Relations are **paper-level**: the source is the paper as a whole, NOT any internal
-> unit — this pass mints no nodes and draws no internal-unit↔external edges. A separate
-> reference-metadata pass resolves each `cite_key` to its bibliography entry; the verbatim reference
-> blob (code-sliced) is the display backstop for every reference, including the `background` ones
-> this pass skips.
+> Axis: this is the **paper-level citation layer** — it classifies how the paper relates to external prior work, keyed by `cite_key`, minting no nodes and drawing no internal-unit edges. A separate reference-metadata pass resolves each `cite_key` to its bibliography entry; the verbatim reference blob is the display backstop for every reference, including the `background` ones this pass skips. See `docs/extraction-axis.md` (canonical).
 
 ## System Prompt
 

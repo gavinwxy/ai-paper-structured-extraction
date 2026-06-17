@@ -3,7 +3,7 @@
   "title": "Citation Relations Output",
   "required": ["citations"],
   "additionalProperties": false,
-  "description": "section-ir-0.16 paper-level citation-relation layer: how THIS paper relates to the prior work it cites. Per cited work, only the in-text cite_key and the relation role(s) with their verbatim evidence span. Source is the paper as a whole — no nodes, no internal-unit edges. Bibliographic metadata is resolved separately by the reference-metadata pass; background/apparatus citations are skipped (they stay in the verbatim reference blob).",
+  "description": "Paper-level citation-relation layer: how THIS paper relates to the prior work it cites. Per cited work, only the in-text cite_key and the relation role(s) with their verbatim evidence span. Source is the paper as a whole — no nodes, no internal-unit edges. Bibliographic metadata is resolved separately by the reference-metadata pass; background/apparatus citations are skipped (they stay in the verbatim reference blob).",
   "properties": {
     "citations": {
       "type": "array",
@@ -18,7 +18,7 @@
           },
           "relations": {
             "type": "array",
-            "description": "One or more relations THIS paper has with the cited work. Multiple when the same work plays multiple roles (e.g. both builds_on and compares_to).",
+            "description": "One or more relations THIS paper has with the cited work. Multiple when the same work plays multiple roles (e.g. both builds_on and compares_with).",
             "items": {
               "type": "object",
               "required": ["role", "signal"],
@@ -31,7 +31,7 @@
                 },
                 "signal": {
                   "type": "string",
-                  "description": "A short VERBATIM span from the paper stating this relation with THIS PAPER AS THE ACTOR (a lineage clause for builds_on; a dependency clause for uses; a comparison sentence or table caption/row label for compares_to). A required gate: if no qualifying span can be quoted, do not emit this role."
+                  "description": "A short VERBATIM span from the paper stating this relation with THIS PAPER AS THE ACTOR (a lineage clause for builds_on; a dependency clause for uses; a comparison sentence or table caption/row label for compares_with). A required gate: if no qualifying span can be quoted, do not emit this role."
                 }
               }
             }

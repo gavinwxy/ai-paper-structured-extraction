@@ -33,7 +33,7 @@
               "compares_to",
               "evaluates"
             ],
-            "description": "One of the six structural relation types \u2014 semantics and direction rules are defined in the system prompt."
+            "description": "One of the four structural relation types \u2014 semantics and the lexical-ordering direction rule for symmetric edges are defined in the system prompt."
           },
           "target_id": {
             "type": "string",

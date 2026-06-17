@@ -6,12 +6,7 @@ type requires it, a `kind`) and no relations (relations are established in stage
 node set in view). The type fixes the node's id-prefix downstream and is carried onto the final
 unit.
 
-> Architecture axis (see `docs/extraction-axis.md`): the census is the internal node inventory —
-> the paper's own nodes (`Contribution` / `Component` / `Problem` / `Measure`) plus the evaluation
-> frame it runs on (`ExperimentSetup`: dataset / benchmark / task). It does not census the external
-> prior-art methods the paper builds on, uses, or compares against; those are captured paper-level
-> by the citation layer (`prompts/citations-extraction.md`), keyed by cite_key, with no
-> internal-unit edges.
+> Axis: this pass is the **internal** node census — the paper's own nodes (`Contribution` / `Component` / `Problem` / `Measure`) plus its evaluation frame (`ExperimentSetup`). The paper's relations to external prior work live in the citation layer (`prompts/citations-extraction.md`). See `docs/extraction-axis.md` (canonical).
 
 ## System Prompt
 
