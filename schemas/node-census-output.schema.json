@@ -62,8 +62,8 @@
           "node_id",
           "type",
           "name",
-          "gloss",
-          "source_scope",
+          "description",
+          "provenance",
           "cite_keys"
         ],
         "additionalProperties": false,
@@ -99,11 +99,11 @@
             "type": "string",
             "description": "Short name of the node as the paper refers to it"
           },
-          "gloss": {
+          "description": {
             "type": "string",
             "description": "One short phrase stating what the node intrinsically IS \u2014 not how it relates to any other node (no 'used by', 'part of', 'improves', 'evaluated on'); relations are the next pass's job."
           },
-          "source_scope": {
+          "provenance": {
             "type": "array",
             "items": {
               "type": "string"

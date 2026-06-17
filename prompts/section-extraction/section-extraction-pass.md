@@ -14,7 +14,7 @@ You are a scientific knowledge extraction system. This is stage C of a three-sta
 You receive:
 - `paper`: the full paper text
 - `spine_summary`: global contribution and argument-flow context from the census
-- `node_registry`: every census node (id, type, name, gloss, and a `kind` on Contribution/ExperimentSetup nodes; `type: Contribution` marks the paper's root deliverable), so you can reference any node by id
+- `node_registry`: every census node (id, type, name, description, and a `kind` on Contribution/ExperimentSetup nodes; `type: Contribution` marks the paper's root deliverable), so you can reference any node by id
 - `relations`: the global structural edges already established — already done, do not restate them
 - `section_focus`: the complete contract for the current section — its allowed unit types and their fields, the controlled vocabularies it uses, the relations it may author, a worked example, and section-specific rules
 

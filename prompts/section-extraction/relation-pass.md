@@ -30,10 +30,10 @@ You emit only these four structural relation types:
 |---|---|---|
 | `part_of` | Component → Contribution | the source is an **internal** sub-module of the target (e.g. an attention sub-layer is part_of the architecture) — reserve it for the paper's own composition |
 | `co_contribution` | Contribution → Contribution | two **co-equal contributions of the same paper** — neither contains the other (e.g. a paper that delivers both a new method and a new benchmark, or two independent algorithms presented as joint primary results). Use this instead of falsely making one `part_of` the other; emit it **once** per pair |
-| `compares_to` | {Contribution,Component,ExperimentSetup,Measure} → same | two interchangeable peers **of the paper's own** that it contrasts (variant vs variant, dataset vs dataset, measure vs measure) |
+| `compares_to` | {Contribution,Component,ExperimentSetup,Measure} → {same set} | two of the paper's **own** nodes it explicitly contrasts — usually same-type peers (variant vs variant, dataset vs dataset, measure vs measure); a Contribution↔Component contrast is allowed only for an ablated component vs the full model |
 | `evaluates` | Measure → {Contribution,Component} | the measure's primary subject is that deliverable — the `Contribution` it validates or the `Component` an ablation isolates |
 
-A measure binds to the dataset/split it was computed on **not** here, but in the evidence stage via each score row's `setup_id` — so emit no measure→dataset edge. Do not emit `about` or `supports` — authored later during content extraction. The node list may contain one `prb:` node (the research problem): give it NO edge in this pass — the problem's `motivates` edge, and any Findings' edges, are authored later during content extraction (Findings are not census nodes). Every edge you emit connects `con:`/`cmp:`/`exp:`/`mea:` nodes only.
+A measure binds to the dataset/split it was computed on **not** here, but in the evidence stage via each score row's `setup_id` — so emit no measure→dataset edge. Do not emit `about` or `supports` — authored later during content extraction. The node list may contain one `prb:` node (the research problem): give it NO edge in this pass — the problem's `motivates` edge is authored later, as are the edges of any content-fill `Finding` units (born during content extraction, not in the census). Note that a `Contribution` whose `kind` is `finding` — an analysis paper's result-as-deliverable — IS a Contribution node here and takes edges normally (e.g. a `Measure` `evaluates` it). Every edge you emit connects `con:`/`cmp:`/`exp:`/`mea:` nodes only.
 
 ---
 
@@ -41,11 +41,11 @@ A measure binds to the dataset/split it was computed on **not** here, but in the
 
 - Use only relationships the paper's text supports. Do not infer a composition or an evaluation target just because it seems plausible.
 - `part_of`: connect each `Component` to the `Contribution` it belongs to. Connect every component you can — there are no section boundaries here, so a component never gets stranded from its parent. `part_of` is for the paper's **own** internal composition only. **Two sibling variants** of one idea — alternatives where neither is a sub-module of the other (e.g. UCB-N and UCB-MaxN, or "Method Two" and "Method Three") — are **not** `part_of` each other: relate them with `compares_to` (interchangeable peers), or `co_contribution` if the census tagged both as Contributions. Reserve `part_of` for genuine whole/part nesting.
-- `evaluates`: emit exactly one `evaluates` per Measure, targeting the most specific of the paper's OWN deliverables (the `Contribution`, or the `Component` an ablation isolates). Emit a second only when the paper reports that same measure as a primary result for two of its own systems. (In the rare case a Measure judges none of the paper's own deliverables, emit no `evaluates` edge for it.)
+- `evaluates`: bind each Measure to the OWN deliverable it evaluates, preferring the most specific **correct** subject — a `Component` when the paper reports that measure as the evaluation of that component (a per-stage or per-module result, **or** an ablation that isolates it), otherwise the root `Contribution`. Do **not** push a whole-system metric (overall task accuracy, end-to-end return) onto a sub-component just because the component exists — that belongs on the root. Usually one edge per Measure; emit more than one only when the paper reports that same measure as a primary result for several of its own systems, and none when the Measure judges no own deliverable (it scores only external baselines).
 - `co_contribution`: emit it only for the co-equal roots the census actually tagged — **two or more `Contribution` nodes**. Most papers have a single root and need none.
-- `compares_to`: emit it for an explicit peer contrast between the paper's OWN nodes — two model variants, two datasets, or two measures the paper places side by side (e.g. an ablation variant vs the full model, or a sibling variant vs another). Do **not** emit it toward a cited external baseline — the paper's comparison to prior art lives in the citation layer, not here.
+- `compares_to`: emit it only for an **explicit** peer contrast between the paper's OWN nodes — two model variants, two datasets, or two measures the paper directly sets against each other as alternatives (e.g. an ablated component vs the full model, or a sibling variant vs another). Routine side-by-side reporting of several datasets or metrics is **not** a contrast — emit nothing unless the paper explicitly frames them as competing alternatives. Do **not** emit it toward a cited external baseline — the paper's comparison to prior art lives in the citation layer, not here.
 - Provenance is light but encouraged: cite the `§N` marker(s) supporting the edge when you can, else use an empty array.
-- Emit each edge once. Do not duplicate an edge or emit both directions of an asymmetric relation.
+- Emit each edge once. The symmetric relations (`co_contribution`, `compares_to`) have no inherent direction — emit a single edge per pair, ordering the two ids so the lexically smaller `node_id` is the `source_id`, and never emit both directions.
 
 ---
 
@@ -59,9 +59,9 @@ Return a single JSON object:
      "provenance": ["§3"]},
     {"source_id": "mea:bleu", "relation": "evaluates", "target_id": "con:transformer",
      "provenance": ["§6"]},
-    {"source_id": "con:full_model", "relation": "compares_to", "target_id": "cmp:ablation_variant",
+    {"source_id": "cmp:ablation_variant", "relation": "compares_to", "target_id": "con:full_model",
      "provenance": ["§6"]},
-    {"source_id": "cmp:sinusoidal_pe", "relation": "compares_to", "target_id": "cmp:learned_pe",
+    {"source_id": "cmp:learned_pe", "relation": "compares_to", "target_id": "cmp:sinusoidal_pe",
      "provenance": ["§3"]}
   ]
 }
@@ -80,7 +80,7 @@ Establish the structural relations between the nodes below, using the paper as e
 {{nodes_json}}
 </nodes>
 
-Emit only structural edges (part_of, co_contribution, compares_to, evaluates) between the given node_ids. Connect components to their parent contribution with part_of, link two co-equal contributions of the paper with co_contribution (not fake part_of), relate the paper's own peer variants with compares_to, and measures to the contributions/components they evaluate. Do not invent nodes, and give any `prb:` node NO edge (its links are authored later); do not bind measures to datasets here (that is the score row's setup_id in the evidence stage).
+Emit only the four structural edges (part_of, co_contribution, compares_to, evaluates) between the given node_ids, following the rules above. Do not invent nodes; give any `prb:` node NO edge (its links are authored later); and bind no Measure to a dataset here (that is the score row's setup_id in the evidence stage).
 
 Output a single JSON object with key: relations.
 ```

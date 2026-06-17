@@ -29,8 +29,6 @@
             "type": "string",
             "enum": [
               "part_of",
-              "builds_on",
-              "uses",
               "co_contribution",
               "compares_to",
               "evaluates"

@@ -2,7 +2,7 @@ SECTION FOCUS: problem
 
 This section opens the paper's discovery arc: it states the **research problem** — the unresolved question or unmet need the work addresses. It is the premise that makes the contribution necessary and intelligible, and the thing the evidence will ultimately resolve.
 
-The census plans the research problem as a `prb:` node (type `Problem`) in `node_registry`; this section **materializes** it — write the Problem unit with **that exact `prb:` id** (its census `name`/`gloss` are the handle; you author the full `description` here from the paper). If the registry carries no `Problem` node (the census missed it), create the Problem yourself with a fresh `prb:` id — the problem must exist either way. Choose `anchor_id` from the Problem unit. This section authors one edge type, `motivates` (see Relations).
+The census plans the research problem as a `prb:` node (type `Problem`) in `node_registry`; this section **materializes** it — write the Problem unit with **that exact `prb:` id** (its census `name`/`description` are the handle; you author the full `description` here from the paper). If the registry carries no `Problem` node (the census missed it), create the Problem yourself with a fresh `prb:` id — the problem must exist either way. Choose `anchor_id` from the Problem unit. This section authors one edge type, `motivates` (see Relations).
 
 ## Units you may define
 

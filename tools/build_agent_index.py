@@ -291,20 +291,20 @@ def build_catalog_row(
     }
 
 
-def _card_text(unit: dict[str, Any], gloss: str | None) -> str:
+def _card_text(unit: dict[str, Any], census_description: str | None) -> str:
     utype = unit.get("type")
     if utype == "Problem":
-        return unit.get("description") or gloss or ""
+        return unit.get("description") or census_description or ""
     if utype == "Finding":
         text = unit.get("statement") or ""
         effect = unit.get("effect_size")
         return f"{text} (effect: {effect})" if effect else text
     if utype == "Measure":
-        text = unit.get("headline_result") or gloss or ""
+        text = unit.get("headline_result") or census_description or ""
         unit_label = unit.get("unit")
         return f"{text} [unit: {unit_label}]" if unit_label and unit_label != "unitless" else text
     # Method / ExperimentSetup
-    return unit.get("description") or gloss or ""
+    return unit.get("description") or census_description or ""
 
 
 def build_cards(
@@ -318,9 +318,9 @@ def build_cards(
     for stype, unit in _iter_units(extraction):
         uid = unit.get("id")
         node = nodes.get(uid, {})
-        gloss = node.get("gloss")
+        census_description = node.get("description")
         name = unit.get("name") or node.get("name") or uid
-        text = _card_text(unit, gloss)
+        text = _card_text(unit, census_description)
         aliases = derive_aliases(name)
         # section-ir-0.17: the differentia is `kind` (the per-unit `role` is gone); fall back to
         # the census node's kind, then to type-only when the unit/node carries no kind.
@@ -338,7 +338,7 @@ def build_cards(
             "kind": kind,
             "name": name,
             "text": text,
-            "gloss": gloss,
+            "description": census_description,
             "aliases": aliases,
             "cite_keys": unit.get("cite_keys") or node.get("cite_keys") or [],
             "ref_ids": unit.get("ref_ids") or [],

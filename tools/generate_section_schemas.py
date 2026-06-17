@@ -111,8 +111,7 @@ FINDING_KIND_ORDER = [
 # The census `kind` enum = the kinds emittable in the census (Contribution kinds + substrate kinds);
 # required on a Contribution/ExperimentSetup node, omitted on Component/Measure/Problem.
 CENSUS_KIND_ORDER = ["method", "dataset", "benchmark", "finding", "task"]
-STAGE_B_RELATION_ORDER = ["part_of", "builds_on", "uses", "co_contribution",
-                          "compares_to", "evaluates"]
+STAGE_B_RELATION_ORDER = ["part_of", "co_contribution", "compares_to", "evaluates"]
 # Stage-C edges each content section authors, ordered as they appear in its schema enum.
 # problem authors only `motivates` (Problem -> the census Method/ExperimentSetup it justifies);
 # evidence authors the Finding-centric `about`/`supports`. The closing `resolves` (Finding ->
@@ -624,7 +623,7 @@ def node_census_schema() -> dict[str, Any]:
                 "description": "Flat list of referenceable nodes; node_id is reused verbatim as the final unit id.",
                 "items": {
                     "type": "object",
-                    "required": ["node_id", "type", "name", "gloss", "source_scope", "cite_keys"],
+                    "required": ["node_id", "type", "name", "description", "provenance", "cite_keys"],
                     "additionalProperties": False,
                     "properties": {
                         "node_id": id_schema(
@@ -651,8 +650,8 @@ def node_census_schema() -> dict[str, Any]:
                             "task). OMIT on Component, Measure, and Problem (they are single-level).",
                         ),
                         "name": string_schema("Short name of the node as the paper refers to it"),
-                        "gloss": string_schema("One short phrase stating what the node intrinsically IS — not how it relates to any other node (no 'used by', 'part of', 'improves', 'evaluated on'); relations are the next pass's job."),
-                        "source_scope": string_array_schema("Section markers — the paper's own printed heading number(s) where the node is introduced or defined, e.g. ['§3']; echo them from the text, never fabricate a number the paper does not print."),
+                        "description": string_schema("One short phrase stating what the node intrinsically IS — not how it relates to any other node (no 'used by', 'part of', 'improves', 'evaluated on'); relations are the next pass's job."),
+                        "provenance": string_array_schema("Section markers — the paper's own printed heading number(s) where the node is introduced or defined, e.g. ['§3']; echo them from the text, never fabricate a number the paper does not print."),
                         "cite_keys": string_array_schema(
                             "In-text bibliography citation marker(s) attached to this node, as "
                             "bare keys matching the reference list ('8', not '[8]'; 'vaswani2017' "

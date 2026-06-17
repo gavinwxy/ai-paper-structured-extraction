@@ -364,8 +364,13 @@ RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
 # method section (e.g. one stating a proven theorem) can `supports` the result-Finding born in
 # evidence — the Contribution endpoint
 # is a census node visible to the evidence call, so it stays a stage-C edge.
-STAGE_B_RELATIONS = {"part_of", "compares_to", "evaluates", "builds_on", "uses",
-                     "co_contribution"}
+# Stage B authors only the four INTERNAL structural edges; its LLM schema enum is generated from
+# this set. `builds_on`/`uses` are NOT stage-B-authored — they are reconciled from the citation
+# layer post-hoc (REFERENCE_EDGE_ROLES, origin="reference") and validated via RELATION_MATRIX (which
+# still carries all six), so they stay out of the LLM-emittable enum the relation pass is shown
+# (0.17: the prompt allows exactly these four). This keeps the model from being handed a 6-value
+# enum under a "four relations" prompt.
+STAGE_B_RELATIONS = {"part_of", "co_contribution", "compares_to", "evaluates"}
 STAGE_C_RELATIONS = {"about", "supports", "motivates"}
 SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
@@ -1487,21 +1492,21 @@ def validate_census(census: dict[str, Any]) -> list[str]:
             or any(not isinstance(key, str) for key in cite_keys)
         ):
             issues.append(f"Census node {label} cite_keys must be a list of strings")
-        # name/gloss/source_scope are schema-required on every node. Strict decoding enforces them
+        # name/description/provenance are schema-required on every node. Strict decoding enforces them
         # in json_schema mode, but json_object (DeepSeek) mode treats the schema as prompt guidance
         # only, so the stage-A contract must check them here. `name` is the reconcile join key and
         # the materialized unit's name, so an empty one is a hard defect.
         name = node.get("name")
         if not isinstance(name, str) or not name.strip():
             issues.append(f"Census node {label} must have a non-empty name")
-        gloss = node.get("gloss")
-        if not isinstance(gloss, str) or not gloss.strip():
-            issues.append(f"Census node {label} must have a non-empty gloss")
-        source_scope = node.get("source_scope")
-        if not isinstance(source_scope, list) or any(
-            not isinstance(marker, str) for marker in source_scope
+        description = node.get("description")
+        if not isinstance(description, str) or not description.strip():
+            issues.append(f"Census node {label} must have a non-empty description")
+        provenance = node.get("provenance")
+        if not isinstance(provenance, list) or any(
+            not isinstance(marker, str) for marker in provenance
         ):
-            issues.append(f"Census node {label} source_scope must be a list of strings")
+            issues.append(f"Census node {label} provenance must be a list of strings")
         if node_type == "Contribution":
             contribution_count += 1
 
@@ -1521,7 +1526,7 @@ def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
     """Build the lightweight all-node registry passed to the relation and content stages.
 
     Carries what later stages need to reference and route a node: id, type, the `kind` sub-axis
-    (on Contribution/ExperimentSetup), name, gloss, and the search `cluster`. The type lets the
+    (on Contribution/ExperimentSetup), name, description, and the search `cluster`. The type lets the
     relation pass route edges (a Component is part_of a Contribution) and the content stage find
     the contribution. type/kind are carried straight onto the materialized unit.
     """
@@ -1533,7 +1538,7 @@ def build_node_registry(census: dict[str, Any]) -> list[dict[str, Any]]:
             "type": node_type,
             "cluster": TYPE_CLUSTER.get(node_type, ""),
             "name": node.get("name", ""),
-            "gloss": node.get("gloss", ""),
+            "description": node.get("description", ""),
         }
         kind = node.get("kind")
         if kind:
@@ -1687,7 +1692,7 @@ def build_document_unit(
 # RF-11-lite (agent-readiness): the §N namespace legend embedded in every extraction's notes and
 # reused verbatim by the retrofit tool (tools/build_agent_index.py) for older corpora.
 MARKER_NAMESPACES: dict[str, str] = {
-    "01_census.json:nodes[].source_scope": (
+    "01_census.json:nodes[].provenance": (
         "author_section_label — LLM-echoed paper heading numbers (e.g. §4.2); "
         "display-only, NOT resolvable against extraction_notes.source_tables"
     ),
@@ -1799,7 +1804,7 @@ def build_output_manifest(
         "ir_version": IR_VERSION,
         "files": {
             "01_census.json": (
-                "stage-A skeleton: nodes[] (node_id/role/name/gloss/cite_keys) + "
+                "stage-A skeleton: nodes[] (node_id/role/name/description/cite_keys) + "
                 "spine_summary {central_contribution, argument_flow, headline_result}. Best "
                 "small first read (~9KB), but NOT complete — the content pass materializes "
                 "additional units (e.g. ExperimentSetups) that only exist in 06"
@@ -1859,8 +1864,8 @@ def build_output_manifest(
                 else "disabled for this run: 03_references.json is the full transcription"
             ),
             "marker_namespaces": (
-                "two §N namespaces collide: census source_scope = LLM-echoed paper heading labels "
-                "(display-only); 06 provenance/source_table_marker = machine [§N] chunk ids (only "
+                "two §N namespaces collide: census nodes[].provenance = LLM-echoed paper heading labels "
+                "(display-only); 06 units[].provenance/source_table_marker = machine [§N] chunk ids (only "
                 "ids present in extraction_notes.source_tables resolve to text). See "
                 "extraction_notes.marker_namespaces"
             ),
