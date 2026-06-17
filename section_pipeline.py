@@ -73,6 +73,11 @@ APPENDIX_SPELLED_RE = re.compile(r"^App(?:endix)?\.?\s+([A-Za-z])(?![A-Za-z])")
 # A lettered appendix with a glued (separatorless) subsection number — §A4.2, §B3, §G2 — collapses
 # to its §X parent, exactly as the dotted/hyphenated forms do (the digit starts the subsection).
 APPENDIX_NUMBERED_RE = re.compile(r"^§([A-Za-z]+)\d")
+# A bare appendix locator the model emitted WITHOUT its § ("B", "B.2", "C-1", "b.2") — a single
+# leading letter, optionally followed by .-/-separated subsections. Reattached to its §X parent in
+# _normalize_provenance_markers, exactly as the §-prefixed appendix forms collapse. Multi-letter
+# float words ("Table 3", "Figure 5") never match (the second char is not a . / - separator).
+BARE_APPENDIX_RE = re.compile(r"^([A-Za-z])(?:[.\-]\w+)*$")
 # P4 source-of-truth capture: every inline <table> blob is sliced verbatim (deterministically, no
 # parser) into extraction_notes.source_tables, a dict keyed by the §N block that contains the table
 # (the same `[§N]` marker the evidence pass references) carrying that block's **Table k** caption.
@@ -1184,6 +1189,9 @@ def _normalize_provenance_markers(
                 appendix = APPENDIX_SPELLED_RE.match(stripped)
                 numbered = APPENDIX_NUMBERED_RE.match(stripped)
                 subsection = SUBSECTION_MARKER_RE.match(stripped)
+                bare_appendix = (
+                    BARE_APPENDIX_RE.match(stripped) if not stripped.startswith("§") else None
+                )
                 if stripped.startswith("§") and PROVENANCE_SOURCE_RE.match(stripped[1:].strip()):
                     # A stray § glued to a float word (§Table 3, §Figure 2 (a)): drop the § so
                     # the bare float — itself a valid marker — is what remains.
@@ -1194,6 +1202,10 @@ def _normalize_provenance_markers(
                     new_marker = f"§{numbered.group(1)}"
                 elif subsection:
                     new_marker = f"§{subsection.group(1)}"
+                elif bare_appendix:
+                    # A bare appendix locator emitted without its § ("B.2", "B") -> its §X parent,
+                    # so it passes the §N-format check instead of being flagged as a non-marker.
+                    new_marker = f"§{bare_appendix.group(1).upper()}"
                 if new_marker is not None and new_marker != marker:
                     if marker not in seen:
                         seen.add(marker)
@@ -2158,6 +2170,42 @@ def _sanitize_unit_ids(
     return warnings
 
 
+def _drop_dangling_source_table_markers(
+    sections: list[dict[str, Any]], paper_content: str
+) -> list[str]:
+    """Strip a Measure's ``source_table_marker``/``caption_marker`` when it resolves to no captured
+    ``<table>`` blob.
+
+    The evidence pass must point ``source_table_marker`` at a verbatim ``<table>`` block; on papers
+    whose ablation/efficiency results appear as a FIGURE (a curve, an image) the model sometimes
+    points at the figure block instead. That marker keys into nothing in
+    ``extraction_notes.source_tables``, so the renderer cannot attach a blob and validation flags it.
+    Drop it here — BEFORE ``_drop_empty_scores_measures`` — so the measure degrades cleanly: a
+    marker-backed empty-scores ablation becomes a plain empty/markerless measure, which the empty-
+    measure drop then removes per the usual policy (its figure conclusion already lives as a Finding).
+    Mirrors the validator's resolution check (``_canon_marker`` vs the source_tables keys) and keeps
+    the invariant that every surviving Measure has scores or a resolvable marker.
+    """
+    captured = set(_slice_source_tables(paper_content))
+    warnings: list[str] = []
+    for section in sections:
+        units = section.get("units")
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if not isinstance(unit, dict) or unit.get("type") != "Measure":
+                continue
+            marker = unit.get("source_table_marker")
+            if isinstance(marker, str) and marker and _canon_marker(marker) not in captured:
+                unit.pop("source_table_marker", None)
+                unit.pop("caption_marker", None)
+                warnings.append(
+                    f"Measure {unit.get('id')!r} source_table_marker {marker!r} resolves to no "
+                    "captured <table> (likely a figure) — dropped marker, degraded to figure/prose mode"
+                )
+    return warnings
+
+
 def _drop_empty_scores_measures(
     sections: list[dict[str, Any]], dropped_out: list[dict[str, str]] | None = None
 ) -> list[str]:
@@ -2496,6 +2544,10 @@ def _repair_unit_enums(sections: list[dict[str, Any]]) -> list[str]:
     - ``Finding.kind`` is REQUIRED (it has a vocab), so it is coerced, never dropped: when the bad
       value is actually a polarity word and the polarity slot is free it is *moved* there and ``kind``
       floored to ``descriptive``; otherwise ``kind`` is floored to ``descriptive`` outright.
+    - ``Contribution.kind`` is REQUIRED with a vocab too, so it is likewise coerced: a retired /
+      out-of-vocab value is floored to ``method``, and when it is actually a ``method_kind`` value
+      (0.17 retired ``resource``/``taxonomy``/... as kinds — they are method_kind sub-tags now) and
+      the ``method_kind`` slot is free, it is *moved* there rather than discarded.
     """
     warnings: list[str] = []
 
@@ -2530,6 +2582,22 @@ def _repair_unit_enums(sections: list[dict[str, Any]]) -> list[str]:
                         warnings.append(f"Finding {uid} coerced invalid kind {kind!r} -> descriptive")
                 _drop_invalid_optional(unit, "polarity", FINDING_POLARITIES, "Finding", uid)
             elif utype in METHOD_FAMILY_TYPES:
+                if utype == "Contribution":
+                    kind = unit.get("kind")
+                    if kind is not None and kind not in CONTRIBUTION_KINDS:
+                        # The common slip is a method_kind value (resource/taxonomy/theorem/...) in
+                        # the `kind` slot — 0.17 retired those as kinds. Floor kind to method and,
+                        # when the bad value is a real method_kind and the slot is free, salvage it.
+                        if kind in METHOD_KINDS and not unit.get("method_kind"):
+                            unit["method_kind"] = kind
+                            warnings.append(
+                                f"Contribution {uid} kind {kind!r} moved to method_kind; kind -> method"
+                            )
+                        else:
+                            warnings.append(
+                                f"Contribution {uid} coerced invalid kind {kind!r} -> method"
+                            )
+                        unit["kind"] = "method"
                 _drop_invalid_optional(unit, "method_kind", METHOD_KINDS, utype, uid)
             elif utype == "Measure":
                 _drop_invalid_optional(
@@ -3377,6 +3445,10 @@ def assemble_extraction(
     # Drop dataless Measures before section/anchor repair: a section emptied by the drop is then
     # caught by _drop_empty_sections, and a section that anchored on the dropped measure is
     # re-pointed by _repair_section_anchors instead of being left with a dangling anchor_id.
+    # A source_table_marker pointing at a figure / non-<table> block resolves to no captured blob;
+    # strip it (before the empty-measure drop) so the measure degrades to figure/prose mode rather
+    # than carrying a dangling table pointer the renderer can't attach.
+    assembly_warnings.extend(_drop_dangling_source_table_markers(sections, paper_content))
     dropped_measures: list[dict[str, str]] = []
     assembly_warnings.extend(_drop_empty_scores_measures(sections, dropped_measures))
     assembly_warnings.extend(_warn_duplicate_score_rows(sections))
