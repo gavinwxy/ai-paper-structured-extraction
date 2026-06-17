@@ -29,7 +29,7 @@ Emit the paper's own nodes (its contribution and its parts, its research problem
 The following are never nodes. This is the one canonical exclusion; every section below assumes it.
 
 - Prior-art and external methods. Any model, system, or technique the paper builds on, uses as a backbone or base model, or compares against (for example, "based on CLIP/LLaMA/SAM/ViT"). The paper-level citation layer captures the paper's relation to prior work; none of it becomes an internal node. Census a named model only when it is the paper's own Contribution or a Component of it. If the paper adapts an external model, census only the new part it authored, not the original.
-- Apparatus. Hardware (GPUs, TPUs), libraries, and any model used only to compute a metric. Record a scoring model in the metric's gloss ("cosine similarity between CLIP embeddings") rather than as a node.
+- Apparatus. Hardware (GPUs, TPUs), libraries, and any model used only to compute a metric. Record a scoring model in the metric's description ("cosine similarity between CLIP embeddings") rather than as a node.
 - Experiment configurations (splits, protocols, ensembling) and findings. These are created later during content fill. (The analysis-paper deliverable is not an exception: when a paper's whole result IS its deliverable, census it as a Contribution of kind=finding — see below — not as a content-fill Finding.)
 - Duplicate evaluation-frame nodes. Census a benchmark family once, under its strongest variant.
 
@@ -42,7 +42,7 @@ Every node takes exactly one `type`, and the type fixes its id-prefix. A Contrib
 - `Contribution` (con:) — the paper's own root deliverable. Set `kind` by what it is:
   - `method` — an algorithm, technique, architecture, model, or system; the default. A non-data deliverable such as a taxonomy, atlas, or software library is also kind=method.
   - `dataset` / `benchmark` — used when the primary deliverable is itself a dataset or benchmark the paper releases. The paper's scores attach to it directly; do not also emit a kind=method Contribution or a duplicate dataset/benchmark ExperimentSetup for the same artifact.
-  - `finding` — used when the deliverable is a result, not an artifact: an analysis, empirical-study, or mechanistic paper that answers a question ("is X the bottleneck?", "why does Y happen?") and proposes no novel method, model, dataset, or benchmark. State the finding itself as the node (a short `name` handle, and the finding in one phrase as the `gloss`). Census the data as evaluation frame, and as `Component` only named, reusable analysis components such as a probing protocol or a diagnostic framework. Do not invent a placeholder "X Analysis", "X Study", or "X Framework" method as a stand-in root; when uncertain, prefer kind=method.
+  - `finding` — used when the deliverable is a result, not an artifact: an analysis, empirical-study, or mechanistic paper that answers a question ("is X the bottleneck?", "why does Y happen?") and proposes no novel method, model, dataset, or benchmark. State the finding itself as the node (a short `name` handle, and the finding in one phrase as the `description`). Census the data as evaluation frame, and as `Component` only named, reusable analysis components such as a probing protocol or a diagnostic framework. Do not invent a placeholder "X Analysis", "X Study", or "X Framework" method as a stand-in root; when uncertain, prefer kind=method.
   - A few papers deliver two co-equal contributions that neither contains, for example a method and a benchmark released together; tag each as its own `Contribution` with its own `kind`, to be linked later by `co_contribution`. A sub-module, a refined variant, or a dataset the method merely runs on is not co-equal; when uncertain, use a single Contribution.
 - `Component` (cmp:) — a named, method-defining part of the contribution (a module, layer, loss, or training step) that is separately explained, ablated, or required to reproduce the method. Single-level: no kind. Generic implementation details (Adam, the learning-rate schedule, dropout, residual connections) are not components unless the paper's novelty lies in them.
 
@@ -50,10 +50,10 @@ Every node takes exactly one `type`, and the type fixes its id-prefix. A Contrib
 
 - `ExperimentSetup` (exp:) — the evaluation frame the work runs on. Set `kind` by what it is:
   - `dataset` — data the method is trained or evaluated on (a plain corpus).
-  - `benchmark` — a standardized dataset and protocol with named splits, tasks, or a leaderboard (GLUE, MMLU, WMT 2014). Use kind=dataset for a plain training corpus; when uncertain, follow the paper's framing.
+  - `benchmark` — a named, standardized evaluation suite the community cites by name, with fixed splits, a protocol, tasks, or a leaderboard (GLUE, MMLU, MATH, COCO, ADE20K, WMT 2014, ImageNet). Use `benchmark` for these even when the paper's prose happens to call it a "dataset"; reserve `dataset` for an unstandardized corpus used only as a training or data source with no evaluation protocol of its own.
   - `task` — the problem being solved or evaluated.
-  - (A dataset or benchmark the paper itself releases is a Contribution, not an ExperimentSetup. Use ExperimentSetup only for the substrate the work runs ON.)
-- `Measure` (mea:) — any reported measure or criterion: quality (BLEU, top-1, F1), efficiency or cost (latency, FLOPs, parameter count, memory), robustness, calibration, safety, human preference, win-rate, pass@k, or a theoretical-quality criterion (bound tightness, sample complexity). Qualitative and categorical criteria also count. Single-level: no kind. Emit one node per metric name; do not split per dataset or split, as per-split values are filled in later.
+  - Released-vs-used test, decided once per dataset/benchmark: if the paper INTRODUCES or RELEASES it as a deliverable it is a `Contribution` (kind=dataset/benchmark) and must NOT also be emitted as an ExperimentSetup; if the paper only RUNS ON a pre-existing one it is an `ExperimentSetup`. A paper that releases a dataset and also evaluates on it still emits it once, as the Contribution.
+- `Measure` (mea:) — any reported measure or criterion: quality (BLEU, top-1, F1), efficiency or cost (latency, FLOPs, parameter count, memory), robustness, calibration, safety, human preference, win-rate, pass@k, or a theoretical-quality criterion (bound tightness, sample complexity). Qualitative and categorical criteria also count. Single-level: no kind. Emit one node per metric name; do not split per dataset or split, as per-split values are filled in later. Emit a node for EVERY distinct measure the paper reports — including the efficiency or cost axis when speed or size is part of the paper's claim (a paper that advertises being "efficient" must yield its tokens / FLOPs / latency / parameter-count measures, not only its accuracy).
 
 **the_problem** — what the work addresses.
 
@@ -70,14 +70,14 @@ Distinguish `headline_result` (always a summary annotation) from a kind=finding 
 Extract in this order; it defers the hardest decision, component granularity, until the remaining nodes are settled.
 
 1. Orient. Write `spine_summary` and determine the paper's type.
-2. Decide the root type. Almost always a single `Contribution`; set its `kind` to method (a method or system — or a proven formal result, tagged with method_kind theorem/lemma/bound in the method section), dataset/benchmark (a data deliverable), or finding (a result, with no artifact).
+2. Decide the root type. Almost always a single `Contribution`; set its `kind` to method (a method or system; a proof/theory paper's proven result is also kind=method), dataset/benchmark (a data deliverable), or finding (a result, with no artifact).
 3. Emit the `Problem`, the central unmet need.
 4. Emit the root Contribution node or nodes.
 5. Emit the evaluation frame as `ExperimentSetup` nodes: the kind=task node(s) first, then the kind=dataset or kind=benchmark nodes. Do not emit a prior-art method or external model here, and do not emit a dataset/benchmark the paper itself releases here (that is a Contribution).
 6. Emit the `Measure` nodes, one per metric name.
 7. Emit the `Component` nodes last, now that the rest is fixed. Include only named, method-defining parts of the paper's own contribution, working outward from the most prominent modules.
 8. Boundary audit. Re-scan the list and remove anything outside scope: prior-art and external methods, apparatus, configurations, duplicate evaluation-frame nodes, and any motivation fragment mis-tagged as a second Problem. This step only removes; it adds no node and states no relation.
-9. Return the JSON (`spine_summary`, `nodes[]`). Each `gloss` states what the node intrinsically is, not how it relates to another node. State no relationships; relations are established in the next pass.
+9. Return the JSON (`spine_summary`, `nodes[]`). Each `description` states what the node intrinsically is, not how it relates to another node. State no relationships; relations are established in the next pass.
 
 ## Output
 
@@ -98,8 +98,8 @@ Return a single JSON object, e.g.:
       "node_id": "prb:seq_dependency",
       "type": "Problem",
       "name": "sequential computation bottleneck",
-      "gloss": "recurrence precludes parallelization and weakens long-range dependency learning",
-      "source_scope": ["§1"],
+      "description": "recurrence precludes parallelization and weakens long-range dependency learning",
+      "provenance": ["§1"],
       "cite_keys": []
     },
     {
@@ -107,8 +107,8 @@ Return a single JSON object, e.g.:
       "type": "Contribution",
       "kind": "method",
       "name": "Transformer",
-      "gloss": "attention-only encoder-decoder architecture",
-      "source_scope": ["§3"],
+      "description": "attention-only encoder-decoder architecture",
+      "provenance": ["§3"],
       "cite_keys": []
     },
     {
@@ -116,8 +116,8 @@ Return a single JSON object, e.g.:
       "type": "ExperimentSetup",
       "kind": "task",
       "name": "machine translation",
-      "gloss": "sequence-to-sequence translation between languages",
-      "source_scope": ["§6"],
+      "description": "sequence-to-sequence translation between languages",
+      "provenance": ["§6"],
       "cite_keys": []
     },
     {
@@ -125,24 +125,24 @@ Return a single JSON object, e.g.:
       "type": "ExperimentSetup",
       "kind": "benchmark",
       "name": "WMT 2014 English-German",
-      "gloss": "machine-translation benchmark",
-      "source_scope": ["§6"],
+      "description": "machine-translation benchmark",
+      "provenance": ["§6"],
       "cite_keys": ["41"]
     },
     {
       "node_id": "mea:bleu",
       "type": "Measure",
       "name": "BLEU",
-      "gloss": "machine-translation quality",
-      "source_scope": ["§6"],
+      "description": "machine-translation quality",
+      "provenance": ["§6"],
       "cite_keys": []
     },
     {
       "node_id": "cmp:scaled_dot_product_attention",
       "type": "Component",
       "name": "Scaled Dot-Product Attention",
-      "gloss": "attention weighting scaled by key dimension",
-      "source_scope": ["§3"],
+      "description": "attention weighting scaled by key dimension",
+      "provenance": ["§3"],
       "cite_keys": []
     }
   ]
@@ -158,5 +158,5 @@ Read the following scientific paper and produce the Stage A node census.
 {{paper_content}}
 </paper>
 
-Write `spine_summary` first (determine the paper's type; do not emit a paper_type field), then emit nodes in order: Problem → root Contribution → evaluation frame (ExperimentSetup, kind=task first, then kind=dataset/benchmark) → Measures → Components, and finally run the boundary audit. Tag the root Contribution's `kind` by what the paper delivers: method (a method or system, or a proven formal result — tag the latter with method_kind theorem/lemma/bound), dataset/benchmark (a data deliverable), or finding (a result, with no novel artifact); almost always a single Contribution. Give a `kind` to every Contribution and ExperimentSetup; omit `kind` on Component, Measure, and Problem. Do not state any relationship between nodes; prior-art and external methods, apparatus, and experiment configurations are not nodes, and the citation layer captures the paper's relation to prior work. Output a single JSON object with keys spine_summary and nodes, following the OUTPUT FORMAT CONTRACT.
+Write `spine_summary` first, then emit nodes in this order: Problem → root Contribution → evaluation frame (ExperimentSetup: kind=task first, then dataset/benchmark) → Measures → Components, then run the boundary audit. State no relationship between nodes; prior-art and external methods, apparatus, and experiment configurations are not nodes. Output a single JSON object with keys spine_summary and nodes, following the OUTPUT FORMAT CONTRACT.
 ```
