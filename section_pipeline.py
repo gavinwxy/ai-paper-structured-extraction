@@ -987,6 +987,84 @@ def _reconcile_misrouted_units(
     return warnings
 
 
+_EVAL_FRAME_TRAILING = ("evaluation", "eval", "dataset", "benchmark", "experiments", "experiment")
+
+
+def _drop_eval_frame_contributions(
+    sections: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    census: dict[str, Any] | None,
+) -> list[str]:
+    """Drop a kind=dataset/benchmark Contribution that NAME-duplicates a census ExperimentSetup.
+
+    The evidence pass occasionally mints a fresh `con:<x>_eval` Contribution for a standard evaluation
+    dataset/benchmark the method merely RUNS ON ("CIFAR-10 Evaluation", "ImageNet (IN-1K) Evaluation")
+    even though the census already, authoritatively, typed that artifact as an ExperimentSetup
+    (released-vs-used: a *used* dataset is the eval frame, not a contribution). The mint carries no
+    scores (scores attach to the `exp:` node via `setup_id`) and is a pure duplicate of the eval frame.
+
+    Census typing is authoritative and here it AGREES the artifact is an ExperimentSetup, so this never
+    guesses against the census (cf. `_reconcile_misrouted_units`). Fires only on a bare stub (empty
+    description AND statement) whose normalized name — after stripping a trailing evaluation/eval/
+    dataset/benchmark token — matches a census ExperimentSetup. Drops the stub and re-points any
+    relation endpoint onto the census `exp:` id. Must run before the dedups (FD-5, 2026-06-18)."""
+    if not census:
+        return []
+    exp_by_name: dict[str, str] = {}
+    for node in census.get("nodes", []) or []:
+        if isinstance(node, dict) and node.get("type") == "ExperimentSetup":
+            nm = _normalize_name(node.get("name"))
+            nid = node.get("node_id")
+            if nm and isinstance(nid, str):
+                exp_by_name.setdefault(nm, nid)
+    if not exp_by_name:
+        return []
+
+    def _match(name: Any) -> str | None:
+        nm = _normalize_name(name)
+        if nm in exp_by_name:
+            return exp_by_name[nm]
+        toks = nm.split()
+        while toks and toks[-1] in _EVAL_FRAME_TRAILING:
+            toks.pop()
+        return exp_by_name.get(" ".join(toks)) if toks else None
+
+    warnings: list[str] = []
+    remap: dict[str, str] = {}
+    for section in sections:
+        units = section.get("units")
+        if not isinstance(units, list):
+            continue
+        kept: list[Any] = []
+        for unit in units:
+            if (
+                isinstance(unit, dict)
+                and unit.get("type") == "Contribution"
+                and unit.get("kind") in ("dataset", "benchmark")
+                and not (unit.get("description") or "").strip()
+                and not (unit.get("statement") or "").strip()
+            ):
+                exp_id = _match(unit.get("name"))
+                if exp_id and exp_id != unit.get("id"):
+                    if isinstance(unit.get("id"), str):
+                        remap[unit["id"]] = exp_id
+                    warnings.append(
+                        f"Dropped eval-frame Contribution {unit.get('id')} "
+                        f"(duplicate of census ExperimentSetup {exp_id})"
+                    )
+                    continue
+            kept.append(unit)
+        section["units"] = kept
+    if remap:
+        for rel in relations:
+            if not isinstance(rel, dict):
+                continue
+            for end in ("source_id", "target_id"):
+                if rel.get(end) in remap:
+                    rel[end] = remap[rel[end]]
+    return warnings
+
+
 def _dedup_experiment_setups(
     sections: list[dict[str, Any]],
     relations: list[dict[str, Any]],
@@ -1153,8 +1231,112 @@ def _drop_empty_sections(sections: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
+# A heading line carrying an author section/appendix number: `# 3 Method`, `## 3.1 Setup`,
+# `### 4.2.1 ...`, `# A Appendix`, `## A.2 Details`. Group 1 is the section label (`3`, `3.1`,
+# `4.2.1`, `A`, `A.2`). Bold-line headings (`**3.1 Setup**`) are also matched so papers whose parser
+# drops the `#` still anchor. The label must be followed by whitespace, a dot, or `)` so a bare
+# numeric token that is really a value is not mistaken for a heading number.
+SECTION_HEADING_RE = re.compile(
+    r"(?m)^(?:#{1,6}[ \t]+|\*\*[ \t]*)"
+    r"(\d+(?:\.\d+)*|[A-Z](?:\.\d+)*)"
+    r"(?=[ \t.)]|\*\*|$)"
+)
+# A NAMED heading — `# Abstract`, `# 1 Introduction`, `## 3.1 Approach`, `**Conclusion**` — capturing
+# the heading TEXT (after any leading number/letter label). Lets _build_section_chunk_map resolve a
+# bare textual provenance marker the model sometimes emits ("Abstract", "Introduction") to the chunk
+# that prints under that heading, instead of leaving free-prose that fails validation (FD-1, 2026-06-18).
+NAMED_HEADING_RE = re.compile(
+    r"(?m)^(?:#{1,6}[ \t]+|\*\*[ \t]*)"
+    r"(?:(?:\d+(?:\.\d+)*|[A-Z](?:\.\d+)*)[ \t.]+)?"  # optional label, only if a separator follows
+    r"([A-Za-z][A-Za-z0-9 \t\-/&]*?)"
+    r"[ \t]*(?:\*\*)?[ \t]*$"
+)
+
+
+def _build_section_chunk_map(paper_content: str) -> dict[str, str]:
+    """Map an author section label (`3.1`, `4.2.1`, `a.2`) -> the first input chunk marker `§N`
+    that begins that section.
+
+    The input's `[§N]` markers are SEQUENTIAL block ids, NOT paper section numbers — so a model that
+    cites `§3.1` (meaning paper Section 3.1) must NOT be collapsed to chunk `§3` (which is usually the
+    abstract). Headings (`# 3.1 Setup`) sit between the markers, so the first `[§N]` after a heading
+    is that section's first chunk. This lets _normalize_provenance_markers RESOLVE an author-section
+    label to the correct chunk instead of truncating it into a colliding chunk id (FD-1)."""
+    if not isinstance(paper_content, str) or not paper_content:
+        return {}
+    markers = [(m.start(), m.group(1)) for m in SECTION_MARKER_RE.finditer(paper_content)]
+    if not markers:
+        return {}
+    mp: dict[str, str] = {}
+    for hm in SECTION_HEADING_RE.finditer(paper_content):
+        label = hm.group(1).lower()
+        pos = hm.end()
+        nxt = next((n for (mpos, n) in markers if mpos >= pos), None)
+        if nxt is not None and label not in mp:
+            mp[label] = f"§{nxt}"
+    # Also key named headings ("Abstract", "Introduction", "Related Work") by their normalized text
+    # so a bare textual provenance marker resolves to the heading's first chunk. The keyspace is
+    # disjoint from the numeric labels above (multi-char words vs "3.1"); require >=4 chars to avoid
+    # single-letter/short collisions with appendix labels.
+    for hm in NAMED_HEADING_RE.finditer(paper_content):
+        text = _normalize_name(hm.group(1))
+        if len(text) < 4:
+            continue
+        pos = hm.end()
+        nxt = next((n for (mpos, n) in markers if mpos >= pos), None)
+        if nxt is not None and text not in mp:
+            mp[text] = f"§{nxt}"
+    return mp
+
+
+def _provenance_resolution_stat(
+    sections: list[dict[str, Any]],
+    relations: list[dict[str, Any]] | None,
+    paper_content: str,
+) -> dict[str, Any]:
+    """FD-1 regression guard: of all numeric `§N` provenance markers, how many land on a real input
+    chunk. Recorded in extraction_notes so a batch run surfaces provenance health (and a drop flags a
+    regression of the §X.Y resolution). A marker that points at no chunk id is listed in the sample.
+    Does NOT catch a bare `§3` that the model meant as paper Section 3 (chunk 3 still exists) — that
+    residual is a model-side namespace confusion, sharpened in the prompt, not assembly-fixable."""
+    chunk_ids = {m.group(1) for m in SECTION_MARKER_RE.finditer(paper_content)} if isinstance(paper_content, str) else set()
+    total = 0
+    resolved = 0
+    unresolved: list[str] = []
+
+    def _check(prov: Any, owner: Any) -> None:
+        nonlocal total, resolved
+        if not isinstance(prov, list):
+            return
+        for mk in prov:
+            if isinstance(mk, str):
+                s = mk.strip()
+                if s.startswith("§") and s[1:].isdigit():
+                    total += 1
+                    if s[1:] in chunk_ids:
+                        resolved += 1
+                    elif len(unresolved) < 8:
+                        unresolved.append(f"{owner}:{s}")
+
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if isinstance(unit, dict):
+                _check(unit.get("provenance"), unit.get("id"))
+    for relation in relations or []:
+        if isinstance(relation, dict):
+            _check(relation.get("provenance"), relation.get("relation"))
+    return {
+        "chunk_markers": total,
+        "resolved_to_chunk": resolved,
+        "rate": round(resolved / total, 3) if total else None,
+        "unresolved_sample": unresolved,
+    }
+
+
 def _normalize_provenance_markers(
-    sections: list[dict[str, Any]], relations: list[dict[str, Any]] | None = None
+    sections: list[dict[str, Any]],
+    relations: list[dict[str, Any]] | None = None,
+    paper_content: str = "",
 ) -> list[str]:
     """Collapse fine-grained / ranged markers to the top-level §N/§X parent that contains them.
 
@@ -1169,6 +1351,12 @@ def _normalize_provenance_markers(
     Figure 8, Algorithm 1, Lemma 2) have no section parent and are left untouched — the validator
     now accepts them directly, since they name a real, citeable element of the paper.
 
+    FD-1 (2026-06-18): a dotted/hyphenated subsection like `§3.1` is an AUTHOR section label — the
+    input has no sub-decimal chunk markers — so collapsing it to chunk `§3` aliased the method/
+    evidence to the abstract/front-matter (63/100 papers). When `paper_content` is given we instead
+    RESOLVE `§3.1` to the real first chunk of paper Section 3.1 via the heading->chunk map; only when
+    the heading cannot be located do we fall back to the (lossy) parent collapse.
+
     Applied to both unit provenance and (when given) global relation provenance, so a relation's
     markers are repaired the same way units' are before relation-provenance validation runs.
 
@@ -1179,6 +1367,16 @@ def _normalize_provenance_markers(
     """
     warnings: list[str] = []
     seen: set[str] = set()
+    section_chunk_map = _build_section_chunk_map(paper_content)
+
+    def _resolve_section(stripped: str, parent: str) -> str:
+        """Resolve a §X.Y author-section label to its real chunk via the heading map; else `parent`
+        (the lossy leading-§N collapse — current behavior, never worse than before)."""
+        label = stripped[1:].strip().lower()  # drop leading §
+        resolved = section_chunk_map.get(label)
+        if resolved is None and "-" in label:  # IEEE §IV-D -> try "iv"
+            resolved = section_chunk_map.get(label.split("-", 1)[0])
+        return resolved if resolved is not None else parent
 
     def _collapse(provenance: list[Any]) -> list[Any]:
         rewritten: list[Any] = []
@@ -1201,11 +1399,20 @@ def _normalize_provenance_markers(
                 elif numbered:
                     new_marker = f"§{numbered.group(1)}"
                 elif subsection:
-                    new_marker = f"§{subsection.group(1)}"
+                    # FD-1: resolve §X.Y to the real section chunk; fall back to the §X collapse.
+                    new_marker = _resolve_section(stripped, f"§{subsection.group(1)}")
                 elif bare_appendix:
                     # A bare appendix locator emitted without its § ("B.2", "B") -> its §X parent,
                     # so it passes the §N-format check instead of being flagged as a non-marker.
                     new_marker = f"§{bare_appendix.group(1).upper()}"
+                elif (
+                    not stripped.startswith("§")
+                    and not PROVENANCE_SOURCE_RE.match(stripped)
+                    and _normalize_name(stripped) in section_chunk_map
+                ):
+                    # FD-1: a bare named-heading marker ("Abstract", "Introduction") -> the chunk that
+                    # prints under that heading, so it resolves instead of failing as free prose.
+                    new_marker = section_chunk_map[_normalize_name(stripped)]
                 if new_marker is not None and new_marker != marker:
                     if marker not in seen:
                         seen.add(marker)
@@ -1240,6 +1447,99 @@ def _normalize_provenance_markers(
         if isinstance(provenance, list):
             relation["provenance"] = _collapse(provenance)
 
+    return warnings
+
+
+def _strip_unknown_unit_fields(sections: list[dict[str, Any]]) -> list[str]:
+    """FD-6: drop fields the model put on the wrong unit type (e.g. `inputs`/`implementation_notes`
+    on an ExperimentSetup, `description_provenance` on a Contribution, the `objectives_class` typo on
+    a Measure). These otherwise hard-fail the whole paper on validate_section_ir's unexpected-field
+    check; stripping them (logged) keeps the paper valid, consistent with assembly's other
+    lossy-but-safe repairs. Runs after type is finalized (census kind stamp + misroute reconcile)."""
+    warnings: list[str] = []
+    for section in sections:
+        for unit in section.get("units", []) or []:
+            if not isinstance(unit, dict):
+                continue
+            allowed = ALLOWED_FIELDS_BY_TYPE.get(unit.get("type"))
+            if not allowed:
+                continue
+            for key in sorted(set(unit) - allowed):
+                unit.pop(key, None)
+                warnings.append(
+                    f"Stripped unexpected field '{key}' from unit {unit.get('id', '<missing-id>')} "
+                    f"({unit.get('type')})"
+                )
+    return warnings
+
+
+def _backfill_measure_fields(sections: list[dict[str, Any]]) -> list[str]:
+    """FD-6: a Measure missing `unit`, or a Measure/Finding with empty `provenance`, hard-fails
+    validation for the whole paper (both require non-empty provenance; Measure also requires `unit`).
+    Backfill rather than fail, in the spirit of assembly's other lossy-but-safe repairs:
+      - Measure `unit` -> 'unitless';
+      - Measure `provenance` from its own `source_table_marker` (the §N of its table — the best
+        locator), else the section's first non-empty provenance;
+      - Finding `provenance` from the Measure that mounts it (`finding_ids`), else the section's
+        first non-empty provenance.
+    Runs after _normalize_provenance_markers (which has already settled provenance shape)."""
+    warnings: list[str] = []
+
+    def _marker_from_table(stm: Any) -> list[Any] | None:
+        if isinstance(stm, str) and stm.strip():
+            marker = stm.strip()
+            if not marker.startswith("§"):
+                marker = "§" + marker
+            if PROVENANCE_SOURCE_RE.match(marker):
+                return [marker]
+        return None
+
+    for section in sections:
+        units = section.get("units", []) or []
+        fallback: list[Any] = []
+        finding_mount_prov: dict[Any, list[Any]] = {}
+        for u in units:
+            if not isinstance(u, dict):
+                continue
+            if isinstance(u.get("provenance"), list) and u["provenance"] and not fallback:
+                fallback = u["provenance"]
+            if u.get("type") == "Measure":
+                mount = (
+                    u["provenance"] if isinstance(u.get("provenance"), list) and u["provenance"]
+                    else _marker_from_table(u.get("source_table_marker"))
+                )
+                if mount:
+                    for fid in u.get("finding_ids", []) or []:
+                        finding_mount_prov.setdefault(fid, mount)
+
+        for u in units:
+            if not isinstance(u, dict):
+                continue
+            utype = u.get("type")
+            uid = u.get("id", "<missing-id>")
+            if utype == "Measure":
+                if not isinstance(u.get("unit"), str) or not u.get("unit", "").strip():
+                    u["unit"] = "unitless"
+                    warnings.append(f"Backfilled missing unit on Measure {uid} -> 'unitless'")
+            if utype not in {"Measure", "Finding"}:
+                continue
+            prov = u.get("provenance")
+            if isinstance(prov, list) and prov:
+                continue
+            chosen: list[Any] | None = None
+            source = ""
+            if utype == "Measure":
+                chosen = _marker_from_table(u.get("source_table_marker"))
+                source = "source_table_marker"
+            else:  # Finding
+                mounted = finding_mount_prov.get(uid)
+                if mounted:
+                    chosen, source = list(mounted), "mounting measure"
+            if chosen is None and fallback:
+                chosen, source = list(fallback), "section sibling"
+            if chosen:
+                u["provenance"] = chosen
+                warnings.append(f"Backfilled empty provenance on {utype} {uid} from {source}")
     return warnings
 
 
@@ -2731,6 +3031,7 @@ def _assign_resolves(
 
     unit_type: dict[str, str] = {}
     unit_prov: dict[str, list[str]] = {}
+    unit_statement: dict[str, str] = {}
     problem_anchor: str | None = None
     for section in sections:
         if section.get("section_type") == "problem":
@@ -2742,6 +3043,13 @@ def _assign_resolves(
                 unit_type[unit["id"]] = unit.get("type")
                 if isinstance(unit.get("provenance"), list):
                     unit_prov[unit["id"]] = unit["provenance"]
+                if isinstance(unit.get("statement"), str):
+                    unit_statement[unit["id"]] = unit["statement"]
+
+    # FD-2: the headline result the arc closes on, used to pick the SINGLE Finding that `resolves`
+    # the Problem (was: every Finding `about` the contribution, ~3.2/paper).
+    spine = census.get("spine_summary") if isinstance(census, dict) else None
+    headline_text = (spine.get("headline_result") or "") if isinstance(spine, dict) else ""
 
     # The Problem that motivates the contribution; fall back to the problem section's anchor,
     # then to the sole Problem unit.
@@ -2785,6 +3093,21 @@ def _assign_resolves(
                 }
             )
 
+    # FD-2 (2026-06-18): close the arc with the single headline Finding PER contribution root, not
+    # every Finding about it. The old all-findings fan-out attached `resolves` to ~3.2 findings/paper
+    # (49/100 papers ≥3), wrongly marking sensitivity / engineering-limitation / behavior findings as
+    # resolving the research problem. Group about-findings by their target contribution; for each
+    # contribution pick the Finding whose statement best overlaps the census headline_result (ties ->
+    # first by relation order). A co-equal contribution (FG-7) thus still earns its own resolves; a
+    # single contribution with many findings now earns exactly one.
+    def _overlap(text: str) -> int:
+        if not headline_text or not text:
+            return 0
+        ref = {w for w in re.findall(r"[a-z0-9]+", headline_text.lower()) if len(w) > 3}
+        got = {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3}
+        return len(ref & got)
+
+    by_contrib: dict[Any, list[tuple[str, list[Any]]]] = {}
     for rel in relations:
         if (
             not isinstance(rel, dict)
@@ -2795,8 +3118,20 @@ def _assign_resolves(
         finding_id = rel.get("source_id")
         if unit_type.get(finding_id) != "Finding" or finding_id in seen:
             continue
+        cands = by_contrib.setdefault(rel["target_id"], [])
+        if finding_id not in {c[0] for c in cands}:
+            prov = rel.get("provenance") or unit_prov.get(problem_id) or unit_prov.get(finding_id) or []
+            cands.append((finding_id, prov))
+
+    for cands in by_contrib.values():
+        best_i = max(
+            range(len(cands)),
+            key=lambda i: (_overlap(unit_statement.get(cands[i][0], "")), -i),
+        )
+        finding_id, prov = cands[best_i]
+        if finding_id in seen:
+            continue
         seen.add(finding_id)
-        prov = rel.get("provenance") or unit_prov.get(problem_id) or unit_prov.get(finding_id) or []
         new_relations.append(
             {
                 "source_id": finding_id,
@@ -3307,6 +3642,14 @@ def _verify_score_fidelity(
                 })
 
     cells_unmatched = sum(1 for key in cell_decimal_keys if key not in transcribed_keys)
+    # FD-3 (2026-06-18): a normalized table->score RECALL signal. located_pct measures precision
+    # (transcribed values that are in a table); table_recall_pct measures completeness (decimal table
+    # cells that made it into a score row). Low recall flags a captured-but-under-transcribed table —
+    # the structured scores are sparse, though the verbatim grid is preserved in source_tables and
+    # rendered. We surface the gap rather than auto-populating scores: injecting model-unverified
+    # cells into score rows would defeat the very value-cross-check this audit performs.
+    cells_total = len(cell_decimal_keys)
+    cells_matched = cells_total - cells_unmatched
     return {
         "checked": True,
         "values_total": values_total,
@@ -3316,6 +3659,8 @@ def _verify_score_fidelity(
         "flags_absent_from_paper": flags_absent_from_paper,
         "measures_no_table": measures_no_table,
         "table_cells_unmatched": cells_unmatched,
+        "table_cells_total": cells_total,
+        "table_recall_pct": round(100.0 * cells_matched / cells_total, 1) if cells_total else None,
     }
 
 
@@ -3438,6 +3783,9 @@ def assemble_extraction(
     # substrate emitted as a Contribution) back to its prefix-canonical type BEFORE the dedups, so
     # the spurious copy is dropped/re-typed instead of winning the id-collision.
     assembly_warnings.extend(_reconcile_misrouted_units(sections, census))
+    # FD-5: drop a kind=dataset/benchmark Contribution that merely duplicates a census ExperimentSetup
+    # the method runs on (an eval-frame mint with no scores), before the dedups settle ids.
+    assembly_warnings.extend(_drop_eval_frame_contributions(sections, relations, census))
     assembly_warnings.extend(
         _dedup_experiment_setups(sections, relations, all_census_node_ids(census))
     )
@@ -3453,11 +3801,20 @@ def assemble_extraction(
     assembly_warnings.extend(_drop_empty_scores_measures(sections, dropped_measures))
     assembly_warnings.extend(_warn_duplicate_score_rows(sections))
     assembly_warnings.extend(_drop_empty_sections(sections))
-    assembly_warnings.extend(_normalize_provenance_markers(sections, relations))
+    assembly_warnings.extend(_normalize_provenance_markers(sections, relations, paper_content))
+    # FD-6: backfill Measure unit/provenance (after normalization settles provenance shape) so a
+    # model omission degrades gracefully instead of invalidating the paper.
+    assembly_warnings.extend(_backfill_measure_fields(sections))
     assembly_warnings.extend(_repair_section_anchors(sections))
     assembly_warnings.extend(_repair_score_refs(sections))
     assembly_warnings.extend(_repair_unit_enums(sections))
     assembly_warnings.extend(_clean_method_equations(sections))
+    # FD-6: drop fields the model placed on the wrong unit type (e.g. inputs/implementation_notes on
+    # an ExperimentSetup, the objectives_class typo on a Measure) so the unexpected-field check does
+    # not hard-fail the paper. Runs LAST among unit repairs — after _clean_method_equations has
+    # migrated the legacy `objective_function` into formulas — so a consumed legacy field is stripped
+    # only once nothing downstream still reads it.
+    assembly_warnings.extend(_strip_unknown_unit_fields(sections))
 
     relations, warns = _dedup_relations(relations)
     assembly_warnings.extend(warns)
@@ -3510,6 +3867,9 @@ def assemble_extraction(
     facet_tasks = spine_summary.get("tasks") if isinstance(spine_summary, dict) else None
     facet_domain = spine_summary.get("domain") or "" if isinstance(spine_summary, dict) else ""
     document_kind = _derive_document_kind(census, sections)
+    extraction_notes["provenance_resolution"] = _provenance_resolution_stat(
+        sections, relations, paper_content
+    )
     source_tables = _slice_source_tables(paper_content)
     capture_warns = _table_capture_warnings(paper_content, source_tables)
     if capture_warns:

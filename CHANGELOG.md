@@ -10,6 +10,57 @@
 
 ---
 
+## 100 篇框架评测 + 修复（FD-1…6）+ 问题论文重测（FD-1b / FD-5b）
+
+**日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+对 `section-ir-0.17`（qwen3.5-35b-a3b thinkOFF）做 **100 篇分层抽样评测**（采样
+`tools/sample_eval_100.py` seed 20260618，8 会议 + pre-2024 尾巴；逐条对原文核验
+`tools/verify_eval_100.workflow.js`，200 agent + 对抗复核）。结论：**框架本身基本可靠——1129 条
+保留缺陷中 82% 是 model_error（qwen），仅约 8% 是 framework_design**；最大质量杠杆是模型，不是
+schema/prompt。完整报告 `issues/framework-eval-100-2026-06-18.md`。
+
+**框架级修复（全部已实现 + 测试）：**
+- **FD-1 provenance 命名空间冲突（评测头号缺陷 63/100）**：`[§N]` 是**顺序输入块号**，不是作者章节号；
+  旧 assembly 把作者标签 `§3.1` 截断成块 `§3`（块空间里多为摘要/作者栏），方法/证据被错锚到摘要。
+  改为**解析而非截断**：`SECTION_HEADING_RE` + `_build_section_chunk_map` 建「章节标签→该节首块」映射，
+  `_normalize_provenance_markers` 把 `§3.1` 解析到真实块；新增 `extraction_notes.provenance_resolution`
+  作回归看门（解析率）。确定性，无需重抽。
+- **FD-2 `resolves` 过度合成（70/100，均 3.2/篇）**：assembly 原本给每个 contribution-finding 都挂
+  `resolves`；改为**每个 contribution 根仅挂一条 headline finding**（`_assign_resolves` 按根分组 + 重叠打分）。
+- **FD-6 结构失效（9 篇 invalid）**：`_strip_unknown_unit_fields`（去掉落错类型的字段）+
+  `_backfill_measure_fields`（Measure unit→unitless、Measure/Finding provenance 回填）。
+- **FD-3 score 完整度信号**：`score_fidelity` 增 `table_recall_pct`（**仅诊断**，刻意不自动回填——
+  注入模型未核验的表格单元会破坏保真交叉校验）。
+- **FD-4 / FD-5（prompt 侧）**：census + evidence 加「理论论文的定理/引理是方法定义性 Component」「方法
+  仅在其上评测的环境/模拟器/游戏/场景是 ExperimentSetup，不得新铸 dataset Contribution」护栏。12 篇
+  billable A/B：`con:*_dataset` 误铸 3→0、formal findings 1→3、无回归。确认 **FD-4 主要是 qwen 召回
+  受限而非契约缺口**（evidence.md 早已显式索取定理/引理/界 findings）→ deepseek-v4-pro 才是杠杆。
+
+**问题论文重测（用户 follow-up「重新测试之前有问题的文章」）：** 58 篇问题论文（9 invalid ∪ 54
+framework-defect）用修复后代码+prompt **端到端重抽**（50 篇 `python -m production`
+→ `production-outputs/eval_rerun_v018/`，50/50 完成 + 8 篇复用）。重抽**新暴露并修复两处框架缺口**：
+- **FD-1b 命名标题 provenance**：模型有时写标题名（`"Abstract"`）而非 `§X.Y`；`NAMED_HEADING_RE` +
+  在 `_build_section_chunk_map` 里按归一化标题文本建键，把裸标题标记解析到该节首块（024_KDD 原唯一
+  invalid → valid）。真·自由散文标记仍按原样报错（不静默吞）。
+- **FD-5b eval-frame Contribution 重复**：evidence 给方法**仅评测于**的标准数据集铸了
+  `con:cifar10_eval` 式 `dataset` Contribution（096_CVPR：CIFAR/ImageNet），而 census 已正确把它们
+  定为 ExperimentSetup、分数也挂在 `exp:` 上（这些 con 桩 0 分数）。`_drop_eval_frame_contributions`
+  丢弃「空描述 + 名字匹配 census ExperimentSetup」的 dataset/benchmark Contribution（并把关系端点改指
+  `exp:` id）；census 类型权威，故不会逆 census 猜测。evidence.md 护栏也从「环境」扩到标准评测数据集。
+
+确定性免费重组（57 篇，全部 on-disk 06 重生成）：**valid 49→57/57、resolves 188→57、provenance
+解析率全 50 篇=1.0、con_data 11→14→10**（096 误铸消除）；两处新修复各仅命中 1 篇（精准无误伤）。
+**525 测试通过**（+6 FrameworkEvalFixTests）。逐缺陷 LLM 复测（`tools/rerun_defect_verify.workflow.js`，
+78 agent + 对抗 skeptic）：**67 缺陷 → 26 fixed / 10 partial / 28 still / 3 n-a / 0 回归**；按目标读：
+**provenance 19 fixed + 6 partial，仅 2 still——且整个 provenance 残留只剩一类已知 deferred：模型给
+ROOT 写裸 `§3`（意为「第 3 节」但块 `§3` 也存在，解析即猜测）**。28 still 全部落在六项修复射程之外
+（缺节点召回 ×8、细配置 setup 召回 ×5、引用层 ×3、模型公式/理论 ×3、设计内 derived-edge 空 provenance
+×3、图/定性 measure ×3）或已记录 deferred——**无一是「触发但失败」的修复**。
+
+**Deferred（已记录，未做）**：`assumption` 单元 kind（schema 缺口）、裸 `§3` ROOT provenance（避免猜测）、
+FD-3 图源 score 回填；模型召回残差留给 deepseek-v4-pro。
+
 ## 默认抽取模型：`deepseek-v4-pro` → `qwen3.5-35b-a3b`（均 thinking-off）
 
 **日期**：2026-06-17　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`

@@ -44,7 +44,7 @@ Every node takes exactly one `type`, and the type fixes its id-prefix. A Contrib
 **evaluation_frame** — what the work runs on and how it is judged; never a Contribution or Component.
 
 - `ExperimentSetup` (exp:) — the evaluation frame the work runs on. Set `kind` by what it is:
-  - `dataset` — data the method is trained or evaluated on (a plain corpus).
+  - `dataset` — data the method is trained or evaluated on (a plain corpus), OR a non-corpus evaluation environment the method runs in: an RL/robotics simulator, a game, or a named scenario/testbed (a control task, a grid world, "the Breakout scenario"). An environment the method is only tested in belongs to the evaluation frame — census it here, never as a Contribution.
   - `benchmark` — a named, standardized evaluation suite the community cites by name, with fixed splits, a protocol, tasks, or a leaderboard (GLUE, MMLU, MATH, COCO, ADE20K, WMT 2014, ImageNet). Use `benchmark` for these even when the paper's prose happens to call it a "dataset"; reserve `dataset` for an unstandardized corpus used only as a training or data source with no evaluation protocol of its own.
   - `task` — the problem being solved or evaluated.
   - Released-vs-used test, decided once per dataset/benchmark: if the paper INTRODUCES or RELEASES it as a deliverable it is a `Contribution` (kind=dataset/benchmark) and must NOT also be emitted as an ExperimentSetup; if the paper only RUNS ON a pre-existing one it is an `ExperimentSetup`. A paper that releases a dataset and also evaluates on it still emits it once, as the Contribution.
@@ -70,7 +70,7 @@ Extract in this order; it defers the hardest decision, component granularity, un
 4. Emit the root Contribution node or nodes.
 5. Emit the evaluation frame as `ExperimentSetup` nodes: the kind=task node(s) first, then the kind=dataset or kind=benchmark nodes. Do not emit a prior-art method or external model here, and do not emit a dataset/benchmark the paper itself releases here (that is a Contribution).
 6. Emit the `Measure` nodes, one per metric name.
-7. Emit the `Component` nodes last, now that the rest is fixed. Include only named, method-defining parts of the paper's own contribution, working outward from the most prominent modules.
+7. Emit the `Component` nodes last, now that the rest is fixed. Include only named, method-defining parts of the paper's own contribution, working outward from the most prominent modules. For a proof/theory paper, a separately stated-and-proved theorem or lemma the contribution rests on is itself a method-defining Component (its formal nature is carried later by `method_kind` theorem/lemma) — do not let the paper's central proven results go un-censused.
 8. Boundary audit. Re-scan the list and remove anything outside scope: prior-art and external methods, apparatus, configurations, duplicate evaluation-frame nodes, and any motivation fragment mis-tagged as a second Problem. This step only removes; it adds no node and states no relation.
 9. Return the JSON (`spine_summary`, `nodes[]`). Each `description` states what the node intrinsically is, not how it relates to another node. State no relationships; relations are established in the next pass.
 

@@ -134,7 +134,11 @@ gets its own output subdirectory holding the staged intermediates and the final 
 
 Deterministic agent-readiness enrichments ship in every fresh run (no flags): score rows carry
 `value_num`, Measures carry `has_quantitative_payload`, `extraction_notes.score_fidelity` is always
-present, and `marker_namespaces` disambiguates the two `§N` schemes. To retrofit an **older** corpus and build the corpus-level
+present, `marker_namespaces` disambiguates the two `§N` schemes, and
+`extraction_notes.provenance_resolution` reports the share of `§N` markers that resolve to a real
+input chunk (assembly resolves an author section label like `§3.1` — or a named heading like
+`Abstract` — to the chunk that prints there, instead of collapsing it onto a colliding low chunk id).
+To retrofit an **older** corpus and build the corpus-level
 retrieval artifacts (`_catalog.jsonl`, `_cards.jsonl`, `_result_rows.jsonl`, `_entity_index.json`):
 
 ```bash

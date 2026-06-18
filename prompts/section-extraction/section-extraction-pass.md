@@ -70,8 +70,9 @@ Plus the type-specific fields named in `section_focus`, directly on the unit —
 
 ### provenance
 
-`provenance[]` is a flat list of top-level `§N` location markers from the paper, such as `["§12", "§14"]`.
+`provenance[]` is a flat list of the bracketed `[§N]` block markers printed in the source text — copy the marker(s) nearest the content you cite, such as `["§12", "§14"]`.
 
+- The `N` is the input's running block id (the number inside the `[§N]` tags in the text), NOT the paper's own section number. If the method you cite sits under a heading like "3.1" but the block printed there is `[§23]`, write `§23` — never `§3` or `§3.1`.
 - Use only `§N` markers; do not invent `§N.M` subsection markers, and do not wrap them in objects or attach a kind/label.
 - Every `Finding` and every `Measure` must have non-empty `provenance`. Other units should carry provenance whenever the source can be localized.
 - Do not add `raw_text`, `locator`, or `paper_id`.
