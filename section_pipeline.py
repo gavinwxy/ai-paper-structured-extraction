@@ -20,7 +20,6 @@ NODE_CENSUS_PROMPT_PATH = PROMPTS_DIR / "node-census.md"
 RELATION_PASS_PROMPT_PATH = PROMPTS_DIR / "relation-pass.md"
 SECTION_EXTRACTION_PROMPT_PATH = PROMPTS_DIR / "section-extraction-pass.md"
 SECTION_MODULES_DIR = PROMPTS_DIR / "section-modules"
-EXAMPLES_DIR = PROMPTS_DIR / "examples"
 METADATA_PROMPT_PATH = PROJECT_ROOT / "prompts" / "metadata-extraction.md"
 # Citation layer (section-ir-0.16): one census-blind paper-level citation-relation pass + a
 # blob-scoped reference-metadata pass replace the references + external-methods sidecars.
@@ -379,7 +378,6 @@ RELATION_MATRIX: dict[str, tuple[set[str], set[str]]] = {
 # enum under a "four relations" prompt.
 STAGE_B_RELATIONS = {"part_of", "co_contribution", "compares_to", "evaluates"}
 STAGE_C_RELATIONS = {"about", "supports", "motivates"}
-SYNTHESIZED_RELATIONS = {"resolves"}
 ARGUMENTATIVE_INCOMING = {"supports"}
 
 # FG-12 (section-ir-0.10) + vocab unification: a reference's citation role IS the unit-graph
