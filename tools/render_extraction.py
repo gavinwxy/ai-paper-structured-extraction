@@ -1249,7 +1249,7 @@ def render_html(pipeline_data: dict[str, Any]) -> str:
     <div class="stat"><div class="sv">{total_sections}</div><div class="sl">sections</div></div>
     <div class="stat"><div class="sv">{total_units}</div><div class="sl">units</div></div>
     <div class="stat"><div class="sv">{total_links}</div><div class="sl">relations</div></div>
-    <div class="stat"><div class="sv">{escape(cov_value)}</div><div class="sl">must coverage</div></div>
+    <div class="stat"><div class="sv">{escape(cov_value)}</div><div class="sl">node coverage</div></div>
     <div class="stat ir">{escape(ir_version)}</div>
   </div>
   {arc_html}
@@ -1445,6 +1445,45 @@ a.m-finding:hover { color:#93c5fd; border-color:#3b82f6; }
 .notes h2 { font-size:.84rem; color:#94a3b8; margin-bottom:8px; }
 .notes li { font-size:.78rem; color:#64748b; list-style:none; padding-left:14px; position:relative; margin-bottom:3px; }
 .notes li::before { content:"\\2022"; position:absolute; left:0; color:#475569; }
+
+/* --- Output polish (look & feel); additive overrides, later cascade wins --- */
+html { scroll-behavior:smooth; }
+body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; text-rendering:optimizeLegibility; }
+
+/* Sticky-nav offset so anchor jumps (nav links / cite badges) don't tuck a section's top under the bar */
+.sec { scroll-margin-top:56px; }
+
+/* Sticky nav: depth + active-section highlight (driven by the scroll-spy in JS_CODE) */
+.topnav { box-shadow:0 2px 10px rgba(2,6,16,.5); }
+.nav-link { transition:background .15s, color .15s; }
+.nav-link.active { background:#1e293b; color:#f8fafc; }
+.nav-link.active .nav-dot { box-shadow:0 0 0 3px rgba(56,189,248,.28); }
+
+/* A touch more presence for the paper title */
+.paper-header h1 { font-size:1.6rem; line-height:1.25; letter-spacing:-.01em; }
+
+/* Card depth on hover; readable hover row in the (often wide) score tables */
+.unit:hover { box-shadow:0 2px 14px rgba(2,6,16,.45); }
+.scores tr:hover td { background:#101d33; }
+
+/* Lift the dimmest text to a legible contrast on the dark background */
+.empty, .arc-legend { color:#64748b; }
+.notes li::before { color:#64748b; }
+
+/* Keyboard focus affordance for the links / jump targets */
+a:focus-visible { outline:2px solid #38bdf8; outline-offset:2px; border-radius:4px; }
+
+/* Dark, slim scrollbars (the references panel scrolls) */
+* { scrollbar-width:thin; scrollbar-color:#334155 transparent; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:#283449; border-radius:6px; border:2px solid #0b1220; }
+::-webkit-scrollbar-thumb:hover { background:#3b4a66; }
+
+/* Honor reduced-motion: no smooth-scroll, no transitions */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior:auto; }
+  * { transition:none !important; }
+}
 """
 
 JS_CODE = r"""
@@ -1492,6 +1531,24 @@ JS_CODE = r"""
     clearFocus();
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') clearFocus(); });
+
+  // Scroll-spy: light up the nav link for the section crossing the viewport middle.
+  var navByHash = {};
+  var navAnchors = document.querySelectorAll('.topnav .nav-link');
+  for (var k = 0; k < navAnchors.length; k++) {
+    var href = navAnchors[k].getAttribute('href') || '';
+    if (href.charAt(0) === '#') navByHash[href.slice(1)] = navAnchors[k];
+  }
+  var spySecs = document.querySelectorAll('.sec[id]');
+  if (window.IntersectionObserver && spySecs.length) {
+    var spy = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        var link = navByHash[entries[i].target.id];
+        if (link) link.classList.toggle('active', entries[i].isIntersecting);
+      }
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+    for (var s = 0; s < spySecs.length; s++) spy.observe(spySecs[s]);
+  }
 })();
 """
 

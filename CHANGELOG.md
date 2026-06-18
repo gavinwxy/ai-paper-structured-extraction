@@ -10,6 +10,20 @@
 
 ---
 
+## HTML 渲染器观感优化（look & feel）
+
+**日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+- 纯观感优化（不改展示内容/结构/Python 助手），全部为 `tools/render_extraction.py` 内联 CSS/JS 的追加式覆盖：
+  - **修复陈旧标签**：统计条 `must coverage`→`node coverage`（0.16 已移除 salience，覆盖率早已是全 census 的
+    `node_covered/node_total`，标签未同步）。
+  - **粘性导航不再遮挡**：`html{scroll-behavior:smooth}` + `.sec{scroll-margin-top}`，点导航/引用徽标跳转时
+    章节顶部不再被顶栏盖住。
+  - **当前章节高亮（scroll-spy）**：`IntersectionObserver` 让顶栏对应链接随滚动点亮（`.nav-link.active`）。
+  - **可读性**：标题更有存在感、卡片 hover 加阴影、分数表行 hover 高亮、最暗文字提亮到可读对比度、链接
+    `:focus-visible` 键盘焦点圈、暗色细滚动条、`prefers-reduced-motion` 降级。
+- 输出仍自包含（无外链/CDN）。49 个渲染测试 + 全量 543 测试通过；真实抽取渲染 well-formed（标签零失衡）。
+
 ## 正文阶段剥离参考文献（`--keep-references-in-body`）
 
 **日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
