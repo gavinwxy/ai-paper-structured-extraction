@@ -10,6 +10,45 @@
 
 ---
 
+## 正文阶段剥离参考文献（`--keep-references-in-body`）
+
+**日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+- **动机**：节点普查 / 关系 / 三个 section fill 抽取的是论文**自身**内容，却一直把整篇参考文献（常占数百行）
+  一并喂进去——纯噪声，且会诱导普查把参考文献标题当成候选节点。
+- **改动（按阶段切输入，默认开启）**：新增 `section_pipeline.slice_body_content`，复用 `_slice_references_blob`
+  的密度打分边界（抽出公共 `_best_references_span`）把“参考文献及其之后”整段裁掉，喂给 census/relations/section
+  三类“自身内容”阶段；**citation layer（Pass 1 全文、Pass 2 取 blob）、metadata（head+URL 切片）、以及装配/
+  `[§N]` marker 解析仍用全文**。只裁尾部 → 前面所有 `[§N]` 编号不变，正文阶段产出的 marker 仍能对全文解析。
+- **正确性**：裁切只作用于**喂给 LLM 的输入**，装配/`source_tables`/`span_index`/`provenance_resolution` 一律
+  仍读全文，marker 永远可解析。已知代价：跟在参考文献**之后**的附录内容会随之丢弃（problem/method 可接受，
+  evidence 的附录表有轻微风险）。无置信度参考文献时不裁（弱信号绝不误裁）。
+- **接线**：`Config.keep_references_in_body=False`（=裁切默认开）；CLI `--keep-references-in-body` 为 A/B 对照
+  退回全文；`worker._run_paper_pipeline` 计算一次 `body_content` 并换进 census/relations/section 三处调用。
+- **收益定位**：主要是**质量**（普查/关系更干净），**不是 $**——成本主战场在 completion 侧（约 78%），裁输入
+  token 省得有限。建议跑一轮 A/B（带/不带 flag）再决定是否长期默认。
+- **测试**：`tests/test_body_slice.py`（6 例：裁切/无参考文献透传/弱信号不裁/与 blob 互补/`_slice_references_blob`
+  重构对拍/空与非 str 安全）+ `tests/test_production_worker.py::BodyReferenceCutTests`（2 例：端到端断言书目
+  仅进 citations/metadata、不进 census/relations/section；flag 退回全文）。全量 543 测试通过。
+
+## JSON/JSONL 输入预处理（`--input-format`）
+
+**日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+- **背景**：上游解析器有时给出结构化的 JSON/JSONL 区块（MinerU 区块数组 / 带 `content_list` 的记录），而
+  抽取管线只吃带 `[§N]` 段落标记的 Markdown（证据/参考文献切片与 span index 都依赖该标记）。
+- **新增预处理器** `tools/parsed_blocks_to_markdown.py`（从 `paper-retrieval` 移植并通用化）：把 JSON/JSONL
+  区块渲染为 `[§N]` 标记的 Markdown，正文段落打标记、引用条目留空（交给管线切 blob）。既可作独立 CLI
+  （`-i/-o` 必填），也导出库函数 `convert_to_markdown(...)` 供管线调用。放在 `tools/` 命名空间包下，
+  与 `tools.render_extraction` 同样被 `production` import。
+- **管线接线（显式 flag，默认行为不变）**：`production/cli.py` 新增 `--input-format {md,auto,json,jsonl}`，
+  默认 `md`（保持“直接 glob `*.md`”的旧契约）；`Config.input_format` 透传；
+  `production/runner.prepare_markdown_inputs` 在 `discover_papers` 前按类型决定是否预处理——`json`/`jsonl`
+  转换写入 `<output_dir>/_prepared_markdown/`（持久、可检视、resume 复用）后再发现，`auto` 则优先用已有
+  `*.md`、否则转换。预处理失败即作为该 batch 的致命错误返回。
+- **测试**：新增 `tests/test_parsed_blocks_to_markdown.py`（9 例，覆盖三种输入形态 + 四种 `input_format`
+  分支），全量 535 测试通过；standalone CLI 与 `--input-format` 端到端 smoke 验证均正常。
+
 ## 提示词 SC idiom 转正为默认 + 跨臂规则收紧
 
 **日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`

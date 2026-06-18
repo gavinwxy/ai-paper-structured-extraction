@@ -15,10 +15,17 @@ from production.progress import ProgressTracker
 from production.worker import process_paper
 
 # After production.worker: importing it puts the project root on sys.path, which makes the
-# top-level section_pipeline module importable regardless of the caller's cwd.
+# top-level section_pipeline module (and the tools/ namespace package) importable regardless
+# of the caller's cwd.
 from section_pipeline import build_output_manifest
+from tools.parsed_blocks_to_markdown import SUPPORTED_SUFFIXES, convert_to_markdown
 
 logger = logging.getLogger(__name__)
+
+# Subdir under the output dir where json/jsonl inputs are converted to [§N]-marked Markdown.
+# Leading underscore groups it with the other run-meta artifacts (_manifest.json) and keeps it
+# out of discover_papers' *.md glob of the *source* dir.
+PREPARED_SUBDIR = "_prepared_markdown"
 
 
 def discover_papers(input_dir: Path) -> list[tuple[str, Path]]:
@@ -28,6 +35,52 @@ def discover_papers(input_dir: Path) -> list[tuple[str, Path]]:
         paper_id = path.stem
         papers.append((paper_id, path))
     return papers
+
+
+def _has_convertible_inputs(input_dir: Path) -> bool:
+    """True if input_dir holds at least one json/jsonl file the converter can ingest."""
+    return any(
+        p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+        for p in input_dir.iterdir()
+    )
+
+
+def prepare_markdown_inputs(config: Config) -> Path:
+    """Resolve the directory of *.md papers to extract from, preprocessing json/jsonl on demand.
+
+    - "md": return input_dir unchanged (historical contract — discover *.md directly).
+    - "json"/"jsonl": convert those parsed-block inputs into [§N]-marked Markdown under
+      <output_dir>/_prepared_markdown and return that dir.
+    - "auto": if input_dir already holds any *.md, use it as-is; else convert whatever json/jsonl
+      it finds. With nothing convertible either, fall through to input_dir so discover_papers
+      reports the usual "no papers" error.
+
+    Conversion is deterministic and LLM-free, so it re-runs each batch (cheap, and it picks up
+    source edits); the persistent _prepared_markdown dir keeps the exact [§N] inputs inspectable.
+    """
+    fmt = config.input_format
+    if fmt == "md":
+        return config.input_dir
+
+    if fmt == "auto":
+        if any(config.input_dir.glob("*.md")):
+            logger.info("input-format=auto: using existing *.md in %s as-is", config.input_dir)
+            return config.input_dir
+        if not _has_convertible_inputs(config.input_dir):
+            return config.input_dir
+
+    prepared_dir = config.output_dir / PREPARED_SUBDIR
+    written = convert_to_markdown(
+        config.input_dir,
+        prepared_dir,
+        input_type=("auto" if fmt == "auto" else fmt),
+        include_metadata=False,
+    )
+    logger.info(
+        "Preprocessed %d %s document(s) from %s -> %s",
+        len(written), fmt, config.input_dir, prepared_dir,
+    )
+    return prepared_dir
 
 
 async def run_batch(config: Config) -> dict[str, Any]:
@@ -45,10 +98,18 @@ async def run_batch(config: Config) -> dict[str, Any]:
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    # Resolve the markdown source dir — preprocessing json/jsonl into [§N]-marked Markdown when
+    # --input-format requests it. A preprocessing failure is fatal for the batch (no papers to run).
+    try:
+        source_dir = prepare_markdown_inputs(config)
+    except Exception as exc:
+        logger.error("Input preprocessing failed for %s: %s", config.input_dir, exc)
+        return {"error": f"input preprocessing failed: {exc}"}
+
     # Discover papers
-    all_papers = discover_papers(config.input_dir)
+    all_papers = discover_papers(source_dir)
     if not all_papers:
-        logger.error("No .md files found in %s", config.input_dir)
+        logger.error("No .md files found in %s", source_dir)
         return {"error": "No papers found"}
 
     if config.limit > 0:

@@ -3281,23 +3281,20 @@ def _table_capture_warnings(paper_content: str, source_tables: dict[str, dict[st
     return warnings
 
 
-def _slice_references_blob(paper_content: str) -> str:
-    """Slice the paper's bibliography section verbatim, for blob-primary references.
+def _best_references_span(paper_content: str) -> tuple[int, int] | None:
+    """Locate the paper's actual bibliography: ``(start, end)`` offsets of the highest-confidence
+    references section, or ``None`` when none passes. Shared by ``_slice_references_blob`` (which
+    takes the slice) and ``slice_body_content`` (which drops it and everything after).
 
-    Deterministic and lossless: the LLM never re-types the full reference list — code captures it here
-    as the backstop that lets the references pass transcribe only the graph-linked references (the
-    ~40% with a structural role or a provided name) and leave every background reference in this blob.
-    The renderer shows it as the complete bibliography beneath the structured linked entries.
-
-    Each candidate section runs from a bibliography header match to the next markdown (or bold-line)
-    header — an appendix that follows references — or end-of-file. Among the candidates, the one whose
-    body is densest in reference signals (4-digit years / ``[N]`` markers) wins: a duplicate trailing
+    Each candidate runs from a bibliography header match to the next markdown (or bold-line) header —
+    an appendix that follows references — or end-of-file. Among the candidates, the one whose body is
+    densest in reference signals (4-digit years / ``[N]`` markers) wins: a duplicate trailing
     ``# References`` boilerplate header (empty body) or a body-prose mention can never beat the real
-    bibliography, and a candidate with fewer than 3 signals is rejected outright. Returns ``""`` when
-    no candidate passes — the assembly gate records that as an uncertain_assignments warning.
+    bibliography, and a candidate with fewer than 3 signals is rejected outright. ``start`` is the
+    bibliography header line itself.
     """
     if not isinstance(paper_content, str) or not paper_content:
-        return ""
+        return None
     best_score, best_span = 0, None
     for head in REFERENCES_HEADER_RE.finditer(paper_content):
         bounds = [
@@ -3313,12 +3310,49 @@ def _slice_references_blob(paper_content: str) -> str:
         if score > best_score:
             best_score, best_span = score, (head.start(), end)
     if best_span is None or best_score < 3:
+        return None
+    return best_span
+
+
+def _slice_references_blob(paper_content: str) -> str:
+    """Slice the paper's bibliography section verbatim, for blob-primary references.
+
+    Deterministic and lossless: the LLM never re-types the full reference list — code captures it here
+    as the backstop that lets the references pass transcribe only the graph-linked references (the
+    ~40% with a structural role or a provided name) and leave every background reference in this blob.
+    The renderer shows it as the complete bibliography beneath the structured linked entries. Returns
+    ``""`` when no candidate passes — the assembly gate records that as an uncertain_assignments warning.
+    """
+    span = _best_references_span(paper_content)
+    if span is None:
         return ""
-    blob = paper_content[best_span[0]:best_span[1]]
+    blob = paper_content[span[0]:span[1]]
     # Drop any stray markdown image the extractor misplaced into the reference run (a figure is never a
     # reference) so the verbatim bibliography reads clean; references carry no images of their own.
     blob = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", blob)
     return blob.strip()
+
+
+def slice_body_content(paper_content: str) -> str:
+    """Return the paper with its bibliography (and everything after it) removed.
+
+    Fed to the stages that extract the paper's *own* content — node census, relation pass, section
+    fill — so they stop ingesting (and minting nodes/edges out of) the bibliography. The citation
+    layer and metadata pass still see the full paper, and assembly/marker-resolution keep using it
+    too: cutting only the tail leaves every earlier ``[§N]`` marker's number unchanged, so a
+    body-fed pass's marker references still resolve against the full paper downstream.
+
+    Uses the same density-scored detection as ``_slice_references_blob`` (an in-text "references"
+    mention or an empty duplicate ``# References`` header never wins), so the cut lands at the real
+    bibliography. Returns the input unchanged when no confident bibliography is found — never cuts on
+    a weak signal. NOTE: appendix content that *follows* the references is dropped along with it.
+    """
+    if not isinstance(paper_content, str) or not paper_content:
+        return paper_content
+    span = _best_references_span(paper_content)
+    if span is None:
+        return paper_content
+    return paper_content[:span[0]].rstrip() + "\n"
 
 
 def _reference_density(text: str) -> int:

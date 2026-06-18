@@ -10,6 +10,11 @@ from pathlib import Path
 class Config:
     input_dir: Path
     output_dir: Path
+    # Input format. "md" (default) keeps the historical contract: discover *.md directly.
+    # "json"/"jsonl" preprocess the parsed-block inputs into [§N]-marked Markdown first (written
+    # to <output_dir>/_prepared_markdown), then discover from there. "auto" uses any *.md present
+    # as-is, else converts whatever json/jsonl it finds. See production.runner.prepare_markdown_inputs.
+    input_format: str = "md"
     model: str = "qwen3.5-35b-a3b"
     base_url: str = "http://35.220.164.252:3888/v1"
     api_key: str = ""
@@ -32,6 +37,14 @@ class Config:
     # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim source
     # tables and record a `score_fidelity` block in extraction_notes. No effect on extracted data.
     verify_scores: bool = True
+    # Input hygiene (default ON): feed the node census, relation pass, and the three section fills
+    # the paper with its bibliography (and everything after it) stripped — they extract the paper's
+    # OWN content and a few hundred lines of reference titles are pure distraction. The citation
+    # layer and metadata pass still see the full paper, and assembly/marker-resolution use it too
+    # (the tail-only cut keeps every earlier [§N] marker number stable). Set True to feed the full
+    # paper everywhere (the pre-cut behavior) — the opt-out arm for A/B. See
+    # section_pipeline.slice_body_content.
+    keep_references_in_body: bool = False
     # P3 cost lever (default ON since the cold A/B win): the three content sections share a
     # byte-identical paper-inclusive prompt prefix but fire concurrently, so the automatic
     # prefix-cache is cold when they race and the paper is re-sent uncached up to 3x. When True,

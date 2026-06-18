@@ -112,7 +112,13 @@ Extract every paper in a directory:
 .venv/bin/python -m production <input_dir> <output_dir> --model qwen3.5-35b-a3b
 ```
 
-`<input_dir>` is a **flat** directory of `*.md` papers (discovery is non-recursive). Each paper
+`<input_dir>` is a **flat** directory of `*.md` papers (discovery is non-recursive). Papers must
+carry `[§N]` paragraph markers — the pipeline slices evidence/reference blobs and builds its span
+index off them. If your upstream parser emits structured **JSON/JSONL** blocks instead of Markdown,
+pass `--input-format json|jsonl|auto`: the runner converts those blocks into `[§N]`-marked Markdown
+(written to `<output_dir>/_prepared_markdown/`, inspectable and reused on resume) before discovery.
+The default `md` keeps the historical contract untouched. The converter is also runnable standalone
+(`python tools/parsed_blocks_to_markdown.py -i <in> -o <out>`). Each paper
 gets its own output subdirectory holding the staged intermediates and the final result:
 
 ```
@@ -150,6 +156,7 @@ reprocess. Common flags:
 
 | Flag | Default | Meaning |
 |---|---|---|
+| `--input-format` | `md` | input shape: `md` (discover `*.md` directly), `json`/`jsonl` (preprocess parsed-block inputs into `[§N]`-marked Markdown first), or `auto` (use `*.md` if present, else convert) |
 | `--limit N` | `0` (all) | process at most N papers |
 | `--paper-concurrency N` | `10` | papers in flight at once |
 | `--llm-concurrency N` | `30` | concurrent LLM calls |
@@ -157,6 +164,7 @@ reprocess. Common flags:
 | `--planning-max-tokens N` | `24576` | budget for census / relations / metadata / citation layer |
 | `--max-retries N` | `3` | retries per LLM call (re-issues on malformed JSON) |
 | `--force` | off | ignore resumability, reprocess everything |
+| `--keep-references-in-body` | off (cut is on) | feed the full paper (bibliography included) to census/relations/section fills; default strips references-and-after from those stages' input (citation layer + assembly always see the full paper) |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
 | `--no-warm-content-cache` | on (warming) | disable content-cache warming; run the three content sections fully concurrently instead of warming the shared prefix first (see below) |
 
@@ -301,7 +309,9 @@ truncates):
 **Prompt:** `prompts/section-extraction/node-census.md` · **Schema:**
 `schemas/node-census-output.schema.json`
 
-One full-paper call produces:
+One call — over the **paper body**, with the bibliography-and-after stripped by default so the census
+never mints nodes out of reference titles (`--keep-references-in-body` feeds the full paper; the
+citation layer and assembly always see it) — produces:
 
 - `spine_summary` — the central contribution and argument flow (and, optionally,
   `headline_result`, the paper's headline established result).
@@ -331,7 +341,8 @@ baseline variants stay internal `Contribution`/`Component` nodes. Testbed nodes 
 **Prompt:** `prompts/section-extraction/relation-pass.md` · **Schema:**
 `schemas/relation-pass-output.schema.json`
 
-One call over the full paper plus the complete flat node list. It establishes the **internal**
+One call over the paper body (bibliography stripped by default — same `--keep-references-in-body`
+opt-out as Stage A) plus the complete flat node list. It establishes the **internal**
 structural node↔node edges (`part_of`, `co_contribution`, `compares_to`, `evaluates`)
 with the whole node set in view — so cross-section composition and measure-subject binding need no
 forward references and no reconcile crutches. It draws no `builds_on`/`uses` edges: those are the

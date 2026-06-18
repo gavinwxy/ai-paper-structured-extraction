@@ -51,8 +51,16 @@ def parse_args() -> argparse.Namespace:
         prog="production",
         description="Batch extraction tool for section-IR pipeline",
     )
-    parser.add_argument("input_dir", type=Path, help="Directory containing .md paper files")
+    parser.add_argument("input_dir", type=Path, help="Directory of paper files (.md by default; .json/.jsonl with --input-format)")
     parser.add_argument("output_dir", type=Path, help="Output directory for results")
+    parser.add_argument(
+        "--input-format",
+        choices=("md", "auto", "json", "jsonl"),
+        default="md",
+        help="Input format (default: md = discover *.md directly). json/jsonl preprocess parsed-block "
+             "inputs into [§N]-marked Markdown under <output_dir>/_prepared_markdown first; auto uses "
+             "any *.md present, else converts the json/jsonl it finds.",
+    )
     parser.add_argument("--model", default="qwen3.5-35b-a3b", help="Model name (default: qwen3.5-35b-a3b, run with thinking disabled)")
     parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL")
     parser.add_argument("--paper-concurrency", type=int, default=10, help="Max papers in flight (default: 10)")
@@ -66,6 +74,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Reprocess all papers (ignore resumability)")
     parser.add_argument("--no-verify-scores", dest="verify_scores", action="store_false",
                         help="Disable the score-fidelity audit (transcribed values vs source tables)")
+    parser.add_argument("--keep-references-in-body", dest="keep_references_in_body", action="store_true",
+                        help="Feed the full paper (bibliography included) to the census/relations/section "
+                             "passes. Default strips references-and-after from those stages' input "
+                             "(citation layer + assembly always see the full paper). This is the A/B opt-out.")
     parser.add_argument("--warm-content-cache", dest="warm_content_cache", action="store_true",
                         default=True,
                         help="P3 cost lever (ON by default): run the first content section first to "
@@ -92,6 +104,7 @@ def main() -> None:
     config = Config(
         input_dir=args.input_dir.resolve(),
         output_dir=args.output_dir.resolve(),
+        input_format=args.input_format,
         model=args.model,
         base_url=base_url,
         api_key=api_key,
@@ -105,6 +118,7 @@ def main() -> None:
         force=args.force,
         log_level=args.log_level,
         verify_scores=args.verify_scores,
+        keep_references_in_body=args.keep_references_in_body,
         warm_content_cache=args.warm_content_cache,
     )
 

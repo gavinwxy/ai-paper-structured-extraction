@@ -43,6 +43,7 @@ from section_pipeline import (
     collect_citation_cite_keys,
     assemble_citation_references,
     _slice_references_blob,
+    slice_body_content,
     validate_section_ir,
     parse_sections,
     _parse_llm_json,
@@ -96,6 +97,20 @@ async def _run_paper_pipeline(
         write_status(paper_dir, "in_progress")
         paper_content = paper_path.read_text(encoding="utf-8")
         logger.info("[%s] Starting extraction (%d chars)", paper_id, len(paper_content))
+        # Body slice for the paper's-own-content stages (census, relations, section fill): the full
+        # paper minus its bibliography-and-after, so they don't ingest/mint nodes from the reference
+        # list. The citation layer, metadata pass, and assembly/marker-resolution keep the full paper
+        # — the tail-only cut leaves every earlier [§N] marker number intact, so body-fed markers
+        # still resolve downstream. --keep-references-in-body opts back into full-paper everywhere.
+        body_content = (
+            paper_content if config.keep_references_in_body
+            else slice_body_content(paper_content)
+        )
+        if len(body_content) != len(paper_content):
+            logger.info(
+                "[%s] Body slice: %d -> %d chars (bibliography trimmed from census/relations/sections)",
+                paper_id, len(paper_content), len(body_content),
+            )
         # The proxy prompt-cache routing key is unsupported on official DeepSeek (caching is
         # automatic, unknown params 400) — None there, so every stage's `prompt_cache_key=cache_key`
         # is skipped by the client's `if prompt_cache_key:` guard.
@@ -133,7 +148,7 @@ async def _run_paper_pipeline(
             }
 
         census_result, metadata_result, citation_result = await asyncio.gather(
-            _run_census(paper_id, paper_content, cache_key, config, llm),
+            _run_census(paper_id, body_content, cache_key, config, llm),
             _run_metadata(paper_id, paper_content, config, llm),
             _citation_layer_arm(),
             return_exceptions=True,
@@ -189,7 +204,7 @@ async def _run_paper_pipeline(
         # Phase 2 (stage B): relation pass over the full node set
         node_registry = build_node_registry(census)
         relation_output = await _run_relation_pass(
-            paper_id, paper_content, node_registry, cache_key, config, llm
+            paper_id, body_content, node_registry, cache_key, config, llm
         )
         relations = relation_output.get("relations") if isinstance(relation_output, dict) else None
         if not isinstance(relations, list):
@@ -207,7 +222,7 @@ async def _run_paper_pipeline(
             key=lambda x: int(x[1:]),
         )
         section_results = await _run_all_content_sections(
-            paper_id, paper_content, census, node_registry, relations,
+            paper_id, body_content, census, node_registry, relations,
             cache_key, config, llm, paper_dir,
         )
         logger.info("[%s] Phase 3 complete (%d content sections)", paper_id, len(section_results))
