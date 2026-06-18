@@ -182,7 +182,7 @@ NODE_ID_PREFIX_BY_TYPE: dict[str, str] = {
 
 # Contribution kind = WHAT KIND of deliverable the paper's root is (the user-facing artifact axis,
 # Lean 4): method (an algorithm/technique/architecture/model, OR a proven formal result such as a
-# theorem/bound — tagged with method_kind theorem/lemma/bound/definition), dataset, benchmark,
+# theorem/bound — tagged with method_kind theorem/lemma/bound/definition/assumption), dataset, benchmark,
 # finding (an empirical/analysis result — the analysis-paper deliverable, FG-5, with no novel
 # artifact). Census-emittable: all 4. (theory folded into method in 0.17 — method took on the
 # proven-result role, carried by method_kind.)
@@ -298,12 +298,14 @@ KIND_VOCAB_BY_TYPE: dict[str, set[str]] = {
 # software library) under a Contribution of kind=method; method.md suppresses the algorithm-form
 # fields (inputs/outputs/formulas) for them. A dataset/benchmark deliverable is NOT a method_kind
 # — it is a Contribution of kind=dataset/benchmark (0.17), and it hosts its score rows natively
-# without a duplicate twin. method_kind=`theorem`/`lemma`/`bound`/`definition` marks a formal
-# statement/construct under a Contribution of kind=method (a proven-result paper now roots as
-# kind=method); method.md suppresses the algorithm-form fields for them too. The *proven* result
-# then lives as a Finding (kind theorem/lemma/bound) that the Contribution `supports`.
+# without a duplicate twin. method_kind=`theorem`/`lemma`/`bound`/`definition`/`assumption` marks a
+# formal statement/construct/premise under a Contribution of kind=method (a proven-result paper now
+# roots as kind=method); method.md suppresses the algorithm-form fields for them too. The *proven*
+# result then lives as a Finding (kind theorem/lemma/bound) that the Contribution `supports`.
+# `assumption` (a premise a theorem rests on, e.g. "Low-rank Tasks") is, like `definition`, a formal
+# construct and not a result — so it is a method_kind only, never a Finding kind.
 METHOD_KINDS = {"algorithm", "model_architecture", "training_strategy", "objective_function",
-                "resource", "taxonomy", "theorem", "lemma", "bound", "definition"}
+                "resource", "taxonomy", "theorem", "lemma", "bound", "definition", "assumption"}
 # Optional per-formula functional tag (0.14). The standalone `objective_function` field is gone:
 # it overlapped formulas[] ontologically (27.6% of OF-bearing Method units transcribed the same
 # expression twice) and its 1-cardinality could not hold multi-objective methods (GAN, multi-task).

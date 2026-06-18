@@ -152,7 +152,7 @@ ENUM_ORDER: dict[str, list[str]] = {
     "experiment_setup_kind": EXPERIMENT_SETUP_KIND_ORDER,
     "finding_kind": FINDING_KIND_ORDER,
     "method_kind": ["algorithm", "model_architecture", "training_strategy", "objective_function",
-                    "resource", "taxonomy", "theorem", "lemma", "bound", "definition"],
+                    "resource", "taxonomy", "theorem", "lemma", "bound", "definition", "assumption"],
     "formula_role": ["objective"],
     "comparison_direction": ["higher_is_better", "lower_is_better", "target", "unspecified"],
     "finding_polarity": ["positive", "negative", "neutral", "mixed"],

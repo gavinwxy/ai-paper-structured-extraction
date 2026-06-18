@@ -91,7 +91,8 @@
                   "theorem",
                   "lemma",
                   "bound",
-                  "definition"
+                  "definition",
+                  "assumption"
                 ],
                 "description": "Optional finer structural classification on a kind=method contribution (algorithm/model_architecture/training_strategy/objective_function for an algorithmic method; theorem/lemma/bound/definition for a proven formal result; resource/taxonomy for a non-algorithmic deliverable); omit otherwise"
               },

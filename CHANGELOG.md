@@ -58,8 +58,17 @@ ROOT 写裸 `§3`（意为「第 3 节」但块 `§3` 也存在，解析即猜�
 （缺节点召回 ×8、细配置 setup 召回 ×5、引用层 ×3、模型公式/理论 ×3、设计内 derived-edge 空 provenance
 ×3、图/定性 measure ×3）或已记录 deferred——**无一是「触发但失败」的修复**。
 
-**Deferred（已记录，未做）**：`assumption` 单元 kind（schema 缺口）、裸 `§3` ROOT provenance（避免猜测）、
-FD-3 图源 score 回填；模型召回残差留给 deepseek-v4-pro。
+**后续补充 — `assumption` method_kind（原 deferred 项，已做）**：理论论文「定理所依赖的命名前提」
+（如 012_NeurIPS 的 *Low-rank Tasks* / *Diverse Tasks*）原先无处安放。新增 `method_kind=assumption`
+（与 `definition` 同列——形式构造而非结果，故只是 method_kind、**不是** Finding kind），全链路传播：
+`METHOD_KINDS`（`section_pipeline.py`，validation 直接读该集合）、`tools/generate_section_schemas.py`
+的 `ENUM_ORDER` + 重生成 `section-method`/`section-evidence` schema（仅新增枚举值，无 clobber）、
+method.md（enum + 字段抑制规则 + Component 段：assumption 像 theorem/lemma 一样省略 inputs/outputs/
+formulas）、node-census.md（Procedure 第 7 步：定理/引理**及其依赖的具名 Assumption** 都该 census 为
+Component）。526 测试通过（含新增 `test_assumption_method_kind_kept`）。
+
+**Deferred（仍未做）**：裸 `§3` ROOT provenance（避免猜测）、FD-3 图源 score 回填；
+模型召回残差留给 deepseek-v4-pro。
 
 ## 默认抽取模型：`deepseek-v4-pro` → `qwen3.5-35b-a3b`（均 thinking-off）
 
