@@ -1,45 +1,85 @@
 SECTION FOCUS: method
 
-This section captures the technical apparatus the paper introduces or applies: algorithms, model architectures, training strategies, and objectives. The method section justifies the claim by showing how it was realized.
+# Goal
+You are filling the **method** section — the technical apparatus the paper introduces or applies: algorithms, model architectures, training strategies, objectives, formal statements, and major components. This section **explains how the paper's claim is realized**.
 
-This section **materializes the method-section census nodes**: for each `Contribution` node (kind `method`) in `node_registry`, emit a Contribution unit reusing its `node_id` verbatim as the unit `id` and its `kind` verbatim from the registry; for each `Component` node, emit a Component unit reusing its `node_id` verbatim. Fill the rich fields below. You may also add a fresh `cmp:` Component when the method section clearly contains a named, method-defining part the census missed; do not add a fresh Contribution here (a missing root is a census-repair issue, not a method-fill one).
+**CRITICAL-1 — materialize the census; add only Components.** Reuse every census `node_id` **verbatim**. For each `Contribution` node (`kind: method`) emit a Contribution unit (copy its `kind` verbatim too); for each `Component` node emit a Component unit. You may add a fresh `cmp:` Component **only** when the method section clearly contains a named, method-defining part the census missed. **NEVER add a fresh Contribution here** — a missing root is a census-repair issue, not a method-fill one.
 
-## Units you may define
+**CRITICAL-2 — formulas are the priority field, and an objective lives only in `formulas`.** Capture **every** displayed/stated defining equation and **every** stated loss/objective. **When one unit defines several equations, capture them all — never stop at the first.** An objective is a tagged entry in its unit's `formulas` — never a separate unit, and never represented two ways (see *Routing*).
 
-`Contribution` units (array `contributions`) and `Component` units (array `components`). Typical: the primary Contribution and its major Components. (The census is internal-only — it lists no external baselines, so there are none to materialize here; the paper's comparisons to prior art live in the citation layer.)
+# The Core Rule: Materialize Method Census Nodes
+From `node_registry`:
+1. every `Contribution` node with `kind: method` → one Contribution unit (`id` = its `node_id` **verbatim**; `kind` copied **verbatim**);
+2. every `Component` node → one Component unit (`id` = its `node_id` **verbatim**);
+3. add a fresh `cmp:` Component **only** for a clearly named, method-defining part the census missed.
 
-A `Contribution` is the root deliverable the paper introduces; a `Component` is a sub-module that is `part_of` a Contribution (single-level — a Component never decomposes into further Components here). A dataset/benchmark deliverable is a `Contribution` (kind `dataset`/`benchmark`) materialized in the evidence section, not here; a `finding`-kind Contribution (an analysis paper's result) is likewise born in the evidence section. So this section materializes the `method`-kind Contributions (including proof/theory papers) and the Components.
+This section may define **only** `contributions[]` and `components[]`, and authors **no `relations` field**. Dataset, benchmark, and `finding` Contributions are materialized in the **evidence** section, not here; **Measure** and **ExperimentSetup** units never belong here. *(The census is internal-only — it lists no external baselines, so there are none to materialize here; the paper's comparisons to prior art live in the citation layer.)*
 
-### Contribution
-Fill `implementation_notes` for an algorithmic contribution (it is the reproducibility nudge — use `""` only when the paper truly states nothing); omit it for a non-implementation `theorem`/`lemma`/`bound`/`definition`/`assumption`/`resource`/`taxonomy` unit rather than inventing detail.
-- `kind` (required): the contribution's category. Copy it verbatim from the node's `kind` in `node_registry` (it is authoritative; do not re-decide it) — in this section it is always `method`, because a `dataset`/`benchmark`/`finding` Contribution is materialized in the evidence section, not here. A proven formal result (a theorem, lemma, or bound the paper proves) or a formal construct (a definition) is **still** `kind: method`; its formal nature is carried by `method_kind` below, never by a `theory` kind (there is no such kind). Usually exactly one Contribution is the root; when the census tagged co-equal roots (linked by `co_contribution`), materialize each — never demote one. Do not add a fresh Contribution here — roots come from the census; any unit you add fresh is a Component.
-- `method_kind` (optional): a finer structural sub-tag — one of `algorithm | model_architecture | training_strategy | objective_function | resource | taxonomy | theorem | lemma | bound | definition | assumption`. It refines `kind`; omit it when the sub-kind is unclear rather than guessing. Use `training_strategy` for a training *process* (schedule, curriculum, optimization procedure); reserve `objective_function` for a contribution whose own deliverable *is* a loss/objective. A method merely *having* a loss does not make it `objective_function` — see the routing rule under `formulas` below. Use `algorithm` for a procedure or protocol the paper describes executing (steps, pseudo-code, a pipeline, complexity analysis); use `resource` only when the deliverable is presented as a released artifact (a software library, an atlas, a model collection) and the paper describes what it contains or provides rather than a procedure of its own. Use `taxonomy` for a classification scheme / survey taxonomy that is the contribution. A `theorem`/`lemma`/`bound`/`definition`/`assumption` sub-tag belongs on a `kind: method` Contribution (a proof/theory paper roots as `kind: method`; the sub-tag carries the formal-result distinction) — a **formal statement** the paper states and proves (a theorem, a lemma, a complexity/sample/regret bound the paper itself proves), a formal construct it introduces (`definition`), or a **premise the result rests on** (`assumption` — e.g. "Low-rank Tasks", "bounded rewards"; tag the named, separately-stated premise the theorems explicitly invoke, not every passing caveat). **When `method_kind` is `resource`, `taxonomy`, `theorem`, `lemma`, `bound`, `definition`, or `assumption` the unit is not an algorithm: omit `inputs`, `outputs`, and `formulas`** (they describe computation it does not perform — do not fabricate I/O for a static statement) and put the statement (and, for a theorem/lemma, the proof strategy) in `description`. For these non-implementation sub-kinds `implementation_notes` is optional — omit it rather than inventing reproducibility detail. The **proven result** itself (what the theorem establishes) is a `Finding` with kind `theorem`/`lemma`/`bound` in the evidence section; the Contribution `supports` that finding.
-- `name`: match how the paper refers to the contribution (the exact system or algorithm name).
-- `inputs` / `outputs` (optional): what flows into or out of the contribution, even if stated informally ("takes queries, keys, and values" → `inputs: ["queries", "keys", "values"]`). Do not invent inputs or outputs.
-- `formulas` (optional but high-value): the unit's defining equations. Each entry takes **one of exactly two shapes** — a *defining equation* `{ "name": <short label>, "expression": <LaTeX or plain text> }`, or an *objective* `{ "name": ..., "expression": ..., "role": "objective", "description": <what it optimizes> }`. `role` takes only the value `"objective"`; `role` and `description` appear on objective entries only — an ordinary defining equation carries just `name` + `expression`. **Whenever the paper writes out a displayed/numbered equation that states how the method computes its result — an attention or scoring formula, a layer transform, a recurrence, a residual mapping, a loss term — capture it. Do not leave the field empty when such an equation appears in the text.** Transcribe the expression faithfully and completely, e.g. `Attention(Q,K,V)=softmax(QK^T/sqrt(d_k))V`. Capture every distinct defining equation, not just one. **Do not transcribe a symbol-by-symbol glossary** — the expression and the unit's `description` carry the meaning; just give the equation and a short `name`. Skip only incidental algebra or dimension bookkeeping.
-  - **Objective tag — actively hunt for the training objective.** For every Contribution and Component, check whether the paper states the loss or optimization objective it minimizes/maximizes — it is often stated briefly, in a training-details paragraph rather than the core exposition, and is often a standard loss (cross-entropy, `L1 + λ·L_SSIM`, MSE). **When stated, transcribe it — even a one-line standard loss — as an objective entry** (the second shape above). A missing objective must mean the paper states none, not that it was overlooked. The converse also holds: transcribe only what the paper states — never reconstruct an objective from general knowledge of a system, and never tag a forward/inference/rendering equation as the objective just so the unit has one. A unit optimizing several stated objectives may tag each. (This per-formula `role` is the only `role` in this section; the unit itself has no `role` field.)
-  - **Each equation appears once per unit, on the unit whose computation it defines.** The objective is a tagged entry in `formulas`, not a second copy of one. When a composite Contribution's objective combines component losses (`L = L^A + αL^R`), the parent carries only the combined objective; each component loss is the objective of its own Component unit — do not re-transcribe component losses in the parent's `formulas`. This parent↔component rule is the only cross-unit ban: **sibling systems or variants that each train with the same stated objective each carry it** — do not drop a stated training loss merely because another unit also states it.
-  - Routing rule (do not represent one objective three ways): ① a unit's loss/optimization target → a `role: "objective"` entry in **that unit's `formulas`**; do not spin up a separate unit for it. ② a training *process* (schedule, curriculum, warmup) → a unit with `method_kind: training_strategy`. ③ reserve `method_kind: objective_function` for the rare case where a loss itself is the paper's contribution and stands as its own Contribution.
-- `implementation_notes`: caveats, software choices, or configuration details affecting reproducibility. Boundary conditions and operational constraints go here or in `description`, not as separate units.
+# Important Definitions — Units You May Define
 
-### Component
-A sub-module that is `part_of` a Contribution. Same rich fields as a Contribution (`name`, `description`, optional `inputs`/`outputs`/`formulas`/`implementation_notes`, optional `method_kind`) **except it has no `kind`** — a Component is single-level and carries no required differentia. Its `method_kind` (optional) draws from the same vocabulary and follows the same field-suppression rule (a `theorem`/`lemma`/`bound`/`definition`/`assumption`/`resource`/`taxonomy` Component omits `inputs`/`outputs`/`formulas`). A named premise the paper's theorems rest on (an `Assumption`/`Condition` it states and invokes) is such a Component, `method_kind: assumption`. The objective-tag guidance above applies to Components too.
+## Contribution
+The **root method deliverable** the paper introduces. Fields: `name`, `kind`, optional `method_kind`, optional `inputs` / `outputs` / `formulas`, `implementation_notes`.
+- **`kind` (required)** — copy it **verbatim** from the node's `kind` in `node_registry` (authoritative; do NOT re-decide). In this section it is **always `method`** (a dataset/benchmark/finding Contribution is born in the evidence section). A proven formal result (theorem, lemma, bound) or a formal construct (definition) is **still `kind: method`** — its formal nature rides on `method_kind` below, **never** on a `theory` kind (there is no such kind).
+- **Materialize every `method`-kind Contribution, including co-equal roots** (the census links them via `co_contribution`). **Do NOT demote a co-equal root into a Component**, and **do NOT create a new Contribution** — any fresh unit you add is a Component.
+- **`name`** — match how the paper refers to the contribution (the exact system or algorithm name).
 
-## Relations
+## `method_kind` (optional refinement — use only when clear)
+One of: `algorithm | model_architecture | training_strategy | objective_function | resource | taxonomy | theorem | lemma | bound | definition | assumption`. It refines `kind`; **omit it when the sub-kind is unclear** rather than guessing.
+- **`algorithm`** — an executable procedure, pipeline, protocol, pseudo-code, or complexity-described method.
+- **`model_architecture`** — a model structure or network design.
+- **`training_strategy`** — a training *process*: schedule, curriculum, warmup, or optimization procedure.
+- **`objective_function`** — **reserve** for a contribution whose own deliverable *is* a loss/objective. A method merely *having* a loss is **not** `objective_function` (see *Routing*).
+- **`resource`** — a released artifact (software library, atlas, model collection) where the paper describes what it *contains/provides* rather than a procedure of its own.
+- **`taxonomy`** — a classification scheme or survey taxonomy that *is* the contribution.
+- **`theorem` / `lemma` / `bound`** — a **formal statement the paper proves** (including a complexity/sample/regret bound it proves itself).
+- **`definition`** — a formal construct the paper introduces.
+- **`assumption`** — a **named premise** the formal results explicitly invoke (e.g. "Low-rank Tasks", "bounded rewards"); tag the named, separately-stated premise the theorems rest on, **not** every passing caveat.
 
-This section authors no relations and its schema has no `relations` field. Method composition (`child --part_of--> parent`, i.e. a Component into its Contribution) and variant contrasts (`compares_to`) are established by the relation pass over the full node set, so do not try to express them here — they are already in the global `relations` you were given.
+## Component
+A **single-level sub-module** of a Contribution. **Same rich fields as a Contribution** (`name`, `description`, optional `inputs` / `outputs` / `formulas` / `implementation_notes`, optional `method_kind`) **except it has no `kind`**. A Component is **not** decomposed into further sub-components here. A named theorem **premise / condition / assumption** may be a Component with `method_kind: assumption`. **Any fresh unit you add is a Component, never a Contribution.**
 
-## Extraction focus
+## Field Suppression for Static / Formal Units
+When `method_kind` is **`resource`, `taxonomy`, `theorem`, `lemma`, `bound`, `definition`, or `assumption`**, the unit performs **no computation** — **omit `inputs`, `outputs`, and `formulas`** (do NOT fabricate I/O or equations for a static statement). Put the statement, contents, scope, or proof strategy in **`description`**. For these units **omit `implementation_notes`** unless the paper gives concrete implementation or release details.
 
-- A dataset/benchmark that is the paper's **own deliverable** is a `Contribution` (kind `dataset`/`benchmark`) materialized in the evidence section, not a method-section unit. Do not re-materialize it here.
-- Named entities (datasets, libraries, models) used as method inputs belong in the `description` field, not as separate ExperimentSetup units.
-- For a theorem/lemma/bound the paper states and proves, materialize it as a Contribution with `kind: method` and `method_kind: theorem` (or `lemma`/`bound`), `description` giving the statement and proof strategy, and no fabricated `inputs`/`outputs`/`formulas`. The proven result is a `Finding` (kind `theorem`/`lemma`/`bound`) in evidence; the Contribution `supports` it. A formal definition the paper introduces is `method_kind: definition`; a named premise its theorems rest on (an "Assumption"/"Condition" it states and invokes) is a `method_kind: assumption` Component, not a Finding.
+# Inputs & Outputs
+Use `inputs` / `outputs` **only** when the paper states or clearly describes what flows into or out of the unit — e.g. `inputs: ["queries", "keys", "values"]`, `outputs: ["context vectors"]`. **Do NOT invent** I/O from general knowledge. Named datasets, libraries, models, and resources *used by* the method belong in **`description`**, **not** as `ExperimentSetup` units.
 
-## Anti-patterns
+# `formulas` — Defining Equations (optional, but high-value)
+Capture **every** displayed or clearly stated equation that defines how the unit works — attention/scoring formulas, layer transforms, recurrences, residual mappings, losses, optimization objectives, regularizers. **Do NOT** leave the field empty when such an equation appears in the text. Transcribe expressions **faithfully and completely** (e.g. `Attention(Q,K,V)=softmax(QK^T/sqrt(d_k))V`), and capture **every distinct** defining equation — **even when a single unit defines many** (a multi-stage method, a layered architecture): transcribe them all, do **not** stop at the first or summarize the rest in prose. **Do NOT** transcribe incidental algebra, dimensional bookkeeping, or a symbol-by-symbol glossary — the expression and the unit's `description` carry the meaning.
 
-- Do not place Measure units here for method performance; measures belong in the evidence section.
+Each entry takes **exactly one of two shapes**:
+- **defining equation** — `{ "name": <short label>, "expression": <LaTeX or plain text> }`
+- **objective** — `{ "name": ..., "expression": ..., "role": "objective", "description": <what it optimizes> }`
 
-## Worked example
+`role` takes **only** the value `"objective"`; `role` and `description` appear on **objective entries only** — an ordinary defining equation carries just `name` + `expression`.
+
+## Objective Hunt — actively check for a stated loss/objective
+For **every** Contribution and Component, check whether the paper states the loss or optimization objective it minimizes/maximizes — it is often stated briefly, in a training-details paragraph rather than the core exposition, and is often a standard loss (cross-entropy, `L1 + λ·L_SSIM`, MSE). **When stated, transcribe it — even a one-line standard loss — as an objective entry.** A *missing* objective must mean the paper states none, not that it was overlooked. Conversely, transcribe **only what the paper states** — **never** reconstruct an unstated objective from general knowledge of a system, and **never** tag a forward/inference/rendering equation as the objective just so the unit has one. A unit optimizing several stated objectives may tag each.
+
+## Routing — do not represent one objective three ways
+① a unit's loss/optimization target → a `role: "objective"` entry in **that unit's `formulas`** (NOT a separate unit); ② a training *process* (schedule, curriculum, warmup) → a unit with `method_kind: training_strategy`; ③ a contributed loss that **itself** is the paper's deliverable → `method_kind: objective_function`.
+
+## Formula Placement — each equation appears once, on the unit it defines
+The parent Contribution carries **only its own combined objective** (`L = L^A + αL^R`); each component loss is the objective of **its own Component** — do NOT re-transcribe component losses in the parent's `formulas`. This parent↔component ban is the **only** cross-unit one: **sibling systems or variants that each state the same objective each carry it** — do NOT drop a stated training loss merely because a sibling also states it.
+
+**This rule scopes LOSSES only — it never thins a unit's *defining* equations.** A computation-heavy unit (a multi-stage root, a layered architecture) carries **all of its own** defining equations, however many. Moving an equation onto the component that computes it is **relocation, not deletion** — every distinct equation the paper writes out must survive on exactly one unit. **Never** reduce a computation-heavy unit to just its objective when the paper states the equations it computes.
+
+# Descriptions & Implementation Notes
+- **`description`** — state what the unit does. For a **formal** unit, include the formal statement, its scope, and (when given) the proof strategy. Do NOT invent causal rationale the paper does not state.
+- **`implementation_notes`** — for an **algorithmic / implemented** unit, give reproducibility-relevant detail (software, configuration, caveats, boundary conditions, operational constraints); use `""` only when the paper states nothing. For **static / formal** units, omit unless real implementation or release detail is provided.
+
+# Formal Results
+A **theorem, lemma, bound, definition, or assumption** introduced by the paper is a `method`-kind unit: a formal **root** is a `Contribution` with `kind: method` whose formal type rides on `method_kind`; a premise/condition may be a `Component` with `method_kind: assumption`. Do NOT fabricate `inputs` / `outputs` / `formulas`. The **proven result itself** becomes a `Finding` (kind `theorem` / `lemma` / `bound`) in the **evidence** section, and the `Contribution --supports--> Finding` edge is authored **there, not here**.
+
+# Output Detail Level (Tiered Strategy)
+- **`formulas`: high-value, faithful, complete.** Transcribe every defining equation and every stated objective verbatim — the section's priority field. Never summarize an equation in prose instead of giving it.
+- **`description`: factual & complete.** What the unit does, and for a theorem/lemma its proof strategy. No invented rationale.
+- **`implementation_notes`: reproducibility-focused.** Concrete config/software choices; `""` when the paper states none.
+
+# Relations
+This section authors **no relations** and its schema has **no `relations` field**. Do NOT emit `relations`, `part_of`, `compares_to`, `supports`, or `evaluates` here — method composition (`child --part_of--> parent`, a Component into its Contribution) and variant contrasts (`compares_to`) are established by the global **relation pass** over the full node set and are already in the `relations` you were given.
+
+# Mental Sandbox / Worked Example
 
 {
   "section": {
@@ -89,8 +129,30 @@ This section authors no relations and its schema has no `relations` field. Metho
   }
 }
 
-Here `cmp:attention_mechanism --part_of--> con:proposed_model` is **not** emitted in this section; it already lives in the global `relations` from the relation pass.
+**Key lesson:** the parent carries the **objective** (cross-entropy) as a tagged `formulas` entry; the Component carries its own **defining equation** (scaled dot-product attention) with no `role`. And `cmp:attention_mechanism --part_of--> con:proposed_model` is **NOT** emitted here — it already lives in the global `relations` from the relation pass.
 
-## Anchor
+# Anchor
+`anchor_id` must be the **primary method Contribution** id — the census `root`. When the census tagged co-equal roots, anchor on the one the paper's **title/abstract** centers on.
 
-`anchor_id` must be the primary Contribution unit — the one corresponding to the main technical contribution (the census `root`). When the census tagged co-equal roots, anchor on the one the paper's title/abstract centers on.
+# Anti-Patterns
+Do **NOT**:
+- add a fresh Contribution (any newly introduced unit is a `cmp:` Component);
+- materialize dataset, benchmark, or `finding` Contributions here;
+- create `Measure` or `ExperimentSetup` units, or represent method inputs as ExperimentSetups;
+- invent `inputs` / `outputs` / `formulas`, or fabricate `implementation_notes`;
+- duplicate a component's objective in the parent (the parent carries only the combined objective);
+- use `kind: theory`, or a unit-level `role` field;
+- emit method `relations`.
+
+# Final Completeness Check
+Before closing the JSON, verify:
+1. every `Contribution` registry node with `kind: method` appears in `contributions[]`;
+2. every `Component` registry node appears in `components[]`;
+3. no fresh Contribution was created;
+4. any fresh unit is a `cmp:` Component;
+5. no dataset, benchmark, finding, Measure, or ExperimentSetup unit appears here;
+6. no `relations` field exists;
+7. every stated defining equation is captured once, on the correct unit;
+8. every stated loss/objective is captured as a `role: "objective"` formula;
+9. static / formal units omit fabricated `inputs` / `outputs` / `formulas`;
+10. `anchor_id` points to the primary method Contribution.

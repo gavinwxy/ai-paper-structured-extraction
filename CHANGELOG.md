@@ -10,6 +10,32 @@
 
 ---
 
+## 提示词 SC idiom 转正为默认 + 跨臂规则收紧
+
+**日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
+
+- **SC idiom 提示词转正为默认**：persona / definition-first 的 SC 改版（原 `prompts-sc-style/`）经 A/B
+  胜出后提升为生产默认 `prompts/`；改名前的原版整树归档到
+  `archive/legacy-prompts/section-ir-0.17-original/`。`section_pipeline.py` 的 4 个路径常量**不变**
+  （仍指 `prompts/`），`production/worker.py` 等据此 import，无需改动。两套为**有意的语义等价体**，
+  差异仅在文风；分歧时以生产 `prompts/` 为准。
+- **跨臂规则收紧（两套同步修订）**：
+  - evidence：拆清 “prose mode” 二义（**整篇无表**才转写含 baseline 的所有行；**单 metric 无表**只转写
+    contribution 自己的行），补回 *data/metric finding + multi-step chain* 指南，恢复 custom-setup
+    `description`（composition/coverage + 真实数字）规则；
+  - reference-metadata：缺失值改为**分字段协议**（title/venue→`""`、authors→`[]`、year→`null`）+ 显式
+    echo `cite_key`；
+  - metadata：新增 **venue 抽取规则**（venue line / 页眉页脚 / proceedings；未述则 `null`，禁止从文件名或
+    常识推断）；
+  - section-extraction-pass：missed-node 许可收紧为“只补 `section_focus` 拥有的类型”；
+  - problem：`motivates` 明确为“**每个 Problem 一条**，连到最匹配目标”；
+  - citations：`uses_component` 增补 apparatus 边界句（标准 optimizer/工具=background；实质性 ingredient 才
+    `uses_component`）。
+- 本地测试套件（`tests/`，gitignore，未提交）随之更新：mock 路由按 SC persona 调整（大小写无关 + token 对齐），
+  prompt-prose 断言 retarget 到 SC 文案。
+
+---
+
 ## 100 篇框架评测 + 修复（FD-1…6）+ 问题论文重测（FD-1b / FD-5b）
 
 **日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`

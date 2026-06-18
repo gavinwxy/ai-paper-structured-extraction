@@ -292,6 +292,10 @@ truncates):
 
 ## How it works
 
+> The extraction prompts in `prompts/` are written in the **SC idiom** (persona / definition-first,
+> promoted to the default 2026-06-18). The pre-SC original phrasing is archived verbatim at
+> `archive/legacy-prompts/section-ir-0.17-original/`; the two are intended semantic equivalents.
+
 ### Stage A — Node Census
 
 **Prompt:** `prompts/section-extraction/node-census.md` · **Schema:**
@@ -303,7 +307,7 @@ One full-paper call produces:
   `headline_result`, the paper's headline established result).
 - `nodes[]` — a flat list of every load-bearing node, each with a primary **`type`**, a **`kind`**
   (only on the multi-kind census types — `Contribution` and `ExperimentSetup`), and **no relations**.
-  Each node carries `node_id`, `type`, `kind`, `name`, `gloss`, `source_scope`, and `cite_keys`; the
+  Each node carries `node_id`, `type`, `kind`, `name`, `description`, `provenance`, and `cite_keys`; the
   per-unit `role` field is **gone** (0.17 — `type` is primary, `kind` is the differentia). The census
   node types are `Contribution`, `Component`, `ExperimentSetup`, `Measure`, `Problem`. Each `node_id`
   prefix (`con:`/`cmp:`/`exp:`/`mea:`/`prb:`) follows from the node's `type` and is reused verbatim as
@@ -517,7 +521,7 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
 │   ├── cli.py  config.py  runner.py     #   argument parsing, config, batch orchestration
 │   ├── worker.py                        #   per-paper pipeline with staged intermediate saves
 │   ├── llm.py  outputs.py  progress.py  #   async transport, atomic writes, progress
-├── prompts/
+├── prompts/                             # SC-idiom prompts (default); pre-SC original in archive/legacy-prompts/section-ir-0.17-original/
 │   ├── metadata-extraction.md           # Metadata sidecar prompt
 │   ├── citations-extraction.md          # Citation layer Pass 1 — paper-level relations + signals
 │   ├── reference-metadata.md            # Citation layer Pass 2 — bibliography metadata
@@ -586,7 +590,7 @@ demotes the old granular `role` to a `kind` sub-axis carried **only** on the mul
   evidence content fill, and an analysis paper's root is a `Contribution` of kind `finding` that its
   headline `Finding` is `about` (the old finding-root special case is gone). Census node types are
   now `Contribution`, `Component`, `ExperimentSetup`, `Measure`, `Problem`; each emits
-  `{node_id, type, kind, name, gloss, source_scope, cite_keys}`.
+  `{node_id, type, kind, name, description, provenance, cite_keys}`.
 - **`method_kind` retained** as an OPTIONAL finer structural sub-tag on a `Contribution` of kind
   `method` and on a `Component` (same `{algorithm, …, definition}` vocabulary; theorem/lemma/bound/
   definition mark a proven formal result, which now roots as `kind: method`). Relation
