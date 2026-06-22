@@ -159,9 +159,9 @@ async def _run_paper_pipeline(
             raise census_result
 
         metadata = None
-        citations = None
-        reference_metadata = None
-        references = None
+        citations: dict[str, Any] = {"citations": []}
+        reference_metadata: dict[str, Any] = {"references": []}
+        references: dict[str, Any] = {"references": []}
         warnings: list[str] = []
 
         if isinstance(metadata_result, BaseException):
@@ -244,6 +244,29 @@ async def _run_paper_pipeline(
             "issues": validation_issues,
             "valid": len(validation_issues) == 0,
         })
+        if validation_issues:
+            elapsed = time.monotonic() - t0
+            token_usage = llm.drain_usage(paper_id)
+            message = f"Validation failed with {len(validation_issues)} issue(s)"
+            write_status(
+                paper_dir,
+                "failed",
+                error=message,
+                timing_s=round(elapsed, 1),
+                validation_issues=len(validation_issues),
+                validation_issue_examples=validation_issues[:20],
+                warnings=warnings,
+                token_usage=token_usage,
+            )
+            logger.error("[%s] %s", paper_id, message)
+            return {
+                "paper_id": paper_id,
+                "status": "failed",
+                "error": message,
+                "timing_s": round(elapsed, 1),
+                "validation_issues": len(validation_issues),
+                "tokens": token_usage["totals"],
+            }
 
         # Render HTML — a non-essential side artifact. Never fail a paper whose
         # extraction + validation already succeeded just because the renderer choked.

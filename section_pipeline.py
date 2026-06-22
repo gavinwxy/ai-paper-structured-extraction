@@ -2232,7 +2232,8 @@ def build_output_manifest(
     have to discover them by trial-and-error over 100KB JSON trees. Static apart from the run
     flags; written once per run root (and by tools/build_agent_index.py for older corpora)."""
     sections_shape = (
-        "flat: section_type/anchor_id/units(+problems/methods/measures arrays) at top level"
+        "flat: section_type/anchor_id/units(+typed arrays such as problems/contributions/"
+        "components/experiment_setups/measures/findings) at top level"
         if flattened_sections
         else "LEGACY WRAPPED: ALL data lives under the top-level 'section' key — a naive "
         "top-level read returns nothing"
@@ -2242,7 +2243,7 @@ def build_output_manifest(
         "ir_version": IR_VERSION,
         "files": {
             "01_census.json": (
-                "stage-A skeleton: nodes[] (node_id/role/name/description/cite_keys) + "
+                "stage-A skeleton: nodes[] (node_id/type/kind/name/description/provenance/cite_keys) + "
                 "spine_summary {central_contribution, argument_flow, headline_result}. Best "
                 "small first read (~9KB), but NOT complete — the content pass materializes "
                 "additional units (e.g. ExperimentSetups) that only exist in 06"
@@ -2265,8 +2266,8 @@ def build_output_manifest(
             "04_relations.json": STAGE_B_RELATIONS_NOTE,
             "05_sections/": f"raw per-section LLM results ({sections_shape}); superseded by 06",
             "06_extraction.json": (
-                "CANONICAL assembled section-IR: document, sections[].units[] (Problem/Method/"
-                "ExperimentSetup/Measure/Finding), the complete relations[], extraction_notes "
+                "CANONICAL assembled section-IR: document, sections[].units[] (Problem/"
+                "Contribution/Component/ExperimentSetup/Measure/Finding), the complete relations[], extraction_notes "
                 "(source_tables, references_blob, score_fidelity, plan_coverage)"
             ),
             "07_validation.json": "validator issues ([] = clean) + valid flag",
@@ -2285,7 +2286,7 @@ def build_output_manifest(
         "contracts": {
             "canonical_edge_set": (
                 "06_extraction.json relations[]; 04_relations.json is a strict stage-B subset "
-                "with zero dataset/benchmark edges"
+                "before content-authored motivates/about/supports/resolves links and assembly repairs"
             ),
             "blob_primary_evidence": (
                 "score tables: contribution rows are transcribed into Measure.scores[]; baseline/"
@@ -2332,7 +2333,7 @@ def build_output_manifest(
                 "verbatim source tables (located_pct); checked=false carries a reason and means "
                 "the numbers are UNVERIFIED, not wrong"
             ),
-            "Method.formulas[].role": (
+            "Contribution/Component.formulas[].role": (
                 "optional functional tag; 'objective' marks the training/optimization target "
                 "(0.14 — absorbed the retired objective_function field; the one-line "
                 "description of what is optimized rides on the same entry); absent on ordinary "
@@ -5038,11 +5039,15 @@ def run_content_extraction_sync(
     max_tokens: int = DEFAULT_SECTION_MAX_TOKENS,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
+    body_content: str | None = None,
 ) -> dict[str, Any]:
-    """Run the four content sections (stage C) over a shared prefix, then assemble 0.7 output.
+    """Run the content sections (stage C) over a shared prefix, then assemble 0.17 output.
 
-    Produces the same section-ir 0.12 (blob-primary) output as ``python -m production``.
+    ``paper_content`` is the full paper used for assembly/table/reference slicing. ``body_content``
+    is the optional bibliography-trimmed view fed to the paper's-own-content extraction stages,
+    matching ``python -m production``.
     """
+    extraction_input = body_content if body_content is not None else paper_content
     parsed_sections = parse_sections(paper_content)
     sections_included = _sort_section_refs({f"§{section_id}" for section_id in parsed_sections})
     sections_omitted: list[str] = []
@@ -5058,7 +5063,7 @@ def run_content_extraction_sync(
             client,
             model,
             section_type,
-            paper_content,
+            extraction_input,
             node_registry,
             relations,
             spine_summary=spine_summary,
@@ -5114,18 +5119,20 @@ def run_pipeline(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     strict: bool = True,
+    keep_references_in_body: bool = False,
 ) -> dict[str, Any]:
     """Run census + metadata + the citation-relation pass in parallel, then the citation
     reference-metadata pass, the relation pass, content fill, and validation.
 
-    Produces the same section-ir 0.16 output as ``python -m production``."""
+    Produces the same section-ir 0.17 output as ``python -m production``."""
     pipeline_warnings: list[str] = []
-    citations = None
-    reference_metadata: dict[str, Any] | None = None
+    body_content = paper_content if keep_references_in_body else slice_body_content(paper_content)
+    citations: dict[str, Any] = {"citations": []}
+    reference_metadata: dict[str, Any] = {"references": []}
     cache_key = prompt_cache_key if prompt_cache_key is not None else build_prompt_cache_key(model, paper_content)
     with ThreadPoolExecutor(max_workers=3) as executor:
         census_future = executor.submit(
-            run_node_census, client, model, paper_content,
+            run_node_census, client, model, body_content,
             temperature=temperature, max_tokens=max_tokens,
             prompt_cache_key=cache_key, prompt_cache_retention=prompt_cache_retention,
         )
@@ -5146,22 +5153,19 @@ def run_pipeline(
         try:
             citations = citations_future.result()
         except Exception as exc:
-            citations = None
             pipeline_warnings.append(f"citation-relation extraction failed: {exc}")
 
     # Citation layer Pass 2 (serial — needs Pass 1's cite_keys): resolve each related work's
     # bibliography metadata from the code-sliced reference blob, then join into `references`.
-    references = None
-    if citations is not None:
-        try:
-            reference_metadata = run_reference_metadata_extraction(
-                client, model, _slice_references_blob(paper_content),
-                collect_citation_cite_keys(citations), temperature=temperature, max_tokens=max_tokens,
-            )
-        except Exception as exc:
-            reference_metadata = {"references": []}
-            pipeline_warnings.append(f"reference-metadata extraction failed: {exc}")
-        references = assemble_citation_references(citations, reference_metadata)
+    try:
+        reference_metadata = run_reference_metadata_extraction(
+            client, model, _slice_references_blob(paper_content),
+            collect_citation_cite_keys(citations), temperature=temperature, max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        reference_metadata = {"references": []}
+        pipeline_warnings.append(f"reference-metadata extraction failed: {exc}")
+    references = assemble_citation_references(citations, reference_metadata)
 
     # RF-01 parity with the production worker (a no-op when paper_id carries no dirname pattern).
     metadata = enrich_metadata(metadata, paper_id)
@@ -5174,7 +5178,7 @@ def run_pipeline(
 
     node_registry = build_node_registry(census)
     relation_output = run_relation_pass(
-        client, model, paper_content, node_registry,
+        client, model, body_content, node_registry,
         temperature=temperature, max_tokens=max_tokens,
         prompt_cache_key=cache_key, prompt_cache_retention=prompt_cache_retention,
     )
@@ -5193,6 +5197,7 @@ def run_pipeline(
         max_tokens=section_max_tokens,
         prompt_cache_key=cache_key,
         prompt_cache_retention=prompt_cache_retention,
+        body_content=body_content,
     )
     # No reference reconcile in 0.16: the citation layer is paper-level (it draws no
     # internal-unit↔external links), so `references` is already complete from the Pass 1/2 join.
