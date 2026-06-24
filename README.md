@@ -109,6 +109,9 @@ proxy lives at `http://34.13.73.248:3888/v1`. You can also point at official Dee
 
 Extract every paper in a directory:
 
+For operational defaults, large-run checklist, monitoring, and post-run steps, see
+[`EXTRACTION_RUNBOOK.md`](EXTRACTION_RUNBOOK.md).
+
 ```bash
 .venv/bin/python -m production <input_dir> <output_dir> --model qwen3.5-35b-a3b
 ```
