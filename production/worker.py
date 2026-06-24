@@ -97,18 +97,17 @@ async def _run_paper_pipeline(
         write_status(paper_dir, "in_progress")
         paper_content = paper_path.read_text(encoding="utf-8")
         logger.info("[%s] Starting extraction (%d chars)", paper_id, len(paper_content))
-        # Body slice for the paper's-own-content stages (census, relations, section fill): the full
-        # paper minus its bibliography-and-after, so they don't ingest/mint nodes from the reference
-        # list. The citation layer, metadata pass, and assembly/marker-resolution keep the full paper
-        # — the tail-only cut leaves every earlier [§N] marker number intact, so body-fed markers
-        # still resolve downstream. --keep-references-in-body opts back into full-paper everywhere.
+        # Body slice for stages that should reason over in-paper prose rather than the bibliography
+        # tail: census, relations, section fill, and citation Pass 1. Metadata, reference metadata,
+        # assembly, and marker-resolution keep the full paper. --keep-references-in-body opts back
+        # into the old full-paper input for these body-fed passes.
         body_content = (
             paper_content if config.keep_references_in_body
             else slice_body_content(paper_content)
         )
         if len(body_content) != len(paper_content):
             logger.info(
-                "[%s] Body slice: %d -> %d chars (bibliography trimmed from census/relations/sections)",
+                "[%s] Body slice: %d -> %d chars (bibliography trimmed from body-fed stages)",
                 paper_id, len(paper_content), len(body_content),
             )
         # The proxy prompt-cache routing key is unsupported on official DeepSeek (caching is
@@ -121,14 +120,14 @@ async def _run_paper_pipeline(
         )
 
         # Phase 1 (stage A): node census + metadata + the citation layer, in parallel.
-        # The citation layer (section-ir-0.16) is serial within its arm: Pass 1 (census-blind, full
-        # paper) classifies the paper-level relations + verbatim signals; Pass 2 resolves only those
-        # relations' cite_keys to bibliography metadata from the code-sliced reference blob, then a
-        # deterministic join produces the downstream `references` artifact. A Pass-2 failure keeps
-        # the Pass-1 relations (the refs just lose their metadata).
+        # The citation layer (section-ir-0.16) is serial within its arm: Pass 1 (census-blind,
+        # body-before-bibliography) classifies the paper-level relations + verbatim signals; Pass 2
+        # resolves only those relations' cite_keys to bibliography metadata from the code-sliced
+        # reference blob, then a deterministic join produces the downstream `references` artifact.
+        # A Pass-2 failure keeps the Pass-1 relations (the refs just lose their metadata).
         async def _citation_layer_arm() -> dict[str, Any]:
             arm_warnings: list[str] = []
-            citations = await _run_citations(paper_id, paper_content, config, llm)
+            citations = await _run_citations(paper_id, body_content, config, llm)
             cite_keys = collect_citation_cite_keys(citations)
             blob = _slice_references_blob(paper_content)
             reference_metadata: dict[str, Any] = {"references": []}
@@ -446,8 +445,9 @@ async def _run_citations(
 ) -> dict[str, Any]:
     """Citation layer Pass 1 (section-ir-0.16): paper-level relations + verbatim signals.
 
-    Census-blind, full-paper. Classifies how THIS paper relates to each prior work it cites
-    (builds_on / uses / compares_to) and quotes the evidence span; emits only {cite_key, relations}.
+    Census-blind, body-before-bibliography by default. Classifies how THIS paper relates to each
+    prior work it cites and quotes the evidence span; emits only {cite_key, relations}. The
+    bibliography itself is handled by Pass 2 from a deterministic reference blob.
     """
     system_prompt, user_template = load_prompt(CITATIONS_PROMPT_PATH)
     user_prompt = user_template.replace("{{paper_content}}", paper_content)

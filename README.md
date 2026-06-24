@@ -69,7 +69,8 @@ only **internal** structural edges (`part_of`, `evaluates`, `co_contribution`, a
 prior work it cites (the seven-role taxonomy `compares_with` / `uses_component` / `builds_on` /
 `inspired_by` / `adapts_idea_from` / `addresses_limitation_of` / `analyzes_property_of`; `background`
 is the residual skip bucket) are captured **paper-level** (the source is the paper as a whole, not any
-internal node) by a census-blind two-pass citation stage: Pass 1 emits
+internal node) by a census-blind two-pass citation stage: Pass 1 reads the same
+body-before-bibliography view as the paper-content stages and emits
 `{cite_key, relations:[{role, signal}]}` (a verbatim evidence span per relation), Pass 2 resolves
 those cite_keys to bibliography metadata from the code-sliced reference blob, and a deterministic
 cite_key join produces `03_references.json`. External works are **never** graph nodes and there are no
@@ -164,7 +165,7 @@ reprocess. Common flags:
 | `--planning-max-tokens N` | `24576` | budget for census / relations / metadata / citation layer |
 | `--max-retries N` | `3` | retries per LLM call (re-issues on malformed JSON) |
 | `--force` | off | ignore resumability, reprocess everything |
-| `--keep-references-in-body` | off (cut is on) | feed the full paper (bibliography included) to census/relations/section fills; default strips references-and-after from those stages' input (citation layer + assembly always see the full paper) |
+| `--keep-references-in-body` | off (cut is on) | feed the full paper (bibliography included) to body-fed passes: census, relations, section fills, and citation Pass 1. Default strips references-and-after from those stages; reference metadata and assembly still use the full paper. |
 | `--no-verify-scores` | on | disable the score-fidelity audit (see below) |
 | `--no-warm-content-cache` | on (warming) | disable content-cache warming; run the three content sections fully concurrently instead of warming the shared prefix first (see below) |
 
@@ -203,7 +204,9 @@ candidates — numbered/bold/bare headers included — and the densest-in-refere
 The LLM never re-types the whole bibliography: the citation layer's **Pass 2** transcribes
 `{title, authors, venue, year}` for only the **substantively-related** cite_keys **Pass 1** found
 (those carrying one of the seven taxonomy roles, ~40% of refs), reading only the blob — not the whole
-paper. Background references live in the blob. The renderer shows the structured linked entries (with
+paper. Pass 1 itself reads the body-before-bibliography view, so long post-reference appendices do
+not inflate the citation prompt. Background references live in the blob. The renderer shows the
+structured linked entries (with
 their verbatim relation `signals`) above the verbatim bibliography. When no bibliography can be
 sliced, Pass 2 is skipped and the renderer falls back to the verbatim blob.
 
@@ -310,8 +313,8 @@ truncates):
 `schemas/node-census-output.schema.json`
 
 One call — over the **paper body**, with the bibliography-and-after stripped by default so the census
-never mints nodes out of reference titles (`--keep-references-in-body` feeds the full paper; the
-citation layer and assembly always see it) — produces:
+never mints nodes out of reference titles (`--keep-references-in-body` feeds the full paper to all
+body-fed passes; reference metadata and assembly still see the original paper) — produces:
 
 - `spine_summary` — the central contribution and argument flow (and, optionally,
   `headline_result`, the paper's headline established result).
@@ -383,10 +386,11 @@ venue) and the **citation layer** (`section-ir-0.16`).
 paper-level facts — the source is the paper as a whole, not any internal node — by a census-blind
 two-pass stage:
 
-- **Pass 1** (`prompts/citations-extraction.md`): scans the full paper and emits, per
-  substantively-related cited work, `{cite_key, relations:[{role, signal}]}` with `role` from the
-  seven-role taxonomy `{compares_with, uses_component, builds_on, inspired_by, adapts_idea_from,
-  addresses_limitation_of, analyzes_property_of}` and `signal` a verbatim this-paper-as-actor evidence
+- **Pass 1** (`prompts/citations-extraction.md`): scans the body-before-bibliography view by default
+  and emits, per substantively-related cited work, `{cite_key, relations:[{role, signal}]}` with
+  `role` from the seven-role taxonomy `{compares_with, uses_component, builds_on, inspired_by,
+  adapts_idea_from, addresses_limitation_of, analyzes_property_of}` and `signal` a verbatim
+  this-paper-as-actor evidence
   span (a required gate). `background` (incl. apparatus) is the residual skip bucket — those citations
   are not emitted; they stay in the verbatim reference blob.
 - **Pass 2** (`prompts/reference-metadata.md`): reads ONLY the code-sliced reference blob plus Pass
@@ -573,8 +577,9 @@ sent as `response_format` — see [Model compatibility](#model-compatibility).
   present but may be empty — an ablation measure may carry none). Each score row is
   `{variant, value, variance, system_id, setup_id}` plus optional FG-6 `opponent_id`/`judge_id` for
   pairwise/judge rows; a non-empty `system_id` must resolve to a `Contribution`/`Component` and a
-  non-empty `setup_id` to a section-local `ExperimentSetup` (or a `dataset`/`benchmark` `Contribution`
-  that hosts its own rows). `setup_ids` entries must point to section-local `ExperimentSetup` units.
+  non-empty `setup_id` to a section-local setup host: either an `ExperimentSetup` or a
+  `dataset`/`benchmark` `Contribution` that hosts its own rows. Measure-level `setup_ids` follow the
+  same setup-host rule.
 
 ## Versioning
 

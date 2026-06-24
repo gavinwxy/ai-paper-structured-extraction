@@ -220,16 +220,17 @@ def id_array_schema(description: str) -> dict[str, Any]:
 
 
 def measure_setup_ids_schema() -> dict[str, Any]:
-    """`setup_ids` scopes a measure to local ExperimentSetup units in the evidence section.
+    """`setup_ids` scopes a measure to local setup-host units in the evidence section.
 
     Optional in cardinality: a deployable measure may carry scoping setups while an ablation
     measure may carry none, so no min/max bound is imposed. The measure->method (`evaluates`)
-    edge is a global relation; the measure->dataset binding is the per-row `setup_id`.
+    edge is a global relation; the measure->dataset binding is the per-row `setup_id`. In
+    section-ir-0.17, a released dataset/benchmark Contribution may also host rows directly.
     """
     return {
         "type": "array",
         "items": {"type": "string"},
-        "description": "IDs of local ExperimentSetup units scoping this measure; empty when none apply",
+        "description": "IDs of local setup hosts scoping this measure: ExperimentSetup units, or dataset/benchmark Contribution units when the paper's released resource hosts the rows; empty when none apply",
     }
 
 
@@ -256,7 +257,7 @@ def scores_schema(description: str) -> dict[str, Any]:
                 },
                 "setup_id": {
                     "type": "string",
-                    "description": "ID of the local ExperimentSetup unit this row was measured under — the dataset/split/protocol (e.g. 'exp:wmt14_ende'). This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row.",
+                    "description": "ID of the local setup host this row was measured under — an ExperimentSetup dataset/split/protocol (e.g. 'exp:wmt14_ende'), or a dataset/benchmark Contribution when the paper's released resource hosts the row. This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row.",
                 },
                 "value_kind": enum_schema(
                     "score_value_kind",

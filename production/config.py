@@ -37,12 +37,11 @@ class Config:
     # Audit-only (P2 verifier): cross-check transcribed score values against the verbatim source
     # tables and record a `score_fidelity` block in extraction_notes. No effect on extracted data.
     verify_scores: bool = True
-    # Input hygiene (default ON): feed the node census, relation pass, and the three section fills
-    # the paper with its bibliography (and everything after it) stripped — they extract the paper's
-    # OWN content and a few hundred lines of reference titles are pure distraction. The citation
-    # layer and metadata pass still see the full paper, and assembly/marker-resolution use it too
-    # (the tail-only cut keeps every earlier [§N] marker number stable). Set True to feed the full
-    # paper everywhere (the pre-cut behavior) — the opt-out arm for A/B. See
+    # Input hygiene (default ON): feed the body-fed stages (node census, relation pass, content
+    # fills, and citation Pass 1) the paper with its bibliography (and everything after it) stripped.
+    # Metadata, reference metadata, and assembly/marker-resolution still use the full paper (the
+    # tail-only cut keeps every earlier [§N] marker number stable). Set True to feed the full paper
+    # to body-fed stages (the pre-cut behavior) — the opt-out arm for A/B. See
     # section_pipeline.slice_body_content.
     keep_references_in_body: bool = False
     # P3 cost lever (default ON since the cold A/B win): the three content sections share a

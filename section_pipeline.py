@@ -3337,11 +3337,11 @@ def _slice_references_blob(paper_content: str) -> str:
 def slice_body_content(paper_content: str) -> str:
     """Return the paper with its bibliography (and everything after it) removed.
 
-    Fed to the stages that extract the paper's *own* content — node census, relation pass, section
-    fill — so they stop ingesting (and minting nodes/edges out of) the bibliography. The citation
-    layer and metadata pass still see the full paper, and assembly/marker-resolution keep using it
-    too: cutting only the tail leaves every earlier ``[§N]`` marker's number unchanged, so a
-    body-fed pass's marker references still resolve against the full paper downstream.
+    Fed to body-scoped stages — node census, relation pass, section fill, and citation Pass 1 — so
+    they stop ingesting the bibliography/appendix tail. Metadata, reference metadata, and
+    assembly/marker-resolution keep using the full paper: cutting only the tail leaves every earlier
+    ``[§N]`` marker's number unchanged, so a body-fed pass's marker references still resolve against
+    the full paper downstream.
 
     Uses the same density-scored detection as ``_slice_references_blob`` (an in-text "references"
     mention or an empty duplicate ``# References`` header never wins), so the cut lands at the real
@@ -4219,11 +4219,13 @@ def run_metadata_extraction(
 
 
 # RF-01 (agent-readiness): venue+year live in the corpus directory naming convention
-# ('020_NeurIPS_2024_<title>') even when the paper body never states them (the LLM metadata pass
-# correctly returns null there — camera-ready PDFs rarely print their own venue/year).
-_DIRNAME_META_RE = re.compile(r"^\d+_([A-Za-z]+)_((?:19|20)\d{2})_")
-# Some corpora omit the venue token ('012_2024_Weakly_Supervised_...') — year is still recoverable.
-_DIRNAME_YEAR_ONLY_RE = re.compile(r"^\d+_((?:19|20)\d{2})_")
+# ('020_NeurIPS_2024_<title>' or 'ACL_2025_<id>') even when the paper body never states them
+# (the LLM metadata pass correctly returns null there — camera-ready PDFs rarely print their own
+# venue/year). Some corpora omit the venue token ('012_2024_Weakly_Supervised_...' or
+# '2024_Weakly_Supervised_...') — year is still recoverable.
+_DIRNAME_META_RE = re.compile(
+    r"^(?:\d+_)?(?:(?P<venue>[A-Za-z][A-Za-z0-9-]*)_)?(?P<year>(?:19|20)\d{2})(?=[_-]|$)"
+)
 # Hosts that constitute code/data-release evidence regardless of the resource's `type` label
 # (the metadata pass mixes `code` vs `project` for the same repo link).
 _CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "4open.science", "codeberg.org")
@@ -4265,16 +4267,12 @@ def enrich_metadata(
         metadata = {"title": None, "authors": [], "year": None, "venue": None, "resources": []}
     match = _DIRNAME_META_RE.match(paper_id or "")
     if match:
-        if not metadata.get("venue"):
-            metadata["venue"] = match.group(1)
+        venue = match.group("venue")
+        if venue and not metadata.get("venue"):
+            metadata["venue"] = venue
             metadata["venue_source"] = "dirname"
         if not metadata.get("year"):
-            metadata["year"] = int(match.group(2))
-            metadata["year_source"] = "dirname"
-    else:
-        year_match = _DIRNAME_YEAR_ONLY_RE.match(paper_id or "")
-        if year_match and not metadata.get("year"):
-            metadata["year"] = int(year_match.group(1))
+            metadata["year"] = int(match.group("year"))
             metadata["year_source"] = "dirname"
     if default_venue and not metadata.get("venue"):
         metadata["venue"] = default_venue
@@ -4378,8 +4376,10 @@ def run_citations_extraction(
     """Pass 1 of the section-ir-0.16 citation layer: classify how THIS paper relates to each prior
     work it cites.
 
-    Census-blind, full-paper. Returns ``{"citations": [{cite_key, relations: [{role, signal}]}]}``
-    — paper-level relations only (source is the paper as a whole), no nodes, no metadata.
+    Census-blind, body-before-bibliography by default. Returns
+    ``{"citations": [{cite_key, relations: [{role, signal}]}]}`` — paper-level relations only
+    (source is the paper as a whole), no nodes, no metadata. Reference metadata still comes from the
+    deterministic bibliography slice in Pass 2.
     """
     system_prompt, user_template = load_prompt(CITATIONS_PROMPT_PATH)
     user_prompt = user_template.replace("{{paper_content}}", paper_content)
@@ -5139,9 +5139,10 @@ def run_pipeline(
         metadata_future = executor.submit(
             run_metadata_extraction, client, model, paper_content, temperature=temperature, max_tokens=max_tokens
         )
-        # Citation layer Pass 1 (census-blind): paper-level relations + verbatim signals.
+        # Citation layer Pass 1 (census-blind): paper-level relations + verbatim signals over the
+        # body-before-bibliography input by default.
         citations_future = executor.submit(
-            run_citations_extraction, client, model, paper_content, temperature=temperature,
+            run_citations_extraction, client, model, body_content, temperature=temperature,
             max_tokens=max_tokens,
         )
         raw_census = census_future.result()
@@ -5414,8 +5415,9 @@ def _validate_unit_fields(
                         issues.append(f"Measure {uid} scores[{index}] has unknown judge_id: {judge_id}")
                     elif judge_unit.get("type") not in (METHOD_FAMILY_TYPES | {"ExperimentSetup"}):
                         issues.append(f"Measure {uid} scores[{index}] judge_id {judge_id} must point to a Contribution/Component or ExperimentSetup")
-        # setup_ids scope a measure to local ExperimentSetup units. It is optional: a deployable
-        # measure is normally scoped by one setup, an ablation measure may carry none.
+        # setup_ids scope a measure to local ExperimentSetup units, or to a local dataset/benchmark
+        # Contribution when the paper's released resource hosts the measured rows itself. It is
+        # optional: a deployable measure may be scoped while an ablation measure may carry none.
         setup_ids = unit.get("setup_ids")
         if setup_ids is None:
             issues.append(f"Measure {uid} missing setup_ids")
@@ -5428,9 +5430,13 @@ def _validate_unit_fields(
                     issues.append(f"Measure {uid} has unknown setup_id: {setup_id}")
                 elif setup_id not in local_ids:
                     issues.append(f"Measure {uid} setup_id must be section-local: {setup_id}")
-                elif setup_unit.get("type") != "ExperimentSetup":
+                elif not (
+                    setup_unit.get("type") == "ExperimentSetup"
+                    or (setup_unit.get("type") == "Contribution"
+                        and setup_unit.get("kind") in {"dataset", "benchmark"})
+                ):
                     issues.append(
-                        f"Measure {uid} setup_id {setup_id} must point to a local ExperimentSetup"
+                        f"Measure {uid} setup_id {setup_id} must point to a local ExperimentSetup or dataset/benchmark Contribution"
                     )
         comparison_direction = unit.get("comparison_direction")
         if comparison_direction is not None and comparison_direction not in COMPARISON_DIRECTIONS:

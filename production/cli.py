@@ -75,9 +75,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-verify-scores", dest="verify_scores", action="store_false",
                         help="Disable the score-fidelity audit (transcribed values vs source tables)")
     parser.add_argument("--keep-references-in-body", dest="keep_references_in_body", action="store_true",
-                        help="Feed the full paper (bibliography included) to the census/relations/section "
-                             "passes. Default strips references-and-after from those stages' input "
-                             "(citation layer + assembly always see the full paper). This is the A/B opt-out.")
+                        help="Feed the full paper (bibliography included) to the body-fed passes "
+                             "(census/relations/sections/citation Pass 1). Default strips "
+                             "references-and-after from those stages' input; reference metadata and "
+                             "assembly still use the full paper. This is the A/B opt-out.")
     parser.add_argument("--warm-content-cache", dest="warm_content_cache", action="store_true",
                         default=True,
                         help="P3 cost lever (ON by default): run the first content section first to "

@@ -10,6 +10,31 @@
 
 ---
 
+## 内部评测反馈修复：citation 尾部裁切、dirname 元数据、setup host 契约
+
+**日期**：2026-06-24
+
+- **citation Pass 1 也纳入正文裁切**：默认把 `slice_body_content(paper_content)` 喂给 citation-relation pass，
+  也就是只看 bibliography 之前的正文；Pass 2 reference metadata 仍从原始全文切 `_slice_references_blob`，
+  装配/marker 解析也仍用原始全文。`--keep-references-in-body` 继续作为 A/B/回退开关，打开后
+  census/relations/section fills/citation Pass 1 都退回全文输入。
+- **21 篇 citation truncation fail case A/B**：以
+  `large_models_llm_selected_2000_deepseek_v4pro_thinkoff_20260622_205455` 中 citation 截断的 21 篇为
+  baseline，用当前代码重跑到
+  `production-outputs/citation_tail_trim_failcases_deepseek_v4pro_20260624_1155`。结果：
+  citation truncation **21/21 → 1/21**，21/21 completed，0 validation issues；20 篇恢复 citation artifact，
+  产出 1,012 个 cited works、1,040 条 citation relations、694 条 assembled references。
+- **花费读数**：按 `tools/token_cost_report.py` 的 `eff-cost proxy = uncached_prompt + 4 * completion`，
+  citation 阶段 **2,925,584 → 671,058（-77.1%）**；这 21 篇全流程
+  **5,383,410 → 2,698,866（-49.9%）**。残留截断样本
+  `NAACL_2025_0224-c8cbba9aead9` 的 body-only citation 输入仅 42,085 chars，属于正文 citation density/output
+  爆炸，后续应靠 citation chunking 或输出约束解决。
+- **dirname 元数据 fallback 扩展**：`enrich_metadata()` 的 dirname parser 支持
+  `NNN_VENUE_YYYY_...`、`VENUE_YYYY_...`、`NNN_YYYY_...`、`YYYY_...`，覆盖评测中常见的
+  `ACL_2025_...` / `NeurIPS_2024_...` 形态；本次 21 篇 venue/year coverage **3/21 → 21/21**。
+- **Measure setup host 契约对齐**：validator/schema 将 Measure-level `setup_ids[]` 与 score-row `setup_id`
+  统一为“local setup host”：`ExperimentSetup`，或 paper released dataset/benchmark `Contribution`。
+
 ## HTML 渲染器观感优化（look & feel）
 
 **日期**：2026-06-18　**分支**：`planning-stage-redesign-deepseek-light-heavy-trim`
@@ -34,6 +59,7 @@
   的密度打分边界（抽出公共 `_best_references_span`）把“参考文献及其之后”整段裁掉，喂给 census/relations/section
   三类“自身内容”阶段；**citation layer（Pass 1 全文、Pass 2 取 blob）、metadata（head+URL 切片）、以及装配/
   `[§N]` marker 解析仍用全文**。只裁尾部 → 前面所有 `[§N]` 编号不变，正文阶段产出的 marker 仍能对全文解析。
+  2026-06-24 起，citation Pass 1 也默认使用该 body-before-bibliography 输入；Pass 2/metadata/assembly 仍用全文。
 - **正确性**：裁切只作用于**喂给 LLM 的输入**，装配/`source_tables`/`span_index`/`provenance_resolution` 一律
   仍读全文，marker 永远可解析。已知代价：跟在参考文献**之后**的附录内容会随之丢弃（problem/method 可接受，
   evidence 的附录表有轻微风险）。无置信度参考文献时不裁（弱信号绝不误裁）。
@@ -42,8 +68,9 @@
 - **收益定位**：主要是**质量**（普查/关系更干净），**不是 $**——成本主战场在 completion 侧（约 78%），裁输入
   token 省得有限。建议跑一轮 A/B（带/不带 flag）再决定是否长期默认。
 - **测试**：`tests/test_body_slice.py`（6 例：裁切/无参考文献透传/弱信号不裁/与 blob 互补/`_slice_references_blob`
-  重构对拍/空与非 str 安全）+ `tests/test_production_worker.py::BodyReferenceCutTests`（2 例：端到端断言书目
-  仅进 citations/metadata、不进 census/relations/section；flag 退回全文）。全量 543 测试通过。
+  重构对拍/空与非 str 安全）+ `tests/test_production_worker.py::BodyReferenceCutTests`（2 例：端到端断言当时书目
+  仅进 citations/metadata、不进 census/relations/section；flag 退回全文）。2026-06-24 起 citations 改为同正文裁切。
+  全量 543 测试通过。
 
 ## JSON/JSONL 输入预处理（`--input-format`）
 

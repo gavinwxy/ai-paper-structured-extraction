@@ -202,7 +202,7 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "IDs of local ExperimentSetup units scoping this measure; empty when none apply"
+                "description": "IDs of local setup hosts scoping this measure: ExperimentSetup units, or dataset/benchmark Contribution units when the paper's released resource hosts the rows; empty when none apply"
               },
               "comparison_direction": {
                 "type": "string",
@@ -256,7 +256,7 @@
                     },
                     "setup_id": {
                       "type": "string",
-                      "description": "ID of the local ExperimentSetup unit this row was measured under \u2014 the dataset/split/protocol (e.g. 'exp:wmt14_ende'). This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row."
+                      "description": "ID of the local setup host this row was measured under \u2014 an ExperimentSetup dataset/split/protocol (e.g. 'exp:wmt14_ende'), or a dataset/benchmark Contribution when the paper's released resource hosts the row. This is how the row binds to its data. Empty string when the measure's own setup_ids already scope every row."
                     },
                     "value_kind": {
                       "type": "string",
