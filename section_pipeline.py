@@ -790,12 +790,26 @@ def load_relation_pass_schema() -> dict:
     return json.loads(RELATION_PASS_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def _flatten_typed_arrays(section_data: dict[str, Any]) -> list[dict[str, Any]]:
+def _flatten_typed_arrays(
+    section_data: dict[str, Any],
+    allowed_types: set[str] | None = None,
+    warnings: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Merge typed unit arrays back into a single units list for IR assembly."""
     units: list[dict[str, Any]] = []
     for array_key, expected_type in TYPED_ARRAY_KEYS.items():
+        if array_key not in section_data:
+            continue
         array_value = section_data.get(array_key, [])
         if not isinstance(array_value, list):
+            continue
+        if allowed_types is not None and expected_type not in allowed_types:
+            if array_value and warnings is not None:
+                section_type = section_data.get("section_type", "<unknown>")
+                warnings.append(
+                    f"Section {section_type} dropped disallowed {array_key} typed array "
+                    f"({len(array_value)} {expected_type} unit(s))"
+                )
             continue
         for unit in array_value:
             if isinstance(unit, dict):
@@ -983,6 +997,38 @@ def _reconcile_misrouted_units(
                 f"Re-typed mis-routed unit {uid} from {utype} to {canonical} (id-prefix canonical)"
             )
             kept.append(unit)
+        section["units"] = kept
+    return warnings
+
+
+def _drop_disallowed_section_units(sections: list[dict[str, Any]]) -> list[str]:
+    """Drop units whose final type is not owned by their section.
+
+    json_object models can route a unit through a legal typed array but with an id prefix that later
+    canonicalizes to a different type (for example evidence `experiment_setups[]` containing
+    `cmp:gpt4o_fewshot`). After prefix reconciliation, enforce section ownership again so these
+    stray units do not hard-fail final validation.
+    """
+    warnings: list[str] = []
+    for section in sections:
+        section_type = section.get("section_type")
+        allowed_types = SECTION_ALLOWED_UNIT_TYPES.get(section_type)
+        units = section.get("units")
+        if not allowed_types or not isinstance(units, list):
+            continue
+        kept: list[Any] = []
+        for unit in units:
+            if not isinstance(unit, dict):
+                kept.append(unit)
+                continue
+            utype = unit.get("type")
+            if utype in allowed_types:
+                kept.append(unit)
+                continue
+            warnings.append(
+                f"Section {section_type} dropped unit {unit.get('id', '<missing-id>')} "
+                f"with disallowed type {utype}"
+            )
         section["units"] = kept
     return warnings
 
@@ -3787,12 +3833,21 @@ def assemble_extraction(
     relations: list[dict[str, Any]] = [
         relation for relation in (stage_b_relations or []) if isinstance(relation, dict)
     ]
+    assembly_warnings: list[str] = []
 
     for result in section_results:
         if not isinstance(result, dict) or not isinstance(result.get("section"), dict):
             raise ValueError(f"Invalid section extraction result: {result}")
         section = result["section"]
-        flattened_units = _flatten_typed_arrays(section)
+        section_type = section.get("section_type")
+        allowed_types = (
+            SECTION_ALLOWED_UNIT_TYPES.get(section_type) if isinstance(section_type, str) else None
+        )
+        flattened_units = _flatten_typed_arrays(
+            section,
+            allowed_types=allowed_types,
+            warnings=assembly_warnings,
+        )
         if any(key in section for key in TYPED_ARRAY_KEYS):
             section["units"] = flattened_units
             for key in TYPED_ARRAY_KEYS:
@@ -3811,13 +3866,13 @@ def assemble_extraction(
     _canonicalize_relation_aliases(relations)
     _assign_kinds_from_census(sections, census)
 
-    assembly_warnings: list[str] = []
     assembly_warnings.extend(_sanitize_unit_text(sections))
     assembly_warnings.extend(_sanitize_unit_ids(sections, relations))
     # Reconcile any unit the evidence section mis-routed into the wrong typed array (an `exp:`
     # substrate emitted as a Contribution) back to its prefix-canonical type BEFORE the dedups, so
     # the spurious copy is dropped/re-typed instead of winning the id-collision.
     assembly_warnings.extend(_reconcile_misrouted_units(sections, census))
+    assembly_warnings.extend(_drop_disallowed_section_units(sections))
     # FD-5: drop a kind=dataset/benchmark Contribution that merely duplicates a census ExperimentSetup
     # the method runs on (an eval-frame mint with no scores), before the dedups settle ids.
     assembly_warnings.extend(_drop_eval_frame_contributions(sections, relations, census))
@@ -5253,10 +5308,17 @@ def run_pipeline(
 
 def _contains_legacy_marker(value: Any) -> bool:
     if isinstance(value, dict):
-        return any(key == "paradigm_tags" or _contains_legacy_marker(child) for key, child in value.items())
+        for key, child in value.items():
+            if key == "paradigm_tags":
+                return True
+            if key in {"type", "unit_type", "node_type"} and child in FORBIDDEN_UNIT_TYPES:
+                return True
+            if isinstance(child, (dict, list)) and _contains_legacy_marker(child):
+                return True
+        return False
     if isinstance(value, list):
         return any(_contains_legacy_marker(item) for item in value)
-    return value in FORBIDDEN_UNIT_TYPES
+    return False
 
 
 def _validate_provenance(unit: dict[str, Any], issues: list[str]) -> None:
